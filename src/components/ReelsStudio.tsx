@@ -39,6 +39,7 @@ import type { SilencePreset, BlockLayout } from './reelsStudio/types';
 import { sliceAudioByBlocks } from './reelsStudio/audioSlicer';
 import { generateAvatarClips } from './reelsStudio/avatarGenerator';
 import { loadAvatarPhotos } from './reelsStudio/avatarPhotosStore';
+import { generateMockClip } from './reelsStudio/mockClipGenerator';
 
 const PRICE_PER_AVATAR_SECOND = 0.058;
 const PRICE_AUDIO = 0.04;
@@ -481,6 +482,23 @@ export const ReelsStudio: React.FC = () => {
       setGeneratingClips(false);
     }
   }, [audio.url, avatarBlocks, state.aspect]);
+
+  const handleGenerateMockClips = useCallback(async () => {
+    if (avatarBlocks.length === 0) return;
+    setGeneratingClips(true);
+    try {
+      for (const b of avatarBlocks) {
+        dispatch({ type: 'clip-update', blockId: b.id, status: 'rendering', message: 'gerando clip de teste…' });
+        const durationSec = Math.max(1, b.end - b.start);
+        const videoUrl = await generateMockClip(b.id, b.text, durationSec);
+        dispatch({ type: 'clip-update', blockId: b.id, status: 'ready', videoUrl });
+      }
+    } catch (err) {
+      console.error('[mock-clip] failed:', err);
+    } finally {
+      setGeneratingClips(false);
+    }
+  }, [avatarBlocks]);
 
   // ─── Audio playback sync ──────────────────────────────────────────────
   useEffect(() => {
@@ -1513,6 +1531,16 @@ export const ReelsStudio: React.FC = () => {
             >
               {generatingClips ? '⏳ Gerando clipes...' : `✨ Gerar Clipes (${avatarBlocks.length})`}
             </button>
+            {avatarBlocks.length > 0 && (
+              <button
+                onClick={handleGenerateMockClips}
+                disabled={generatingClips}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Gera clips coloridos sintéticos para testar o export sem gastar créditos HeyGen"
+              >
+                🎨 Clip de Teste
+              </button>
+            )}
             {(() => {
               const allMotions = blocks.filter(b => !!b.motion);
               if (allMotions.length === 0) return null;

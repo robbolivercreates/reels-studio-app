@@ -59,45 +59,81 @@ const dimensionsFor = (aspect: '9:16' | '16:9' | '1:1', quality: 'high' | 'lite'
 const bitrateFor = (quality: 'high' | 'lite'): number =>
   quality === 'high' ? 5_500_000 : 2_500_000;
 
+type BlendMode =
+  | 'source-over'   // normal composite
+  | 'screen'        // lighten — good for light motion graphics on dark bg
+  | 'multiply'      // darken — good for dark overlays
+  | 'overlay'       // contrast boost — blends mid-tones
+  | 'soft-light';   // subtle texture/color overlay
+
 interface FrameLayer {
   videoUrl: string;
   sourceSeek: number;
-  box: LayoutBox; // 0..1 normalized
-  zoom?: number; // optional center-zoom factor (1 = no zoom)
+  box: LayoutBox;           // 0..1 normalized
+  zoom?: number;            // optional center-zoom factor (1 = no zoom)
+  alpha?: number;           // 0..1 global opacity for this layer (default 1)
+  blend?: BlendMode;        // canvas globalCompositeOperation (default source-over)
+}
+
+interface FrameDecoration {
+  kind: 'bottom-gradient' | 'split-seam' | 'vignette';
+  splitY?: number; // for split-seam only (0..1 normalized)
 }
 
 interface FrameComposition {
-  layers: FrameLayer[]; // drawn in order; later layers paint on top
+  layers: FrameLayer[];
+  decorations: FrameDecoration[];
+  fadeAlpha: number; // 0..1 cross-fade at block boundaries
 }
 
 const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
 
-/** For a given project-time t, return all layers to composite. */
+const FADE_FRAMES = 10; // ~333ms at 30fps
+
+/** For a given project-time t, return all layers + decorations + fade alpha. */
 const frameAtProjectTime = (
   t: number,
   inputs: RenderInputs,
   layout: ReturnType<typeof computeLayout>,
-  motionUrls: Map<string, string>, // blockId → asset:// URL
+  motionUrls: Map<string, string>,
 ): FrameComposition => {
+  const empty: FrameComposition = { layers: [], decorations: [], fadeAlpha: 1 };
   const hit = hitTest(layout, t);
-  if (hit.kind !== 'block') return { layers: [] };
+  if (hit.kind !== 'block') return empty;
   const block = inputs.blocks.find(b => b.id === hit.slot.blockId);
-  if (!block) return { layers: [] };
+  if (!block) return empty;
 
   const localT = t - hit.slot.projectStart;
+  const blockDurSec = hit.slot.sourceEnd - hit.slot.sourceStart;
+  const totalBlockFrames = Math.max(1, Math.floor(blockDurSec * FRAMERATE));
+  const localFrame = Math.floor(localT * FRAMERATE);
+
+  // Cross-fade: ease in first 10 frames, ease out last 10 frames.
+  let fadeAlpha = 1;
+  if (localFrame < FADE_FRAMES) {
+    fadeAlpha = localFrame / FADE_FRAMES;
+  } else if (localFrame > totalBlockFrames - FADE_FRAMES) {
+    fadeAlpha = (totalBlockFrames - localFrame) / FADE_FRAMES;
+  }
+  fadeAlpha = Math.max(0, Math.min(1, fadeAlpha));
 
   // Motion-replace: motion fills the whole frame, no avatar/broll.
   if (block.motion?.layer === 'replace' && motionUrls.has(block.id)) {
     const motionUrl = motionUrls.get(block.id)!;
     const motionDur = block.motion.durationSec || 4;
-    const motionSeek = localT % motionDur;
-    const layers: FrameLayer[] = [{ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME }];
-    return { layers };
+    return {
+      layers: [{ videoUrl: motionUrl, sourceSeek: localT % motionDur, box: FULL_FRAME }],
+      decorations: [],
+      fadeAlpha,
+    };
   }
 
   const blockLayout: BlockLayout = block.kind === 'avatar' ? (block.layout ?? 'avatar-only') : 'media-only';
   const slots = getLayoutSlots(blockLayout);
   const layers: FrameLayer[] = [];
+  const decorations: FrameDecoration[] = [];
+  let hasAvatar = false;
+  let hasMotionOverlay = false;
 
   // Avatar layer.
   if (block.kind === 'avatar' && slots.avatar) {
@@ -107,6 +143,7 @@ const frameAtProjectTime = (
       if (clip?.videoUrl) {
         const zoom = block.avatarZoom ?? defaultAvatarZoom(inputs.aspect, block.layout);
         layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: slots.avatar, zoom });
+        hasAvatar = true;
       }
     } else if (inputs.activeTake) {
       const localBroll = localT - (block.avatarVisibleSec ?? 0);
@@ -119,15 +156,27 @@ const frameAtProjectTime = (
     layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localT, inputs.activeTake), box: slots.media });
   }
 
-  // Motion overlay: composited on top of everything else. Loop if block is longer than motion.
+  // Motion overlay: screen blend at 0.88 alpha — mixes with avatar instead of covering it.
   if (block.motion?.layer === 'overlay' && motionUrls.has(block.id)) {
     const motionUrl = motionUrls.get(block.id)!;
     const motionDur = block.motion.durationSec || 4;
-    const motionSeek = localT % motionDur;
-    layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME });
+    layers.push({
+      videoUrl: motionUrl,
+      sourceSeek: localT % motionDur,
+      box: FULL_FRAME,
+      alpha: 0.88,
+      blend: 'screen',
+    });
+    hasMotionOverlay = true;
   }
 
-  return { layers };
+  // Decorations.
+  if (hasAvatar) decorations.push({ kind: 'bottom-gradient' });
+  if (hasAvatar && hasMotionOverlay) decorations.push({ kind: 'vignette' });
+  if (blockLayout === 'avatar-top') decorations.push({ kind: 'split-seam', splitY: 0.5 });
+  if (blockLayout === 'media-top') decorations.push({ kind: 'split-seam', splitY: 0.5 });
+
+  return { layers, decorations, fadeAlpha };
 };
 
 const mapBrollTime = (localT: number, take: ScreenTake): number => {
@@ -296,8 +345,37 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       ctx.fillRect(0, 0, width, height);
     };
 
-    /** Draw a video frame into a normalized box with cover-fit (crop). Optional center-zoom. */
-    const drawIntoBox = (v: HTMLVideoElement, box: LayoutBox, zoom = 1) => {
+    /** Draw bottom-to-transparent gradient over the lower portion of the frame. */
+    const drawBottomGradient = (heightFraction = 0.35, opacity = 0.72) => {
+      const gradY = height * (1 - heightFraction);
+      const grad = ctx.createLinearGradient(0, gradY, 0, height);
+      grad.addColorStop(0, `rgba(0,0,0,0)`);
+      grad.addColorStop(1, `rgba(0,0,0,${opacity})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, gradY, width, height - gradY);
+    };
+
+    /** Draw gradient seam between two halves (split layout). */
+    const drawSplitSeam = (splitY: number, seamHeight = 80) => {
+      const grad = ctx.createLinearGradient(0, splitY - seamHeight / 2, 0, splitY + seamHeight / 2);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(0.5, 'rgba(0,0,0,0.55)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, splitY - seamHeight / 2, width, seamHeight);
+    };
+
+    /** Draw subtle edge vignette over the full frame. */
+    const drawVignette = (opacity = 0.45) => {
+      const grad = ctx.createRadialGradient(width / 2, height / 2, height * 0.25, width / 2, height / 2, height * 0.75);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(1, `rgba(0,0,0,${opacity})`);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+    };
+
+    /** Draw a video frame into a normalized box with cover-fit (crop). Respects alpha + blend mode. */
+    const drawIntoBox = (v: HTMLVideoElement, box: LayoutBox, zoom = 1, alpha = 1, blend: BlendMode = 'source-over') => {
       const srcW = v.videoWidth;
       const srcH = v.videoHeight;
       const dx = box.x * width;
@@ -319,7 +397,6 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         sh = srcW / dstRatio;
         sy = (srcH - sh) / 2;
       }
-      // Apply zoom: shrink the source rect around its center to crop more.
       if (zoom > 1) {
         const newSw = sw / zoom;
         const newSh = sh / zoom;
@@ -328,7 +405,11 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         sw = newSw;
         sh = newSh;
       }
+      ctx.globalAlpha = alpha;
+      ctx.globalCompositeOperation = blend;
       ctx.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
     };
 
     // ─── VIDEO PASS ──────────────────────────────────────────────────
@@ -348,15 +429,29 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       const projT = mapOutToProject(outT);
       const composition = frameAtProjectTime(projT, inputs, layout, motionUrls);
 
-      // Always start with a black background — covers any layout area not filled by a layer.
       drawBlackFrame();
 
-      // Draw each layer in order. Layers are sequenced so the avatar paints over media when boxes overlap.
+      // Draw video layers with their blend mode + alpha.
       for (const lyr of composition.layers) {
         const v = videoMap.get(lyr.videoUrl);
         if (!v) continue;
         await seekVideo(v, lyr.sourceSeek);
-        drawIntoBox(v, lyr.box, lyr.zoom ?? 1);
+        drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over');
+      }
+
+      // Draw decorations (gradients, seam, vignette) on top of video layers.
+      for (const dec of composition.decorations) {
+        if (dec.kind === 'bottom-gradient') drawBottomGradient();
+        else if (dec.kind === 'vignette') drawVignette();
+        else if (dec.kind === 'split-seam' && dec.splitY != null) drawSplitSeam(dec.splitY * height);
+      }
+
+      // Cross-fade: black overlay that fades in/out at block boundaries.
+      if (composition.fadeAlpha < 1) {
+        ctx.globalAlpha = 1 - composition.fadeAlpha;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, width, height);
+        ctx.globalAlpha = 1;
       }
 
       const videoFrame = new VideoFrame(canvas, {
