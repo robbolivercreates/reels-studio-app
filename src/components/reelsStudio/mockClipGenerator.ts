@@ -26,7 +26,7 @@ export const generateMockClip = async (
   blockId: string,
   blockText: string,
   durationSec: number,
-): Promise<string> => {
+): Promise<{ url: string; blob: Blob }> => {
   const [bg1, bg2, accent] = COLORS[colorIdx % COLORS.length];
   colorIdx++;
 
@@ -134,5 +134,5 @@ export const generateMockClip = async (
 
   const target = muxer.target as ArrayBufferTarget;
   const blob = new Blob([target.buffer], { type: 'video/mp4' });
-  return URL.createObjectURL(blob);
+  return { url: URL.createObjectURL(blob), blob };
 };

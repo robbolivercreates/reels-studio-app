@@ -40,7 +40,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
   const initial: MotionConfig = useMemo(() => block.motion ?? {
     id: newMotionId(),
     presetId: 'editorial-clean',
-    layer: 'overlay',
+    layer: 'split-bottom',
     intent: '',
     text: deriveDefaultText(block.text),
     durationSec: 4,

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { reducer, INITIAL_STATE } from './reelsStudio/reducer';
 import { useHistoryReducer } from './reelsStudio/useHistoryReducer';
 import { generateProjectAudio, estimateScriptDuration } from './reelsStudio/audioEngine';
-import { saveAudioBlob } from './reelsStudio/persistence';
+import { saveAudioBlob, saveClipBlob } from './reelsStudio/persistence';
 import { VOICE_OPTIONS, getVoice } from './reelsStudio/voices';
 import type { ScriptBlock, ScreenTake } from './reelsStudio/types';
 import {
@@ -502,7 +502,9 @@ export const ReelsStudio: React.FC = () => {
       for (const b of avatarBlocks) {
         dispatch({ type: 'clip-update', blockId: b.id, status: 'rendering', message: 'gerando clip de teste…' });
         const durationSec = Math.max(1, b.end - b.start);
-        const videoUrl = await generateMockClip(b.id, b.text, durationSec);
+        const { url: videoUrl, blob } = await generateMockClip(b.id, b.text, durationSec);
+        // Save to IndexedDB so the clip survives app restarts.
+        saveClipBlob(b.id, blob).catch(e => console.warn('[mock-clip] saveClipBlob failed:', e));
         dispatch({ type: 'clip-update', blockId: b.id, status: 'ready', videoUrl });
       }
     } catch (err) {

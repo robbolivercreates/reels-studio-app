@@ -74,7 +74,7 @@ export const createMotionFromBlock = (block: { text: string; start: number; end:
   return {
     id: newMotionId(),
     presetId: 'glass-tech',
-    layer: 'overlay',
+    layer: 'split-bottom',
     intent: '',
     text: deriveHeadline(block.text),
     durationSec: blockDur || 4,
