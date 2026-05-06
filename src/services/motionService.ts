@@ -65,6 +65,7 @@ You will receive a BRAND IDENTITY section with researched colors. These are NOT 
 - Use brandPrimaryColor as the dominant accent (borders, highlights, glow, icons)
 - Use brandSecondaryColor for supporting elements
 - NEVER default to blue (#0000ff, #3b82f6, #60a5fa, or any blue shade) unless the brand IS blue
+- NEVER use purple, violet, or any shade of #7c3aed, #8b5cf6, #a855f7, #9333ea, #6d28d9 unless the brand's PRIMARY color is demonstrably purple (e.g. Twitch, Figma, Discord)
 - NEVER use generic purple/violet unless the brand uses it
 - If no brand colors are provided, use high-contrast dark background (#0a0a0a) with white text and a warm amber (#f59e0b) accent — NOT blue
 
@@ -247,7 +248,7 @@ const BRAND_RESEARCH_PROMPT = `You are a brand identity researcher with access t
 SEARCH STRATEGY:
 1. Read the script and identify the primary subject (a product, company, tool, concept, or theme)
 2. Search for "[subject] brand colors hex code", "[subject] visual identity", "[subject] logo colors"
-3. Return the REAL colors — not generic ones. If the block mentions Claude AI → search "Anthropic Claude brand colors" → it's #DE7356 peach/terracotta, NOT blue. If it mentions Canva → #00C4CC teal + #7D2AE7 purple. If it mentions ChatGPT → #10A37F green. If it mentions Instagram → gradient orange/pink/purple.
+3. Return the REAL colors — not generic ones. If the block mentions Claude AI → search "Anthropic Claude brand colors" → it's #DE7356 peach/terracotta primary, #1a1a2e dark bg, #f5f0eb text — NOT purple, NOT blue, NOT violet. If it mentions Canva → #00C4CC teal + #7D2AE7 purple. If it mentions ChatGPT → #10A37F green. If it mentions Instagram → gradient orange/pink/purple.
 
 For generic concepts (productivity, automation, marketing, etc.) choose the dominant color culture:
 - AI/Tech generic → deep navy #0f0f23 bg, electric cyan #00d4ff accent
@@ -362,7 +363,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     `brandPrimaryColor: #f59e0b  ← warm amber accent`,
     `brandSecondaryColor: #78716c`,
     `brandAccentColor: #fbbf24`,
-    `⚠️  DO NOT use blue. Use the amber palette above.`,
+    `⚠️  DO NOT use blue, purple, or violet. Use the amber palette above.`,
     '',
   ].join('\n');
 

@@ -202,16 +202,15 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
   const preset = findStylePreset(motion.presetId);
 
   return (
-    <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-[60] p-6">
-      <div className="bg-[#0F0F11] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.85)] max-w-5xl w-full overflow-hidden flex flex-col max-h-[92vh]">
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-6">
+      <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-5xl w-full overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
-        <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-white/5">
+        <div className="px-6 pt-6 pb-4 flex items-start justify-between border-b border-white/5">
           <div>
-            <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mb-1">Motion graphic · gerado por IA</div>
-            <h2 className="text-lg font-semibold text-zinc-100">Motion pra esse bloco</h2>
-            <div className="text-[11px] text-zinc-500 mt-1 italic max-w-xl truncate">"{block.text}"</div>
+            <div className="text-base font-semibold text-zinc-100 mb-1">Motion graphic</div>
+            <div className="text-xs text-zinc-500 max-w-xl truncate">"{block.text}"</div>
           </div>
-          <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-200" disabled={!!busy}>
+          <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors" disabled={!!busy}>
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -482,10 +481,10 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
           </button>
           <button
             onClick={handleSave}
-            disabled={!motion.html || !!busy}
-            className="px-4 py-2 rounded-lg bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)]"
+            disabled={!!busy}
+            className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 disabled:opacity-40 text-[12px] font-semibold text-zinc-100 border border-white/15"
           >
-            Salvar motion
+            {motion.html ? 'Salvar motion' : 'Salvar configuração'}
           </button>
         </div>
       </div>
