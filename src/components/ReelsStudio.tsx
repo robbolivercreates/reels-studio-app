@@ -321,6 +321,7 @@ export const ReelsStudio: React.FC = () => {
         blockText: block.text,
         durationSec: seed.durationSec,
         compositionId: seed.id,
+        motionLayer: seed.layer,
         projectAssets,
         reelContext: {
           projectName: state.projectName,

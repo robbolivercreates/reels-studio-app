@@ -224,6 +224,8 @@ export interface GenerateMotionInput {
     prevBlockText?: string;
     nextBlockText?: string;
   };
+  /** Motion layer mode — affects canvas dimensions and composition design. */
+  motionLayer?: 'overlay' | 'replace' | 'split-bottom' | 'split-top';
 }
 
 // ─── Step 1: Brand research via Google Search grounding ───────────────────────
@@ -386,7 +388,58 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ``,
   ].join('\n') : '';
 
+  // Slot context: tell Gemini the exact canvas it's designing for.
+  const slotSection = (() => {
+    const layer = input.motionLayer ?? 'overlay';
+    if (layer === 'split-bottom' || layer === 'split-top') {
+      const position = layer === 'split-bottom' ? 'BOTTOM HALF of the screen' : 'TOP HALF of the screen';
+      const avatarPosition = layer === 'split-bottom' ? 'top half' : 'bottom half';
+      return [
+        `╔══════════════════════════════════════════════════════╗`,
+        `  CANVAS SLOT — SPLIT LAYOUT`,
+        `╚══════════════════════════════════════════════════════╝`,
+        `This composition occupies the ${position} (1080×960px).`,
+        `The avatar video fills the ${avatarPosition} — you CANNOT see it, but the viewer can.`,
+        ``,
+        `DESIGN RULES FOR THIS SLOT:`,
+        `• Container: width:1080px; height:960px (NOT 1920px)`,
+        `• Root div must have: position:absolute; width:1080px; height:960px; overflow:hidden`,
+        `• Keep ALL content inside 0..960px vertically — nothing outside`,
+        `• Typography: slightly larger than full-frame — the slot is compact, text must be BOLD and readable`,
+        `• Composition: dense and self-contained — no empty padding expecting content above/below`,
+        `• Visual edge: add a subtle top/bottom border or glow (2-4px, brandPrimaryColor) to frame the slot cleanly`,
+        `• The split seam between avatar and motion will have a gradient — design the edge of your slot with this in mind`,
+        `• DO NOT design for 1920px height — anything below 960px will be clipped`,
+      ].join('\n');
+    }
+    if (layer === 'replace') {
+      return [
+        `╔══════════════════════════════════════════════════════╗`,
+        `  CANVAS SLOT — FULL FRAME REPLACE`,
+        `╚══════════════════════════════════════════════════════╝`,
+        `This composition fills the ENTIRE screen (1080×1920px). No avatar underneath.`,
+        `Design for maximum visual impact — this IS the entire video frame for this block.`,
+      ].join('\n');
+    }
+    // overlay
+    return [
+      `╔══════════════════════════════════════════════════════╗`,
+      `  CANVAS SLOT — OVERLAY (screen blend over avatar)`,
+      `╚══════════════════════════════════════════════════════╝`,
+      `This composition is blended over the avatar using SCREEN blend mode at 88% opacity.`,
+      `DESIGN RULES FOR OVERLAY:`,
+      `• Background MUST be #000000 or very dark — dark pixels become transparent in screen blend`,
+      `• Only bright/colored elements will be visible over the avatar`,
+      `• Text: white or bright brand color, large, with strong glow/shadow`,
+      `• Decorative shapes: bright, colored, at 60-80% opacity — avoid white which washes out`,
+      `• NO background fills over 15% brightness — they will wash out the avatar face`,
+      `• Think: floating text and glowing elements that appear to hover over the person`,
+    ].join('\n');
+  })();
+
   const userBrief = [
+    slotSection,
+    '',
     reelContextSection,
     brandSection,
     assetsSection,
@@ -455,16 +508,18 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
 export const buildFullHtmlDoc = (motion: MotionConfig): string => {
   const compositionId = motion.id;
   const dur = motion.durationSec;
+  const isSplit = motion.layer === 'split-bottom' || motion.layer === 'split-top';
+  const canvasH = isSplit ? 960 : 1920;
   return `<!doctype html>
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=1080, height=1920" />
+    <meta name="viewport" content="width=1080, height=${canvasH}" />
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
     <style>
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
-        width: 1080px; height: 1920px; overflow: hidden;
+        width: 1080px; height: ${canvasH}px; overflow: hidden;
         background: #000;
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
       }
@@ -478,7 +533,7 @@ export const buildFullHtmlDoc = (motion: MotionConfig): string => {
       data-start="0"
       data-duration="${dur}"
       data-width="1080"
-      data-height="1920"
+      data-height="${canvasH}"
     >
 ${motion.html}
     </div>

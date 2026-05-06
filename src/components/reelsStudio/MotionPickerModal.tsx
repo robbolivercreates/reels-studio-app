@@ -95,6 +95,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
         number: motion.number,
         durationSec: motion.durationSec,
         compositionId: motion.id,
+        motionLayer: motion.layer,
       });
       setRationale(result.rationale);
       setMotion(m => ({
