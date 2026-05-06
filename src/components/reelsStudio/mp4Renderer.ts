@@ -171,8 +171,6 @@ const frameAtProjectTime = (
   }
 
   // Decorations.
-  if (hasAvatar) decorations.push({ kind: 'bottom-gradient' });
-  if (hasAvatar && hasMotionOverlay) decorations.push({ kind: 'vignette' });
   if (blockLayout === 'avatar-top') decorations.push({ kind: 'split-seam', splitY: 0.5 });
   if (blockLayout === 'media-top') decorations.push({ kind: 'split-seam', splitY: 0.5 });
 
