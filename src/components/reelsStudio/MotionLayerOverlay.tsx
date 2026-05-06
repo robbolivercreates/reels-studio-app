@@ -106,44 +106,56 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) 
     catch { /* ignore */ }
   }, [playing, mp4Url]);
 
-  // Match the export compositor blend behaviour in the CSS preview.
-  // overlay → screen blend at 88% opacity (same as mp4Renderer)
-  // replace → normal, full opacity (replaces everything underneath)
-  const style: React.CSSProperties =
-    layer === 'overlay'
-      ? { opacity: 0.88, mixBlendMode: 'screen' }
-      : { opacity: 1 };
+  const isSplit = layer === 'split-bottom' || layer === 'split-top';
+
+  // Position + blend for each layer mode.
+  const wrapperStyle: React.CSSProperties = isSplit
+    ? {
+        position: 'absolute',
+        left: 0, right: 0,
+        top: layer === 'split-bottom' ? '50%' : 0,
+        bottom: layer === 'split-top' ? '50%' : 0,
+      }
+    : layer === 'overlay'
+    ? { opacity: 0.88, mixBlendMode: 'screen' }
+    : { opacity: 1 }; // replace
+
+  const videoStyle: React.CSSProperties = isSplit
+    ? { width: '100%', height: '100%', objectFit: 'cover' }
+    : { width: '100%', height: '100%', objectFit: 'cover' };
+
+  const mediaEl = mp4Url ? (
+    <video
+      ref={videoRef}
+      src={mp4Url}
+      loop
+      muted
+      playsInline
+      style={videoStyle}
+    />
+  ) : motion.html ? (
+    <div className="absolute inset-0 overflow-hidden">
+      <iframe
+        ref={iframeRef}
+        title="motion live preview"
+        sandbox="allow-scripts"
+        style={{
+          width: 1080, height: isSplit ? 960 : 1920, border: 'none',
+          position: 'absolute', top: 0, left: 0,
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+        }}
+      />
+    </div>
+  ) : null;
 
   return (
     <div
       ref={wrapperRef}
-      className="absolute inset-0 pointer-events-none"
-      style={style}
+      className={isSplit ? 'pointer-events-none' : 'absolute inset-0 pointer-events-none'}
+      style={isSplit ? wrapperStyle : { ...wrapperStyle, position: 'absolute', inset: 0 }}
     >
-      {mp4Url ? (
-        <video
-          ref={videoRef}
-          src={mp4Url}
-          loop
-          muted
-          playsInline
-          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-        />
-      ) : motion.html ? (
-        <div className="absolute inset-0 overflow-hidden">
-          <iframe
-            ref={iframeRef}
-            title="motion live preview"
-            sandbox="allow-scripts"
-            style={{
-              width: 1080, height: 1920, border: 'none',
-              position: 'absolute', top: 0, left: 0,
-              transform: `scale(${scale})`,
-              transformOrigin: 'top left',
-            }}
-          />
-        </div>
-      ) : null}
+      {mediaEl}
     </div>
   );
 };

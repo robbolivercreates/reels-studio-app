@@ -1398,6 +1398,7 @@ export const ReelsStudio: React.FC = () => {
                   onSetAvatarVisibleSec: (sec: number | undefined) => dispatch({ type: 'set-avatar-visible-sec', id: b.id, sec }),
                   onSetLayout: (layout: BlockLayout) => dispatch({ type: 'set-block-layout', id: b.id, layout }),
                   onSetAvatarZoom: (zoom: number) => dispatch({ type: 'set-avatar-zoom', id: b.id, zoom }),
+                  onSetAvatarOffsetY: (offsetY: number) => dispatch({ type: 'set-avatar-offset-y', id: b.id, offsetY }),
                   defaultZoom: defaultAvatarZoom(state.aspect, b.layout),
                   isCurrent: currentBlock?.id === b.id,
                   isSelected: selectedBlockId === b.id,
@@ -1854,7 +1855,7 @@ export const ReelsStudio: React.FC = () => {
               const useDur = Math.min(motionDur, blockDur);
               const left = (slot.projectStart / totalDuration) * 100;
               const width = (useDur / totalDuration) * 100;
-              const layerLabel = motion.layer === 'overlay' ? 'over' : motion.layer === 'transition' ? 'trans' : 'full';
+              const layerLabel = motion.layer === 'overlay' ? 'over' : motion.layer === 'replace' ? 'full' : motion.layer === 'split-bottom' ? 'split↑' : motion.layer === 'split-top' ? 'split↓' : 'over';
               return (
                 <div
                   key={`mot-${b.id}`}
@@ -2185,6 +2186,7 @@ interface BlockCardProps {
   onSetAvatarVisibleSec: (sec: number | undefined) => void;
   onSetLayout: (layout: BlockLayout) => void;
   onSetAvatarZoom: (zoom: number) => void;
+  onSetAvatarOffsetY: (offsetY: number) => void;
   defaultZoom: number;
   isCurrent: boolean;
   isSelected: boolean;
@@ -2227,7 +2229,7 @@ const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({
   );
 };
 
-const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, motionBusyMessage }) => {
+const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, motionBusyMessage }) => {
   const isAvatar = b.kind === 'avatar';
   const duration = b.end - b.start;
   const visibleSec = b.avatarVisibleSec ?? duration;
@@ -2408,6 +2410,22 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
             className="w-full h-1 accent-violet-400 cursor-pointer"
           />
           <div className="text-[9px] text-zinc-500">HeyGen rende em 16:9; ajuste o zoom pra encaixar no aspect do reel.</div>
+          {/* Vertical position slider */}
+          <div className="flex items-center justify-between text-[10px] mt-2">
+            <span className="text-zinc-400">↕️ Posição vertical</span>
+            <span className="font-mono text-zinc-300">
+              {b.avatarOffsetY === undefined || b.avatarOffsetY === 0 ? 'centro' : b.avatarOffsetY > 0 ? `+${(b.avatarOffsetY * 100).toFixed(0)}% ↓` : `${(b.avatarOffsetY * 100).toFixed(0)}% ↑`}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={-0.5}
+            max={0.5}
+            step={0.02}
+            value={b.avatarOffsetY ?? 0}
+            onChange={(e) => onSetAvatarOffsetY(parseFloat(e.target.value))}
+            className="w-full h-1 accent-violet-400 cursor-pointer"
+          />
         </div>
       )}
 

@@ -176,6 +176,21 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       };
     }
 
+    case 'set-avatar-offset-y': {
+      const clamped = Math.max(-0.5, Math.min(0.5, action.offsetY));
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          if (Math.abs(clamped) < 0.01) {
+            const { avatarOffsetY: _, ...rest } = b;
+            return rest;
+          }
+          return { ...b, avatarOffsetY: Math.round(clamped * 100) / 100 };
+        }),
+      };
+    }
+
     case 'set-block-layout': {
       return {
         ...state,

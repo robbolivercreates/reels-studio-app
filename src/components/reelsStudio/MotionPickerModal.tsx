@@ -340,8 +340,10 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
                 </label>
                 <div className="flex flex-col gap-1">
                   {([
-                    { value: 'overlay',  label: 'Sobre o vídeo', desc: 'screen blend — mistura com o avatar', icon: '🔀' },
-                    { value: 'replace',  label: 'Substitui o fundo', desc: 'ocupa o frame inteiro', icon: '🖼️' },
+                    { value: 'overlay',      label: 'Sobre o vídeo',     desc: 'screen blend — mistura com o avatar', icon: '🔀' },
+                    { value: 'replace',      label: 'Frame inteiro',      desc: 'substitui tudo — sem avatar', icon: '🖼️' },
+                    { value: 'split-bottom', label: 'Avatar cima / Motion baixo', desc: 'split 50/50 vertical', icon: '⬆️' },
+                    { value: 'split-top',    label: 'Motion cima / Avatar baixo', desc: 'split 50/50 vertical', icon: '⬇️' },
                   ] as { value: MotionLayer; label: string; desc: string; icon: string }[]).map(opt => (
                     <button
                       key={opt.value}

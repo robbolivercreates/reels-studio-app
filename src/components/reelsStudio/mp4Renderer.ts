@@ -71,6 +71,7 @@ interface FrameLayer {
   sourceSeek: number;
   box: LayoutBox;           // 0..1 normalized
   zoom?: number;            // optional center-zoom factor (1 = no zoom)
+  offsetY?: number;         // vertical shift within box (-0.5..0.5 fraction of box height)
   alpha?: number;           // 0..1 global opacity for this layer (default 1)
   blend?: BlendMode;        // canvas globalCompositeOperation (default source-over)
 }
@@ -117,23 +118,38 @@ const frameAtProjectTime = (
   }
   fadeAlpha = Math.max(0, Math.min(1, fadeAlpha));
 
-  // Motion-replace: motion fills the whole frame, no avatar/broll.
-  if (block.motion?.layer === 'replace' && motionUrls.has(block.id)) {
-    const motionUrl = motionUrls.get(block.id)!;
-    const motionDur = block.motion.durationSec || 4;
-    return {
-      layers: [{ videoUrl: motionUrl, sourceSeek: localT % motionDur, box: FULL_FRAME }],
-      decorations: [],
-      fadeAlpha,
-    };
+  const motionLayer = block.motion?.layer;
+  const motionUrl = motionUrls.get(block.id);
+  const motionDur = block.motion?.durationSec || 4;
+  const motionSeek = localT % motionDur;
+
+  // Motion-replace: full frame.
+  if (motionLayer === 'replace' && motionUrl) {
+    return { layers: [{ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME }], decorations: [], fadeAlpha };
+  }
+
+  // Motion split: avatar occupies one half, motion the other.
+  if ((motionLayer === 'split-bottom' || motionLayer === 'split-top') && motionUrl) {
+    const avatarBox: LayoutBox = motionLayer === 'split-bottom'
+      ? { x: 0, y: 0,   w: 1, h: 0.5 }
+      : { x: 0, y: 0.5, w: 1, h: 0.5 };
+    const motionBox: LayoutBox = motionLayer === 'split-bottom'
+      ? { x: 0, y: 0.5, w: 1, h: 0.5 }
+      : { x: 0, y: 0,   w: 1, h: 0.5 };
+    const layers: FrameLayer[] = [];
+    const clip = block.kind === 'avatar' ? inputs.avatarClips[block.id] : null;
+    if (clip?.videoUrl) {
+      const zoom = block.avatarZoom ?? 1;
+      layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: avatarBox, zoom, offsetY: block.avatarOffsetY });
+    }
+    layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: motionBox });
+    return { layers, decorations: [{ kind: 'split-seam', splitY: 0.5 }], fadeAlpha };
   }
 
   const blockLayout: BlockLayout = block.kind === 'avatar' ? (block.layout ?? 'avatar-only') : 'media-only';
   const slots = getLayoutSlots(blockLayout);
   const layers: FrameLayer[] = [];
   const decorations: FrameDecoration[] = [];
-  let hasAvatar = false;
-  let hasMotionOverlay = false;
 
   // Avatar layer.
   if (block.kind === 'avatar' && slots.avatar) {
@@ -142,8 +158,7 @@ const frameAtProjectTime = (
       const clip = inputs.avatarClips[block.id];
       if (clip?.videoUrl) {
         const zoom = block.avatarZoom ?? defaultAvatarZoom(inputs.aspect, block.layout);
-        layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: slots.avatar, zoom });
-        hasAvatar = true;
+        layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: slots.avatar, zoom, offsetY: block.avatarOffsetY });
       }
     } else if (inputs.activeTake) {
       const localBroll = localT - (block.avatarVisibleSec ?? 0);
@@ -157,17 +172,8 @@ const frameAtProjectTime = (
   }
 
   // Motion overlay: screen blend at 0.88 alpha — mixes with avatar instead of covering it.
-  if (block.motion?.layer === 'overlay' && motionUrls.has(block.id)) {
-    const motionUrl = motionUrls.get(block.id)!;
-    const motionDur = block.motion.durationSec || 4;
-    layers.push({
-      videoUrl: motionUrl,
-      sourceSeek: localT % motionDur,
-      box: FULL_FRAME,
-      alpha: 0.88,
-      blend: 'screen',
-    });
-    hasMotionOverlay = true;
+  if (motionLayer === 'overlay' && motionUrl) {
+    layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME, alpha: 0.88, blend: 'screen' });
   }
 
   // Decorations.
@@ -372,12 +378,12 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       ctx.fillRect(0, 0, width, height);
     };
 
-    /** Draw a video frame into a normalized box with cover-fit (crop). Respects alpha + blend mode. */
-    const drawIntoBox = (v: HTMLVideoElement, box: LayoutBox, zoom = 1, alpha = 1, blend: BlendMode = 'source-over') => {
+    /** Draw a video frame into a normalized box with cover-fit (crop). Respects alpha + blend mode + offsetY. */
+    const drawIntoBox = (v: HTMLVideoElement, box: LayoutBox, zoom = 1, alpha = 1, blend: BlendMode = 'source-over', offsetY = 0) => {
       const srcW = v.videoWidth;
       const srcH = v.videoHeight;
       const dx = box.x * width;
-      const dy = box.y * height;
+      const dy = box.y * height + offsetY * box.h * height;
       const dw = box.w * width;
       const dh = box.h * height;
       if (!srcW || !srcH) {
@@ -434,7 +440,7 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         const v = videoMap.get(lyr.videoUrl);
         if (!v) continue;
         await seekVideo(v, lyr.sourceSeek);
-        drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over');
+        drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0);
       }
 
       // Draw decorations (gradients, seam, vignette) on top of video layers.

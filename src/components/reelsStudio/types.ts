@@ -38,6 +38,12 @@ export interface ScriptBlock {
    */
   avatarZoom?: number;
   /**
+   * Avatar blocks only: vertical offset for the avatar within its slot.
+   * Range -0.5..0.5 (fraction of slot height). Positive = move down, negative = move up.
+   * undefined = 0 (centered).
+   */
+  avatarOffsetY?: number;
+  /**
    * Optional motion graphic associated with this block. Rendered by Remotion.
    * undefined = no motion. Picker assigns this via `set-block-motion`.
    */
@@ -200,6 +206,7 @@ export type ReelsAction =
   | { type: 'set-avatar-visible-sec'; id: string; sec: number | undefined }
   | { type: 'set-block-layout'; id: string; layout: BlockLayout }
   | { type: 'set-avatar-zoom'; id: string; zoom: number }
+  | { type: 'set-avatar-offset-y'; id: string; offsetY: number }
   | { type: 'set-block-motion'; id: string; motion: MotionConfig | undefined }
   | { type: 'split-block'; id: string; atSec: number }
   | { type: 'set-voice'; voiceId: string }

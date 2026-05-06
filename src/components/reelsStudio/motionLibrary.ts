@@ -12,7 +12,11 @@
 
 import type { StylePresetId } from './motionStylePresets';
 
-export type MotionLayer = 'overlay' | 'transition' | 'replace';
+// overlay: motion blends over avatar (screen blend)
+// replace: motion fills the full frame
+// split-bottom: avatar top half, motion bottom half
+// split-top: motion top half, avatar bottom half
+export type MotionLayer = 'overlay' | 'replace' | 'split-bottom' | 'split-top';
 
 export type MotionRenderStatus = 'draft' | 'generating' | 'ready' | 'rendering' | 'error';
 
