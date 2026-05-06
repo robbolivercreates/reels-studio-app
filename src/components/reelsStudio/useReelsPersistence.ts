@@ -1,0 +1,249 @@
+import { useEffect, useRef, useState } from 'react';
+import {
+  saveProject,
+  loadProject,
+  loadAudioBlob,
+  loadAllClipBlobs,
+  loadAllTakeBlobs,
+  saveAudioBlob,
+  downloadAndStoreClip,
+  clearAllProjectData,
+} from './persistence';
+import { computePeaks } from './audioEngine';
+import type { AvatarClipState, ReelsAction, ReelsState, ScreenTake } from './types';
+
+const SAVE_DEBOUNCE_MS = 600;
+
+interface Options {
+  state: ReelsState;
+  dispatch: React.Dispatch<ReelsAction>;
+  onHydrated?: () => void;
+}
+
+export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) => {
+  const [hydrated, setHydrated] = useState(false);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const downloadingRef = useRef<Set<string>>(new Set());
+  const hydratedRef = useRef(false);
+
+  // ─── HYDRATE ON MOUNT ──────────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const persisted = await loadProject();
+        if (cancelled) return;
+        if (!persisted) {
+          setHydrated(true);
+          hydratedRef.current = true;
+          return;
+        }
+
+        // Restore audio Blob → object URL + recompute peaks (cheap, < 50ms)
+        const audioBlob = await loadAudioBlob();
+        if (cancelled) return;
+
+        let audioUrl: string | null = null;
+        let peaks: number[] = persisted.audio.peaks;
+        let duration = persisted.audio.duration;
+
+        if (audioBlob) {
+          audioUrl = URL.createObjectURL(audioBlob);
+          // Re-decode to get fresh peaks if persisted ones are missing.
+          if (!peaks || peaks.length === 0) {
+            try {
+              const decoded = await decodeBlobForPeaks(audioBlob);
+              peaks = decoded.peaks;
+              duration = decoded.duration;
+            } catch {
+              // peaks stay empty; not fatal.
+            }
+          }
+        }
+
+        // Restore clip Blobs → object URLs, replacing any stale remote URLs.
+        const clipBlobs = await loadAllClipBlobs();
+        if (cancelled) return;
+
+        // Persisted videoUrls are blob: URLs from a prior session — invalid now.
+        // Only restore clips whose Blob actually exists in IndexedDB; otherwise the
+        // <video> would spam the console with WebKitBlobResource errors trying to
+        // load a dead URL until something else replaced it.
+        const restoredClips: Record<string, AvatarClipState> = {};
+        for (const [blockId, blob] of Object.entries(clipBlobs)) {
+          const url = URL.createObjectURL(blob);
+          restoredClips[blockId] = {
+            blockId,
+            status: 'ready',
+            videoUrl: url,
+          };
+        }
+        // Carry over non-ready statuses (queued/rendering/error) so the UI keeps
+        // showing them — they don't need a videoUrl.
+        for (const [blockId, clip] of Object.entries(persisted.avatarClips)) {
+          if (restoredClips[blockId]) continue;
+          if (clip.status === 'ready') continue; // ready without a blob = stale, drop
+          restoredClips[blockId] = { ...clip, videoUrl: undefined };
+        }
+
+        // Restore take Blobs → object URLs.
+        const takeBlobs = await loadAllTakeBlobs();
+        if (cancelled) return;
+
+        const restoredTakes: ScreenTake[] = (persisted.takes ?? [])
+          .filter(t => takeBlobs[t.id]) // drop takes whose blob disappeared
+          .map(t => {
+            const partial = t as unknown as Partial<ScreenTake> & { id: string; durationMs: number };
+            const durationSec = (partial.durationMs ?? 0) / 1000;
+            return {
+              id: partial.id,
+              name: partial.name ?? 'Take',
+              durationMs: partial.durationMs,
+              hasAudio: partial.hasAudio ?? true,
+              createdAt: partial.createdAt ?? Date.now(),
+              source: partial.source ?? 'recording',
+              trimStart: partial.trimStart ?? 0,
+              trimEnd: partial.trimEnd ?? durationSec,
+              cutSilence: partial.cutSilence ?? false,
+              keepSegments: partial.keepSegments ?? [],
+              detectedSilenceSec: partial.detectedSilenceSec ?? 0,
+              url: URL.createObjectURL(takeBlobs[partial.id]),
+            } satisfies ScreenTake;
+          });
+
+        const restoredState: ReelsState = {
+          projectName: persisted.projectName,
+          blocks: persisted.blocks,
+          audio: {
+            ...persisted.audio,
+            silenceCut: persisted.audio.silenceCut ?? false,
+            silencePreset: persisted.audio.silencePreset ?? 'fast',
+            keepSegments: persisted.audio.keepSegments ?? [],
+            detectedSilenceSec: persisted.audio.detectedSilenceSec ?? 0,
+            detectingSilence: false,
+            url: audioUrl,
+            peaks,
+            duration,
+            // If we have an audio blob the audio is "ready"; otherwise reset to idle.
+            status: audioBlob ? 'ready' : 'idle',
+          },
+          selectedVoiceId: persisted.selectedVoiceId,
+          aspect: persisted.aspect,
+          avatarClips: restoredClips,
+          avatarModel: persisted.avatarModel,
+          selectedPhotoId: persisted.selectedPhotoId,
+          takes: restoredTakes,
+          activeTakeId: persisted.activeTakeId && restoredTakes.some(t => t.id === persisted.activeTakeId)
+            ? persisted.activeTakeId
+            : (restoredTakes[0]?.id ?? null),
+          lastAnalysis: persisted.lastAnalysis,
+          analyses: persisted.analyses ?? (persisted.lastAnalysis ? [persisted.lastAnalysis] : []),
+          emotion: persisted.emotion ?? 'neutral',
+          voiceSpeed: persisted.voiceSpeed ?? 1.0,
+        };
+
+        dispatch({ type: 'hydrate', state: restoredState });
+        setSavedAt(persisted.savedAt);
+        setHydrated(true);
+        hydratedRef.current = true;
+        onHydrated?.();
+      } catch (err) {
+        console.warn('[reels/persistence] hydrate failed:', err);
+        setHydrated(true);
+        hydratedRef.current = true;
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ─── DEBOUNCED AUTO-SAVE OF PROJECT ────────────────────────────────
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    setSaving(true);
+    const handle = setTimeout(async () => {
+      try {
+        await saveProject(state);
+        setSavedAt(Date.now());
+      } catch (err) {
+        console.warn('[reels/persistence] saveProject failed:', err);
+      } finally {
+        setSaving(false);
+      }
+    }, SAVE_DEBOUNCE_MS);
+    return () => clearTimeout(handle);
+  }, [state]);
+
+  // ─── DOWNLOAD FRESH HEYGEN CLIPS ───────────────────────────────────
+  // When a clip transitions to status === 'ready' with a remote (https) URL,
+  // download the MP4 immediately and replace the URL with a local blob: URL.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    for (const [blockId, clip] of Object.entries(state.avatarClips)) {
+      if (clip.status !== 'ready') continue;
+      if (!clip.videoUrl) continue;
+      if (clip.videoUrl.startsWith('blob:')) continue; // already local
+      if (downloadingRef.current.has(blockId)) continue;
+      downloadingRef.current.add(blockId);
+      (async () => {
+        try {
+          const blob = await downloadAndStoreClip(blockId, clip.videoUrl!);
+          const localUrl = URL.createObjectURL(blob);
+          dispatch({ type: 'clip-update', blockId, status: 'ready', videoUrl: localUrl });
+        } catch (err) {
+          console.warn('[reels/persistence] clip download failed for', blockId, err);
+          // We keep the remote URL — it still works for ~7 days.
+        } finally {
+          downloadingRef.current.delete(blockId);
+        }
+      })();
+    }
+  }, [state.avatarClips, dispatch]);
+
+  // ─── PERSIST AUDIO BLOB WHEN URL CHANGES ──────────────────────────
+  // The audio Blob is created inside audioEngine and its object URL flows through state.
+  // We snapshot the Blob to IndexedDB on first ready event.
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    if (state.audio.status !== 'ready') return;
+    if (!state.audio.url) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(state.audio.url!);
+        if (cancelled) return;
+        const blob = await res.blob();
+        if (cancelled) return;
+        await saveAudioBlob(blob);
+      } catch (err) {
+        console.warn('[reels/persistence] saveAudioBlob failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.audio.url, state.audio.status]);
+
+  const clearProject = async (): Promise<void> => {
+    await clearAllProjectData();
+    setSavedAt(null);
+    // Caller should reset the in-memory state by reloading the page or dispatching a reset.
+  };
+
+  return { hydrated, savedAt, saving, clearProject };
+};
+
+// Lightweight helper duplicated from audioEngine so we don't import its full graph here.
+const decodeBlobForPeaks = async (blob: Blob): Promise<{ peaks: number[]; duration: number }> => {
+  const AC: typeof AudioContext =
+    (window.AudioContext as typeof AudioContext | undefined) ??
+    ((window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+  const ctx = new AC();
+  try {
+    const arrayBuffer = await blob.arrayBuffer();
+    const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    return { peaks: computePeaks(buffer), duration: buffer.duration };
+  } finally {
+    if (ctx.state !== 'closed') ctx.close().catch(() => {});
+  }
+};

@@ -1,0 +1,478 @@
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import {
+  STYLE_PRESETS,
+  findStylePreset,
+  type StylePresetId,
+} from './motionStylePresets';
+import {
+  type MotionConfig,
+  type MotionLayer,
+  newMotionId,
+} from './motionLibrary';
+import { generateMotionHtml, buildFullHtmlDoc } from '../../services/motionService';
+import type { ScriptBlock } from './types';
+
+interface Props {
+  block: ScriptBlock;
+  onClose: () => void;
+  onSave: (motion: MotionConfig | undefined) => void;
+}
+
+interface RenderProgress {
+  motion_id: string;
+  stage: string;
+  message: string;
+  percent: number | null;
+}
+
+const deriveDefaultText = (blockText: string): string => {
+  const t = blockText.trim();
+  if (t.length <= 60) return t;
+  const sentence = t.split(/[.!?]\s/)[0];
+  if (sentence.length <= 80) return sentence;
+  return sentence.slice(0, 60).split(' ').slice(0, -1).join(' ') + '…';
+};
+
+export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) => {
+  // Existing motion or fresh draft.
+  const initial: MotionConfig = useMemo(() => block.motion ?? {
+    id: newMotionId(),
+    presetId: 'editorial-clean',
+    layer: 'overlay',
+    intent: '',
+    text: deriveDefaultText(block.text),
+    durationSec: 4,
+    html: '',
+    status: 'draft',
+    createdAt: Date.now(),
+  }, [block.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const [motion, setMotion] = useState<MotionConfig>(initial);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<RenderProgress | null>(null);
+  const [rationale, setRationale] = useState<string>('');
+  const [previewMode, setPreviewMode] = useState<'live' | 'mp4'>('live');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  // Subscribe to render progress events from Rust.
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    listen<RenderProgress>('motion://render-progress', (e) => {
+      if (e.payload.motion_id === motion.id) setProgress(e.payload);
+    }).then(fn => { unlisten = fn; });
+    return () => { unlisten?.(); };
+  }, [motion.id]);
+
+  // Reset progress when switching motion id (creating new one).
+  useEffect(() => { setProgress(null); }, [motion.id]);
+
+  const patch = <K extends keyof MotionConfig>(key: K, value: MotionConfig[K]) => {
+    setMotion(m => ({ ...m, [key]: value }));
+  };
+
+  const fullHtmlDoc = useMemo(
+    () => motion.html ? buildFullHtmlDoc(motion) : '',
+    [motion.html, motion.id, motion.durationSec],
+  );
+
+  // ─── Generate via Gemini ─────────────────────────────────────────────
+
+  const handleGenerate = async () => {
+    setError(null);
+    setBusy('Gemini lendo o bloco e criando o motion…');
+    try {
+      const result = await generateMotionHtml({
+        presetId: motion.presetId,
+        blockText: block.text,
+        // Pass overrides only if user toggled advanced and edited them.
+        intent: showAdvanced ? motion.intent : undefined,
+        text: showAdvanced ? motion.text : undefined,
+        secondaryText: motion.secondaryText,
+        number: motion.number,
+        durationSec: motion.durationSec,
+        compositionId: motion.id,
+      });
+      setRationale(result.rationale);
+      setMotion(m => ({
+        ...m,
+        intent: result.intent || m.intent,
+        text: result.text || m.text,
+        html: result.htmlBody,
+        status: 'ready',
+        generatedAt: Date.now(),
+        errorMessage: undefined,
+      }));
+      setPreviewMode('live');
+      setBusy(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao gerar.');
+      setBusy(null);
+    }
+  };
+
+  // ─── Render via HyperFrames ──────────────────────────────────────────
+
+  const handleRender = async () => {
+    if (!motion.html) {
+      setError('Gere o motion antes de renderizar.');
+      return;
+    }
+    setError(null);
+    setBusy('Renderizando MP4 com HyperFrames…');
+    try {
+      // 1. Save HTML to disk.
+      await invoke('save_motion_html', { motionId: motion.id, html: fullHtmlDoc });
+      // 2. Render.
+      const result = await invoke<{ mp4_path: string; size_bytes: number }>(
+        'render_motion', { motionId: motion.id },
+      );
+      setMotion(m => ({
+        ...m,
+        videoPath: result.mp4_path,
+        status: 'ready',
+        renderedAt: Date.now(),
+        errorMessage: undefined,
+      }));
+      setPreviewMode('mp4');
+      setBusy(null);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+      setMotion(m => ({ ...m, status: 'error', errorMessage: msg }));
+      setBusy(null);
+    }
+  };
+
+  const handleSave = () => onSave(motion);
+  const handleRemove = () => onSave(undefined);
+
+  // ─── MP4 preview URL (load bytes via tauri invoke + objectURL) ───────
+
+  const [mp4Url, setMp4Url] = useState<string | null>(null);
+  useEffect(() => {
+    let revokedUrl: string | null = null;
+    if (previewMode === 'mp4' && motion.videoPath) {
+      void (async () => {
+        try {
+          const bytes = await invoke<number[]>('read_motion_video_bytes', { motionId: motion.id });
+          const blob = new Blob([new Uint8Array(bytes)], { type: 'video/mp4' });
+          const url = URL.createObjectURL(blob);
+          revokedUrl = url;
+          setMp4Url(url);
+        } catch {
+          setMp4Url(null);
+        }
+      })();
+    } else {
+      setMp4Url(null);
+    }
+    return () => { if (revokedUrl) URL.revokeObjectURL(revokedUrl); };
+  }, [previewMode, motion.videoPath, motion.id, motion.renderedAt]);
+
+  // ─── Live iframe — animation runs via GSAP timeline play loop ────────
+
+  useEffect(() => {
+    if (previewMode !== 'live') return;
+    const iframe = iframeRef.current;
+    if (!iframe || !fullHtmlDoc) return;
+    iframe.srcdoc = fullHtmlDoc;
+    const onLoad = () => {
+      try {
+        const win = iframe.contentWindow as any;
+        const tryPlay = () => {
+          const tl = win?.__timelines?.[motion.id];
+          if (tl) {
+            tl.repeat(-1).play();
+          } else {
+            setTimeout(tryPlay, 100);
+          }
+        };
+        setTimeout(tryPlay, 200);
+      } catch {/* ignore */}
+    };
+    iframe.addEventListener('load', onLoad);
+    return () => iframe.removeEventListener('load', onLoad);
+  }, [fullHtmlDoc, previewMode, motion.id]);
+
+  const preset = findStylePreset(motion.presetId);
+
+  return (
+    <div className="fixed inset-0 bg-black/75 backdrop-blur-md flex items-center justify-center z-[60] p-6">
+      <div className="bg-[#0F0F11] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.85)] max-w-5xl w-full overflow-hidden flex flex-col max-h-[92vh]">
+        {/* Header */}
+        <div className="px-6 pt-5 pb-4 flex items-start justify-between border-b border-white/5">
+          <div>
+            <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mb-1">Motion graphic · gerado por IA</div>
+            <h2 className="text-lg font-semibold text-zinc-100">Motion pra esse bloco</h2>
+            <div className="text-[11px] text-zinc-500 mt-1 italic max-w-xl truncate">"{block.text}"</div>
+          </div>
+          <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-200" disabled={!!busy}>
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left: form */}
+          <div className="w-[440px] shrink-0 border-r border-white/5 overflow-y-auto px-5 py-4 space-y-4">
+
+            {/* Auto / advanced toggle */}
+            <div className="rounded-lg bg-violet-500/[0.06] border border-violet-400/20 px-3 py-2.5">
+              <div className="flex items-start gap-2">
+                <span className="text-violet-300 text-sm">✨</span>
+                <div className="flex-1">
+                  <div className="text-[12px] text-zinc-100 font-medium leading-tight">
+                    {showAdvanced ? 'Modo manual' : 'IA decide tudo'}
+                  </div>
+                  <div className="text-[10.5px] text-zinc-400 mt-0.5 leading-snug">
+                    {showAdvanced
+                      ? 'Edite a ideia, o texto e o estilo visual abaixo.'
+                      : 'Pesquisa as cores da marca, classifica o bloco e gera a animação ideal. Zero configuração.'}
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowAdvanced(v => !v)}
+                  className="text-[10px] text-violet-300 hover:text-violet-200 underline shrink-0"
+                >
+                  {showAdvanced ? 'Voltar pra automático' : 'Ajuste manual'}
+                </button>
+              </div>
+            </div>
+
+            {/* Style preset — only shown in advanced mode */}
+            {showAdvanced && (
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mb-2">Estilo base <span className="normal-case text-zinc-600">(as cores da marca sobrescrevem)</span></div>
+              <div className="grid grid-cols-2 gap-2">
+                {STYLE_PRESETS.map(p => (
+                  <button
+                    key={p.id}
+                    onClick={() => patch('presetId', p.id as StylePresetId)}
+                    className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                      motion.presetId === p.id
+                        ? 'bg-violet-500/15 border-violet-500/40'
+                        : 'bg-black/20 border-white/10 hover:border-white/20'
+                    }`}
+                    title={p.bestFor}
+                  >
+                    <div className="text-xs font-medium text-zinc-100 flex items-center gap-1.5">
+                      <span>{p.emoji}</span>
+                      <span>{p.label}</span>
+                    </div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5 leading-snug line-clamp-2">{p.description}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            )}
+
+            {showAdvanced && (
+              <>
+                <div>
+                  <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
+                    Ideia / o que mostrar
+                  </label>
+                  <textarea
+                    value={motion.intent}
+                    onChange={e => patch('intent', e.target.value)}
+                    rows={3}
+                    placeholder='Ex: "engrenagem girando + raio cruzando"'
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50 leading-relaxed resize-y"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
+                    Texto que aparece
+                  </label>
+                  <input
+                    value={motion.text}
+                    onChange={e => patch('text', e.target.value)}
+                    placeholder="Frase curta que destaca no motion"
+                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50"
+                  />
+                </div>
+              </>
+            )}
+
+            {/* When Gemini decided, show what it picked (read-only-ish) */}
+            {!showAdvanced && motion.html && (motion.intent || motion.text) && (
+              <div className="rounded-lg bg-black/30 border border-white/5 p-3 space-y-1.5 text-[11px]">
+                {motion.intent && (
+                  <div>
+                    <span className="text-zinc-500 uppercase tracking-wider text-[9px]">Ideia escolhida — </span>
+                    <span className="text-zinc-200">{motion.intent}</span>
+                  </div>
+                )}
+                {motion.text && (
+                  <div>
+                    <span className="text-zinc-500 uppercase tracking-wider text-[9px]">Texto destacado — </span>
+                    <span className="text-zinc-200 font-medium">{motion.text}</span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Duration + layer */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
+                  Duração
+                </label>
+                <select
+                  value={motion.durationSec}
+                  onChange={e => patch('durationSec', parseInt(e.target.value, 10))}
+                  className="w-full px-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50"
+                >
+                  {[2, 3, 4, 5, 6, 8].map(s => (
+                    <option key={s} value={s}>{s}s</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
+                  Camada
+                </label>
+                <select
+                  value={motion.layer}
+                  onChange={e => patch('layer', e.target.value as MotionLayer)}
+                  className="w-full px-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50"
+                >
+                  <option value="overlay">Sobre o vídeo</option>
+                  <option value="transition">Entre blocos</option>
+                  <option value="replace">Substitui o B-roll</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Generate / Render buttons */}
+            <div className="flex flex-col gap-2 pt-2">
+              <button
+                onClick={handleGenerate}
+                disabled={!!busy}
+                className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.4)] disabled:opacity-40 transition-all"
+              >
+                {motion.html ? '↻ Regenerar com IA' : '✨ Gerar com IA'}
+              </button>
+              {motion.html && (
+                <button
+                  onClick={handleRender}
+                  disabled={!!busy}
+                  className="w-full py-2.5 rounded-lg bg-fuchsia-500 hover:bg-fuchsia-400 text-xs font-semibold text-white shadow-[0_0_15px_rgba(217,70,239,0.4)] disabled:opacity-40 transition-all"
+                >
+                  🎨 Renderizar pra MP4
+                </button>
+              )}
+            </div>
+
+            {/* Status / progress */}
+            {busy && (
+              <div className="text-[11px] text-violet-300 bg-violet-500/10 border border-violet-500/30 rounded-lg p-2.5">
+                {busy}
+              </div>
+            )}
+            {progress && progress.stage !== 'done' && (
+              <div className="text-[10.5px] text-zinc-400 bg-black/40 rounded-lg p-2 font-mono leading-snug">
+                <div className="flex justify-between mb-1">
+                  <span>{progress.stage}</span>
+                  {progress.percent !== null && <span>{progress.percent.toFixed(0)}%</span>}
+                </div>
+                <div className="truncate">{progress.message}</div>
+              </div>
+            )}
+            {rationale && (
+              <div className="text-[11px] text-zinc-300 bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-2.5 leading-relaxed">
+                <span className="text-emerald-300 font-medium">Por que escolhi assim:</span> {rationale}
+              </div>
+            )}
+            {error && (
+              <div className="text-[11px] text-red-200 bg-red-500/10 border border-red-500/30 rounded-lg p-2.5 leading-relaxed">
+                ⚠ {error}
+              </div>
+            )}
+          </div>
+
+          {/* Right: preview */}
+          <div className="flex-1 flex flex-col bg-black">
+            <div className="px-4 py-2 border-b border-white/5 flex items-center gap-2 text-[11px]">
+              <span className="text-zinc-500 uppercase tracking-wider text-[9px]">Preview</span>
+              <button
+                onClick={() => setPreviewMode('live')}
+                disabled={!motion.html}
+                className={`px-2 py-1 rounded ${previewMode === 'live' ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40' : 'text-zinc-400 hover:text-zinc-200 border border-transparent'} disabled:opacity-30`}
+              >
+                ✨ Ao vivo
+              </button>
+              <button
+                onClick={() => setPreviewMode('mp4')}
+                disabled={!motion.videoPath}
+                className={`px-2 py-1 rounded ${previewMode === 'mp4' ? 'bg-fuchsia-500/20 text-fuchsia-100 border border-fuchsia-400/40' : 'text-zinc-400 hover:text-zinc-200 border border-transparent'} disabled:opacity-30`}
+              >
+                🎥 MP4 renderizado
+              </button>
+              <span className="ml-auto text-[10px] text-zinc-600">{preset.label} · {motion.durationSec}s</span>
+            </div>
+            <div className="flex-1 flex items-center justify-center p-5">
+              {previewMode === 'live' && motion.html && (
+                <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: 360, height: 640 }}>
+                  <iframe
+                    ref={iframeRef}
+                    title="motion preview"
+                    sandbox="allow-scripts"
+                    style={{ width: 1080, height: 1920, border: 'none', transform: 'scale(0.333333)', transformOrigin: 'top left' }}
+                  />
+                </div>
+              )}
+              {previewMode === 'mp4' && mp4Url && (
+                <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: 360, height: 640 }}>
+                  <video src={mp4Url} controls autoPlay loop muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                </div>
+              )}
+              {!motion.html && (
+                <div className="text-zinc-500 text-sm text-center max-w-xs leading-relaxed">
+                  Preencha a ideia + texto à esquerda e clique <span className="text-violet-300">✨ Gerar com IA</span> pra criar o motion.
+                </div>
+              )}
+              {motion.html && previewMode === 'mp4' && !mp4Url && (
+                <div className="text-zinc-500 text-sm">Renderize pra MP4 primeiro.</div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="px-6 py-4 border-t border-white/5 flex items-center gap-2">
+          {block.motion && (
+            <button
+              onClick={handleRemove}
+              disabled={!!busy}
+              className="px-3 py-2 rounded-lg bg-red-500/15 hover:bg-red-500/25 text-red-200 text-[11px] font-medium border border-red-500/30 transition-colors disabled:opacity-40"
+            >
+              Remover motion
+            </button>
+          )}
+          <div className="flex-1" />
+          <button
+            onClick={onClose}
+            disabled={!!busy}
+            className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-[12px] text-zinc-300 disabled:opacity-40"
+          >
+            Cancelar
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={!motion.html || !!busy}
+            className="px-4 py-2 rounded-lg bg-violet-500 hover:bg-violet-400 disabled:opacity-40 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)]"
+          >
+            Salvar motion
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
