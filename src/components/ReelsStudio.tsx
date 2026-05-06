@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { reducer, INITIAL_STATE } from './reelsStudio/reducer';
 import { useHistoryReducer } from './reelsStudio/useHistoryReducer';
 import { generateProjectAudio, estimateScriptDuration } from './reelsStudio/audioEngine';
+import { saveAudioBlob } from './reelsStudio/persistence';
 import { VOICE_OPTIONS, getVoice } from './reelsStudio/voices';
 import type { ScriptBlock, ScreenTake } from './reelsStudio/types';
 import {
@@ -202,6 +203,13 @@ export const ReelsStudio: React.FC = () => {
 
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const audioBlobRef = useRef<Blob | null>(null);
+  // Restore audioBlobRef from IndexedDB after hydration so export works without regenerating audio.
+  useEffect(() => {
+    if (!hydrated || audioBlobRef.current) return;
+    import('./reelsStudio/persistence').then(({ loadAudioBlob }) => {
+      loadAudioBlob().then(blob => { if (blob) audioBlobRef.current = blob; }).catch(() => {});
+    });
+  }, [hydrated]);
   const rafRef = useRef<number | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
@@ -272,6 +280,9 @@ export const ReelsStudio: React.FC = () => {
         refreshClonedVoices();
       }
       audioBlobRef.current = result.blob;
+      // Save blob immediately to IndexedDB — don't rely on the URL fetch in useReelsPersistence
+      // because WebKit blob URLs can expire before the persistence effect fires.
+      saveAudioBlob(result.blob).catch(e => console.warn('[audio] saveAudioBlob failed:', e));
       dispatch({
         type: 'audio-success',
         url: result.url,
