@@ -338,15 +338,28 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
                 <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
                   Camada
                 </label>
-                <select
-                  value={motion.layer}
-                  onChange={e => patch('layer', e.target.value as MotionLayer)}
-                  className="w-full px-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50"
-                >
-                  <option value="overlay">Sobre o vídeo</option>
-                  <option value="transition">Entre blocos</option>
-                  <option value="replace">Substitui o B-roll</option>
-                </select>
+                <div className="flex flex-col gap-1">
+                  {([
+                    { value: 'overlay',  label: 'Sobre o vídeo', desc: 'screen blend — mistura com o avatar', icon: '🔀' },
+                    { value: 'replace',  label: 'Substitui o fundo', desc: 'ocupa o frame inteiro', icon: '🖼️' },
+                  ] as { value: MotionLayer; label: string; desc: string; icon: string }[]).map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => patch('layer', opt.value)}
+                      className={`text-left px-2.5 py-2 rounded-md border transition-colors flex items-center gap-2 ${
+                        motion.layer === opt.value
+                          ? 'bg-fuchsia-500/15 border-fuchsia-500/40 text-zinc-100'
+                          : 'bg-black/20 border-white/10 hover:border-white/20 text-zinc-400'
+                      }`}
+                    >
+                      <span className="text-base">{opt.icon}</span>
+                      <div>
+                        <div className="text-[11px] font-medium leading-tight">{opt.label}</div>
+                        <div className="text-[9px] text-zinc-500 leading-tight">{opt.desc}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
 

@@ -1865,9 +1865,14 @@ export const ReelsStudio: React.FC = () => {
                 >
                   <div className="px-1.5 py-1 flex items-center gap-1 text-fuchsia-50">
                     <span className="text-[10px] truncate font-medium">{motion.text || motion.intent || 'motion'}</span>
-                    <span className="ml-auto text-[8px] uppercase tracking-wider opacity-70 shrink-0">
+                    <span className="text-[8px] uppercase tracking-wider opacity-70 shrink-0">
                       {motion.status === 'ready' && motion.videoPath ? '✓ ' + layerLabel : layerLabel}
                     </span>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); dispatch({ type: 'set-block-motion', id: b.id, motion: undefined }); }}
+                      className="ml-1 w-3.5 h-3.5 rounded-full bg-black/40 hover:bg-black/80 flex items-center justify-center text-white/70 hover:text-white shrink-0 transition-colors"
+                      title="Remover motion desse bloco"
+                    >×</button>
                   </div>
                 </div>
               );

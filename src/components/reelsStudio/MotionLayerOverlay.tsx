@@ -106,13 +106,19 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) 
     catch { /* ignore */ }
   }, [playing, mp4Url]);
 
-  const opacity = layer === 'overlay' ? 0.92 : 1;
+  // Match the export compositor blend behaviour in the CSS preview.
+  // overlay → screen blend at 88% opacity (same as mp4Renderer)
+  // replace → normal, full opacity (replaces everything underneath)
+  const style: React.CSSProperties =
+    layer === 'overlay'
+      ? { opacity: 0.88, mixBlendMode: 'screen' }
+      : { opacity: 1 };
 
   return (
     <div
       ref={wrapperRef}
       className="absolute inset-0 pointer-events-none"
-      style={{ opacity }}
+      style={style}
     >
       {mp4Url ? (
         <video
