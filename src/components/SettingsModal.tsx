@@ -13,7 +13,53 @@ interface KeyConfig {
   hint: string;
   required: boolean;
   helpUrl?: string;
+  validate: (key: string) => Promise<{ ok: boolean; message: string }>;
 }
+
+const validateFalKey = async (key: string): Promise<{ ok: boolean; message: string }> => {
+  try {
+    // fal doesn't have a clean health endpoint, so call the queue status
+    // for a known model. 401/403 = bad key, anything else = key works.
+    const res = await fetch('https://queue.fal.run/health', {
+      method: 'GET',
+      headers: { 'Authorization': `Key ${key}` },
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, message: 'Chave rejeitada (401/403)' };
+    return { ok: true, message: 'Chave aceita' };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Erro de rede' };
+  }
+};
+
+const validateGoogleKey = async (key: string): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
+      { method: 'GET' },
+    );
+    if (res.status === 200) return { ok: true, message: 'Chave aceita · Gemini disponível' };
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      return { ok: false, message: `Chave rejeitada (${res.status})` };
+    }
+    return { ok: false, message: `Resposta inesperada (${res.status})` };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Erro de rede' };
+  }
+};
+
+const validateHeyGenKey = async (key: string): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch('https://api.heygen.com/v1/voice.list', {
+      method: 'GET',
+      headers: { 'X-Api-Key': key },
+    });
+    if (res.status === 200) return { ok: true, message: 'Chave aceita · HeyGen acessível' };
+    if (res.status === 401 || res.status === 403) return { ok: false, message: `Chave rejeitada (${res.status})` };
+    return { ok: false, message: `Resposta inesperada (${res.status})` };
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Erro de rede' };
+  }
+};
 
 const KEYS: KeyConfig[] = [
   {
@@ -23,14 +69,16 @@ const KEYS: KeyConfig[] = [
     hint: 'Para Minimax (TTS) e upload de áudio.',
     required: true,
     helpUrl: 'https://fal.ai/dashboard/keys',
+    validate: validateFalKey,
   },
   {
     storageKey: 'GOOGLE_API_KEY',
     label: 'Google AI Studio API Key',
     placeholder: 'AIza...',
-    hint: 'Para importação de roteiro com IA (Gemini).',
-    required: false,
+    hint: 'Para roteiro com IA, motion graphics e brand research (Gemini 3.1).',
+    required: true,
     helpUrl: 'https://aistudio.google.com/app/apikey',
+    validate: validateGoogleKey,
   },
   {
     storageKey: 'HEYGEN_API_KEY',
@@ -39,73 +87,207 @@ const KEYS: KeyConfig[] = [
     hint: 'Para gerar clipes de avatar (Avatar 4).',
     required: true,
     helpUrl: 'https://app.heygen.com/settings?nav=api',
+    validate: validateHeyGenKey,
   },
 ];
 
+const maskKey = (key: string): string => {
+  if (!key) return '';
+  if (key.length <= 8) return '•'.repeat(key.length);
+  return key.slice(0, 4) + '•'.repeat(Math.min(key.length - 8, 24)) + key.slice(-4);
+};
+
+type ValidationState = 'idle' | 'validating' | 'ok' | 'error';
+
+interface FieldState {
+  value: string;
+  editing: boolean;
+  visible: boolean;
+  validation: ValidationState;
+  validationMessage: string;
+}
+
 export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
-  const [values, setValues] = useState<Record<string, string>>({});
+  const [fields, setFields] = useState<Record<string, FieldState>>({});
 
   useEffect(() => {
     if (!isOpen) return;
-    const next: Record<string, string> = {};
+    const next: Record<string, FieldState> = {};
     for (const k of KEYS) {
-      next[k.storageKey] = localStorage.getItem(k.storageKey) ?? '';
+      const stored = localStorage.getItem(k.storageKey) ?? '';
+      next[k.storageKey] = {
+        value: stored,
+        editing: !stored, // start in edit mode if no key yet
+        visible: false,
+        validation: 'idle',
+        validationMessage: '',
+      };
     }
-    setValues(next);
+    setFields(next);
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const canSave = KEYS.filter(k => k.required).every(k => values[k.storageKey]?.trim().length > 0);
+  const patchField = (storageKey: string, patch: Partial<FieldState>) => {
+    setFields(prev => ({ ...prev, [storageKey]: { ...prev[storageKey], ...patch } }));
+  };
+
+  const canSave = KEYS.filter(k => k.required).every(k => fields[k.storageKey]?.value?.trim().length > 0);
 
   const handleSave = () => {
     for (const k of KEYS) {
-      const v = values[k.storageKey]?.trim();
+      const v = fields[k.storageKey]?.value?.trim();
       if (v) localStorage.setItem(k.storageKey, v);
       else localStorage.removeItem(k.storageKey);
     }
     onSave();
   };
 
+  const handleValidate = async (k: KeyConfig) => {
+    const v = fields[k.storageKey]?.value?.trim();
+    if (!v) return;
+    patchField(k.storageKey, { validation: 'validating', validationMessage: 'Testando…' });
+    try {
+      const result = await k.validate(v);
+      patchField(k.storageKey, {
+        validation: result.ok ? 'ok' : 'error',
+        validationMessage: result.message,
+      });
+    } catch (e) {
+      patchField(k.storageKey, {
+        validation: 'error',
+        validationMessage: e instanceof Error ? e.message : 'Erro desconhecido',
+      });
+    }
+  };
+
+  const handleClear = (k: KeyConfig) => {
+    if (!confirm(`Remover a chave ${k.label}?`)) return;
+    patchField(k.storageKey, { value: '', editing: true, validation: 'idle', validationMessage: '' });
+  };
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6">
-      <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-md w-full overflow-hidden flex flex-col max-h-[90vh]">
-        <div className="px-6 pt-6 pb-4">
-          <div className="text-base font-semibold text-zinc-100 mb-1">Configurações</div>
-          <div className="text-xs text-zinc-500">Suas chaves ficam salvas localmente — nunca saem do app.</div>
+      <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="px-6 pt-6 pb-4 flex items-start justify-between">
+          <div>
+            <div className="text-base font-semibold text-zinc-100 mb-1">Configurações</div>
+            <div className="text-xs text-zinc-500">Suas chaves ficam salvas localmente — nunca saem do app.</div>
+          </div>
+          <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
-        <div className="px-6 pb-2 flex-1 overflow-y-auto space-y-4">
-          {KEYS.map(k => (
-            <div key={k.storageKey}>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold flex items-center gap-1.5">
-                {k.label}
-                {k.required && <span className="text-red-400">*</span>}
-                {k.helpUrl && (
-                  <a
-                    href={k.helpUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="ml-auto text-[9px] text-violet-300 hover:text-violet-200"
-                  >
-                    pegar →
-                  </a>
+        <div className="px-6 pb-2 flex-1 overflow-y-auto space-y-5">
+          {KEYS.map(k => {
+            const f = fields[k.storageKey] ?? { value: '', editing: true, visible: false, validation: 'idle' as ValidationState, validationMessage: '' };
+            const hasStored = !!localStorage.getItem(k.storageKey);
+            const validationDot = f.validation === 'ok' ? 'bg-emerald-400' : f.validation === 'error' ? 'bg-red-400' : f.validation === 'validating' ? 'bg-amber-400 animate-pulse' : '';
+            const validationCls = f.validation === 'ok' ? 'text-emerald-300' : f.validation === 'error' ? 'text-red-300' : 'text-zinc-400';
+            return (
+              <div key={k.storageKey}>
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+                    {k.label}
+                    {k.required && <span className="text-red-400 ml-1">*</span>}
+                  </label>
+                  {validationDot && <span className={`w-1.5 h-1.5 rounded-full ${validationDot}`}></span>}
+                  <div className="ml-auto flex items-center gap-2">
+                    {k.helpUrl && (
+                      <a
+                        href={k.helpUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-[9px] text-violet-300 hover:text-violet-200"
+                      >
+                        pegar →
+                      </a>
+                    )}
+                  </div>
+                </div>
+
+                {f.editing ? (
+                  <input
+                    type={f.visible ? 'text' : 'password'}
+                    value={f.value}
+                    onChange={e => patchField(k.storageKey, { value: e.target.value, validation: 'idle', validationMessage: '' })}
+                    placeholder={k.placeholder}
+                    className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors font-mono"
+                  />
+                ) : (
+                  <div className="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/5 text-sm text-zinc-300 font-mono flex items-center justify-between">
+                    <span className="truncate">{f.visible ? f.value : maskKey(f.value)}</span>
+                    {!f.value && <span className="text-zinc-600 italic">não configurada</span>}
+                  </div>
                 )}
-              </label>
-              <input
-                type="password"
-                value={values[k.storageKey] ?? ''}
-                onChange={e => setValues(v => ({ ...v, [k.storageKey]: e.target.value }))}
-                placeholder={k.placeholder}
-                className="mt-1 w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors font-mono"
-              />
-              <div className="mt-1 text-[10px] text-zinc-600">{k.hint}</div>
-            </div>
-          ))}
+
+                <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                  <div className="text-[10px] text-zinc-600 flex-1 min-w-0">{k.hint}</div>
+
+                  {f.value && (
+                    <button
+                      onClick={() => patchField(k.storageKey, { visible: !f.visible })}
+                      className="text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
+                    >
+                      {f.visible ? 'esconder' : 'ver'}
+                    </button>
+                  )}
+
+                  {!f.editing && f.value && (
+                    <button
+                      onClick={() => patchField(k.storageKey, { editing: true })}
+                      className="text-[10px] text-violet-300 hover:text-violet-200 transition-colors"
+                    >
+                      editar
+                    </button>
+                  )}
+
+                  {f.editing && hasStored && f.value === (localStorage.getItem(k.storageKey) ?? '') && (
+                    <button
+                      onClick={() => patchField(k.storageKey, { editing: false, visible: false })}
+                      className="text-[10px] text-zinc-400 hover:text-zinc-200 transition-colors"
+                    >
+                      cancelar
+                    </button>
+                  )}
+
+                  {f.value && (
+                    <button
+                      onClick={() => handleValidate(k)}
+                      disabled={f.validation === 'validating'}
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/30 text-violet-200 transition-colors disabled:opacity-50"
+                    >
+                      {f.validation === 'validating' ? 'testando…' : 'testar'}
+                    </button>
+                  )}
+
+                  {f.value && (
+                    <button
+                      onClick={() => handleClear(k)}
+                      className="text-[10px] text-red-400/70 hover:text-red-300 transition-colors"
+                    >
+                      remover
+                    </button>
+                  )}
+                </div>
+
+                {f.validationMessage && (
+                  <div className={`mt-1.5 text-[10.5px] ${validationCls}`}>
+                    {f.validation === 'ok' && '✓ '}
+                    {f.validation === 'error' && '⚠ '}
+                    {f.validationMessage}
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div className="px-6 py-4 border-t border-white/5 bg-black/30 flex gap-2">
-          <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Cancelar</button>
+          <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Fechar</button>
           <button
             onClick={handleSave}
             disabled={!canSave}

@@ -31,6 +31,7 @@ import { AddBrollModal } from './reelsStudio/AddBrollModal';
 import { TakeReviewModal } from './reelsStudio/TakeReviewModal';
 import { TakeVideoPlayer } from './reelsStudio/TakeVideoPlayer';
 import { ExportRenderModal } from './reelsStudio/ExportRenderModal';
+import { SettingsModal } from './SettingsModal';
 import { buildCapcutPackage, downloadPackage } from './reelsStudio/packageBuilder';
 import { detectKeepSegments, PRESET_OPTIONS } from './reelsStudio/silenceDetector';
 import { SilenceCutControl } from './reelsStudio/SilenceCutControl';
@@ -91,6 +92,7 @@ export const ReelsStudio: React.FC = () => {
   const [reviewTakeId, setReviewTakeId] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [capcutExportStatus, setCapcutExportStatus] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Drag-to-reorder timeline blocks (by id). dragOverIndex = where to drop in
   // the avatar+broll combined sequence. Both null when not dragging.
@@ -1086,6 +1088,16 @@ export const ReelsStudio: React.FC = () => {
             )}
           </div>
 
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="p-2 rounded-lg bg-white/5 text-zinc-400 hover:text-zinc-200 transition-colors"
+            title="Configurações · chaves de API"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
           <button onClick={() => setScriptOpen(o => !o)} className={`p-2 rounded-lg transition-colors ${scriptOpen ? 'bg-violet-500/20 text-violet-300' : 'bg-white/5 text-zinc-400 hover:text-zinc-200'}`} title="Toggle Script Editor">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" /></svg>
           </button>
@@ -2351,6 +2363,12 @@ export const ReelsStudio: React.FC = () => {
         state={state}
         audioBlob={audioBlobRef.current}
         onClose={() => setExportOpen(false)}
+      />
+
+      <SettingsModal
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onSave={() => setSettingsOpen(false)}
       />
 
       {confirmClearOpen && (
