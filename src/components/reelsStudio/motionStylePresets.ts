@@ -39,11 +39,11 @@ export const STYLE_PRESETS: StylePreset[] = [
     emoji: '📰',
     bestFor: 'Conteúdo informativo, didático, profissional.',
     geminiBrief: `
-PALETTE:
-  bg: #0F0F11 (near-black)
-  text: #F8F8F8 (off-white)
-  accent: #A855F7 (purple)
-  muted: #6B7280
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: brandBackgroundColor
+  text: brandTextColor
+  accent: brandPrimaryColor (sparingly)
+  muted: brandSecondaryColor
 
 TYPOGRAPHY:
   primary: "Inter", system-ui, sans-serif
@@ -71,12 +71,12 @@ MOTION:
     emoji: '🔥',
     bestFor: 'Vídeos virais, hooks emocionais, conteúdo de venda.',
     geminiBrief: `
-PALETTE:
-  bg: linear-gradient(135deg, #1E1B4B 0%, #4C1D95 100%) (deep purple)
-  text: #FFFFFF
-  accent1: #FBBF24 (amber)
-  accent2: #EC4899 (pink)
-  accent3: #06B6D4 (cyan)
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: linear-gradient(135deg, brandBackgroundColor 0%, [a 15% lighter shade of brandBackgroundColor] 100%) — keep it dark, the gradient should be subtle, derived from the brand bg color
+  text: brandTextColor
+  accent1: brandPrimaryColor
+  accent2: brandAccentColor
+  accent3: brandSecondaryColor
 
 TYPOGRAPHY:
   primary: "Inter", system-ui, sans-serif
@@ -105,11 +105,11 @@ MOTION:
     emoji: '💎',
     bestFor: 'Conteúdo sobre tecnologia, IA, software, ferramentas.',
     geminiBrief: `
-PALETTE:
-  bg: radial-gradient(ellipse at top, #0C4A6E 0%, #020617 80%)
-  text: #F0F9FF
-  accent: #06B6D4 (cyan)
-  glow: rgba(6,182,212,0.6)
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: radial-gradient(ellipse at top, brandBackgroundColor 0%, #000 80%)
+  text: brandTextColor
+  accent: brandPrimaryColor
+  glow: brandPrimaryColor at 60% alpha (use rgba conversion)
   glass-bg: rgba(255,255,255,0.08)
   glass-border: rgba(255,255,255,0.18)
 
@@ -139,11 +139,11 @@ MOTION:
     emoji: '🎯',
     bestFor: 'Frases de impacto, manchetes, declarações.',
     geminiBrief: `
-PALETTE:
-  bg: #050505 (true black)
-  text: #FFFFFF
-  highlight-bg: #FBBF24 (amber block behind keyword)
-  alt-color: #EF4444 (for contrast accents)
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: brandBackgroundColor (or pure #000 if bg is dark)
+  text: brandTextColor
+  highlight-bg: brandPrimaryColor (block behind keyword)
+  alt-color: brandAccentColor
 
 TYPOGRAPHY:
   primary: "Inter", system-ui, sans-serif
@@ -173,12 +173,13 @@ MOTION:
     emoji: '🌸',
     bestFor: 'Conteúdo lifestyle, feminino, beleza, bem-estar.',
     geminiBrief: `
-PALETTE:
-  bg: linear-gradient(135deg, #FDF2F8 0%, #FCE7F3 50%, #FBCFE8 100%)
-  text: #831843 (deep rose)
-  accent1: #EC4899 (pink)
-  accent2: #C026D3 (fuchsia)
-  decoration: #F9A8D4
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE if they fit a soft/pastel mood.
+  Otherwise default to the soft-pastel palette below.
+  bg: linear-gradient(135deg, brandBackgroundColor or #FDF2F8 0%, lighter shade 50%, lighter shade 100%)
+  text: brandTextColor or #831843 (deep rose)
+  accent1: brandPrimaryColor or #EC4899 (pink)
+  accent2: brandAccentColor or #C026D3 (fuchsia)
+  decoration: brandSecondaryColor or #F9A8D4
 
 TYPOGRAPHY:
   primary: "Playfair Display", serif (for display)
@@ -207,10 +208,10 @@ MOTION:
     emoji: '🎬',
     bestFor: 'Storytelling, momentos emocionais, drama.',
     geminiBrief: `
-PALETTE:
-  bg: #0a0a0a → #1a1a1a (radial)
-  text: #E5E5E5
-  accent: #DC2626 (deep red) or #F59E0B (warm amber)
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: brandBackgroundColor → slightly lighter shade (radial)
+  text: brandTextColor
+  accent: brandPrimaryColor (or brandAccentColor for highlights)
   vignette: rgba(0,0,0,0.6)
 
 TYPOGRAPHY:

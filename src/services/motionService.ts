@@ -64,10 +64,12 @@ You will receive a BRAND IDENTITY section with researched colors. These are NOT 
 - Set ALL primary text to brandTextColor
 - Use brandPrimaryColor as the dominant accent (borders, highlights, glow, icons)
 - Use brandSecondaryColor for supporting elements
+- The STYLE PRESET below uses placeholder names like "brandPrimaryColor" or "brandBackgroundColor" — REPLACE every placeholder with the actual hex value from the BRAND IDENTITY section. The style preset never wins over brand colors.
 - NEVER default to blue (#0000ff, #3b82f6, #60a5fa, or any blue shade) unless the brand IS blue
-- NEVER use purple, violet, or any shade of #7c3aed, #8b5cf6, #a855f7, #9333ea, #6d28d9 unless the brand's PRIMARY color is demonstrably purple (e.g. Twitch, Figma, Discord)
-- NEVER use generic purple/violet unless the brand uses it
-- If no brand colors are provided, use high-contrast dark background (#0a0a0a) with white text and a warm amber (#f59e0b) accent — NOT blue
+- NEVER use purple, violet, indigo, or any shade in the range #4c1d95, #5b21b6, #6d28d9, #7c3aed, #8b5cf6, #a855f7, #9333ea, #c084fc, #1e1b4b unless the brand's PRIMARY color is demonstrably purple (e.g. Twitch, Figma, Discord, Yahoo)
+- NEVER use a deep-purple gradient background (e.g. #1E1B4B → #4C1D95) — that is a forbidden default
+- NEVER use generic purple/violet/indigo unless the brand uses it
+- If no brand colors are provided, use high-contrast dark background (#0a0a0a) with white text and a warm amber (#f59e0b) accent — NOT blue, NOT purple
 
 ════════════════════════════════════════
  RULE #2 — CONTRAST IS NON-NEGOTIABLE
