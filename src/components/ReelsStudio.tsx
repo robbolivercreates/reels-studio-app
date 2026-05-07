@@ -1243,11 +1243,29 @@ export const ReelsStudio: React.FC = () => {
               {formatTime(cutOn ? sourceToEffective(playhead) : playhead)} / {formatTime(viewDuration)}
             </div>
             <div className="absolute top-3 left-3 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur text-[10px] font-medium text-zinc-400">{aspect}</div>
-            {currentBlock?.motion && (
-              <div className="absolute bottom-3 left-3 px-2 py-0.5 rounded-md bg-fuchsia-500/30 backdrop-blur text-[10px] font-medium text-fuchsia-100 border border-fuchsia-400/40">
-                🎨 Motion ativo
-              </div>
-            )}
+            {currentBlock?.motion && (() => {
+              const m = currentBlock.motion;
+              const busy = motionBusyByBlock[currentBlock.id];
+              const isReady = m.status === 'ready' && !!m.videoPath;
+              const isError = m.status === 'error';
+              const isGenerating = m.status === 'generating' || (busy && !m.html);
+              const isRendering = m.status === 'rendering' || (busy && !!m.html && !isReady);
+              const tone = isError ? 'bg-red-500/30 border-red-400/40 text-red-100'
+                : isReady ? 'bg-emerald-500/30 border-emerald-400/40 text-emerald-100'
+                : isGenerating ? 'bg-amber-500/30 border-amber-400/40 text-amber-100'
+                : isRendering ? 'bg-cyan-500/30 border-cyan-400/40 text-cyan-100'
+                : 'bg-fuchsia-500/30 border-fuchsia-400/40 text-fuchsia-100';
+              const label = isError ? '🎨 Motion · erro'
+                : isReady ? '🎨 Motion · pronto'
+                : isGenerating ? '🎨 Motion · gerando IA…'
+                : isRendering ? `🎨 Motion · ${busy ?? 'renderizando…'}`
+                : '🎨 Motion ativo';
+              return (
+                <div className={`absolute bottom-3 left-3 px-2 py-0.5 rounded-md backdrop-blur text-[10px] font-medium border ${tone} ${(isGenerating || isRendering) ? 'animate-pulse' : ''}`}>
+                  {label}
+                </div>
+              );
+            })()}
           </div>
 
           <div className="flex items-center gap-3 mt-4">
@@ -2051,8 +2069,8 @@ export const ReelsStudio: React.FC = () => {
           </div>
 
           {/* Motion track */}
-          <div className="relative h-10 mb-1.5 rounded-md bg-fuchsia-500/[0.04] border border-fuchsia-500/20 overflow-hidden">
-            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-fuchsia-300/70 font-semibold pointer-events-none z-10">🎨 Motion</div>
+          <div className="relative h-10 mb-1.5 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
+            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-zinc-400/70 font-semibold pointer-events-none z-10">🎨 Motion</div>
             {blocks.filter(b => !!b.motion).map(b => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
@@ -2063,20 +2081,55 @@ export const ReelsStudio: React.FC = () => {
               const left = viewPct(slot.projectStart);
               const width = Math.max(0, viewPct(slot.projectStart + useDur) - left);
               const layerLabel = motion.layer === 'overlay' ? 'over' : motion.layer === 'replace' ? 'full' : motion.layer === 'split-bottom' ? 'split↑' : motion.layer === 'split-top' ? 'split↓' : 'over';
+              const busyMessage = motionBusyByBlock[b.id];
+              const isBusy = !!busyMessage;
+              const isReady = motion.status === 'ready' && !!motion.videoPath;
+              const isError = motion.status === 'error';
+              const isGenerating = motion.status === 'generating' || (isBusy && !motion.html);
+              const isRendering = motion.status === 'rendering' || (isBusy && !!motion.html && !isReady);
+              const isDraft = motion.status === 'draft' && !isBusy;
+              const hasHtmlNeedsRender = !!motion.html && !motion.videoPath && !isBusy && !isError;
+
+              // Color tone by status
+              const tone = isError
+                ? 'from-red-500/70 to-red-600/80 border-red-400/50'
+                : isReady
+                ? 'from-emerald-500/70 to-emerald-600/80 border-emerald-400/50 shadow-[0_2px_8px_rgba(16,185,129,0.3)]'
+                : isGenerating
+                ? 'from-amber-500/70 to-amber-600/80 border-amber-400/50 shadow-[0_2px_8px_rgba(245,158,11,0.3)]'
+                : isRendering
+                ? 'from-cyan-500/70 to-cyan-600/80 border-cyan-400/50 shadow-[0_2px_8px_rgba(6,182,212,0.3)]'
+                : hasHtmlNeedsRender
+                ? 'from-cyan-500/40 to-cyan-600/50 border-cyan-400/40'
+                : isDraft
+                ? 'from-zinc-600/40 to-zinc-700/50 border-zinc-500/40'
+                : 'from-fuchsia-500/60 to-fuchsia-600/70 border-fuchsia-400/50';
+
+              const statusLabel = isError       ? 'erro'
+                                : isReady       ? '✓'
+                                : isGenerating  ? 'IA…'
+                                : isRendering   ? (busyMessage?.toLowerCase().includes('rend') ? 'render…' : busyMessage?.slice(0, 10) ?? 'render…')
+                                : hasHtmlNeedsRender ? 'render →'
+                                : isDraft       ? 'rascunho'
+                                : layerLabel;
+
+              const titleText = `${motion.presetId} · ${motion.layer} · ${useDur.toFixed(1)}s · ${motion.status}${motion.errorMessage ? ' · ' + motion.errorMessage.slice(0, 60) : ''}`;
+              const showShimmer = isGenerating || isRendering;
+
               return (
                 <div
                   key={`mot-${b.id}`}
                   data-no-scrub="true"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => { e.stopPropagation(); setMotionPickerBlockId(b.id); }}
-                  className={`absolute top-1 bottom-1 rounded bg-gradient-to-r from-fuchsia-500/60 to-fuchsia-600/70 border border-fuchsia-400/50 shadow-[0_2px_8px_rgba(217,70,239,0.3)] cursor-pointer hover:from-fuchsia-500/80 hover:to-fuchsia-600/90 transition-colors overflow-hidden ${selectedBlockId === b.id ? 'ring-2 ring-violet-400' : ''}`}
+                  className={`absolute top-1 bottom-1 rounded bg-gradient-to-r ${tone} border cursor-pointer hover:brightness-110 transition-all overflow-hidden ${selectedBlockId === b.id ? 'ring-2 ring-violet-400' : ''}`}
                   style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
-                  title={`${motion.presetId} · ${motion.layer} · ${useDur.toFixed(1)}s · ${motion.status}`}
+                  title={titleText}
                 >
-                  <div className="px-1.5 py-1 flex items-center gap-1 text-fuchsia-50">
+                  <div className="px-1.5 py-1 flex items-center gap-1 text-white relative z-10">
                     <span className="text-[10px] truncate font-medium">{motion.text || motion.intent || 'motion'}</span>
-                    <span className="text-[8px] uppercase tracking-wider opacity-70 shrink-0">
-                      {motion.status === 'ready' && motion.videoPath ? '✓ ' + layerLabel : layerLabel}
+                    <span className="text-[8px] uppercase tracking-wider opacity-90 shrink-0 font-semibold">
+                      {statusLabel}
                     </span>
                     <button
                       onClick={(e) => { e.stopPropagation(); dispatch({ type: 'set-block-motion', id: b.id, motion: undefined }); }}
@@ -2084,6 +2137,17 @@ export const ReelsStudio: React.FC = () => {
                       title="Remover motion desse bloco"
                     >×</button>
                   </div>
+                  {showShimmer && (
+                    <div
+                      className="absolute inset-0 bg-gradient-to-r from-transparent via-white/25 to-transparent pointer-events-none"
+                      style={{ animation: 'shimmer 1.6s linear infinite' }}
+                    ></div>
+                  )}
+                  {isReady && (
+                    <div className="absolute right-1 top-1 bottom-1 flex items-center pointer-events-none">
+                      <span className="text-[9px] text-emerald-100">●</span>
+                    </div>
+                  )}
                 </div>
               );
             })}
