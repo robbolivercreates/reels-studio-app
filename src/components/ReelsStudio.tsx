@@ -1246,15 +1246,12 @@ export const ReelsStudio: React.FC = () => {
 
             {/* Motion overlay — split-bottom/split-top show in their half; replace
                 fills the whole frame. Overlay (screen blend over avatar) is excluded
-                here to keep the avatar preview clean. */}
+                here to keep the avatar preview clean.
+                Motion plays once and freezes on its last frame for the rest of the
+                block (no looping — that looks amateurish). */}
             {currentBlock?.motion && (() => {
               const motion = currentBlock.motion;
               if (motion.layer === 'overlay') return null;
-              const blockSlot = slotById.get(currentBlock.id);
-              const blockStart = blockSlot?.projectStart ?? currentBlock.start;
-              const elapsedInBlock = Math.max(0, playhead - blockStart);
-              const motionDur = motion.durationSec ?? 3;
-              if (elapsedInBlock > motionDur) return null;
               return (
                 <MotionLayerOverlay
                   key={`motion-${motion.id}-${motion.renderedAt ?? 0}`}
@@ -1924,11 +1921,15 @@ export const ReelsStudio: React.FC = () => {
                 </>
               )}
             </div>
-            {blocks.map(b => {
+            {blocks.map((b, idx) => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
+              // Make blocks magnetic: each block occupies up to the next block's start,
+              // not its own end (closes any sub-pixel/timestamp gap between consecutive blocks).
+              const nextSlot = idx < blocks.length - 1 ? slotById.get(blocks[idx + 1].id) : null;
+              const rightAt = nextSlot ? nextSlot.projectStart : slot.projectEnd;
               const left = viewPct(slot.projectStart);
-              const width = Math.max(0, viewPct(slot.projectEnd) - left);
+              const width = Math.max(0, viewPct(rightAt) - left);
               const isDraggingThis = draggingBlockId === b.id;
               const isHovered = hoveredId === b.id;
               const blockLen = b.end - b.start;

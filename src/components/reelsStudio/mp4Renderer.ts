@@ -101,7 +101,9 @@ const composeForBlock = (
   const motionLayer = block.motion?.layer;
   const motionUrl = motionUrls.get(block.id);
   const motionDur = block.motion?.durationSec || 4;
-  const motionSeek = localT % motionDur;
+  // Motion plays ONCE and freezes on its last frame for the rest of the block.
+  // No looping — looping motion graphics looks amateurish.
+  const motionSeek = Math.min(localT, motionDur - 0.05);
 
   // Motion-replace: full frame.
   if (motionLayer === 'replace' && motionUrl) {

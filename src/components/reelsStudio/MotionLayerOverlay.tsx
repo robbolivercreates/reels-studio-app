@@ -77,7 +77,7 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) 
     try {
       var tl = window.__timelines && window.__timelines["${motion.id}"];
       if (!tl) return;
-      if (e.data === 'play') { tl.repeat(-1); tl.play(); }
+      if (e.data === 'play') { tl.repeat(0); tl.play(); }
       else if (e.data === 'pause') { tl.pause(); }
     } catch(err) {}
   });
@@ -128,7 +128,6 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) 
     <video
       ref={videoRef}
       src={mp4Url}
-      loop
       muted
       playsInline
       style={videoStyle}
