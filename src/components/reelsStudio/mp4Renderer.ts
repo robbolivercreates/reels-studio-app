@@ -17,7 +17,7 @@
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import type { ScriptBlock, AvatarClipState, ScreenTake, BlockLayout } from './types';
+import type { ScriptBlock, AvatarClipState, ScreenTake, BlockLayout, BlockTransition } from './types';
 import { computeLayout, hitTest } from './timeline';
 import { getLayoutSlots, defaultAvatarZoom, type LayoutBox } from './layouts';
 
@@ -91,33 +91,13 @@ const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
 
 const FADE_FRAMES = 10; // ~333ms at 30fps
 
-/** For a given project-time t, return all layers + decorations + fade alpha. */
-const frameAtProjectTime = (
-  t: number,
+/** Render layers + decorations for a single block at a given local time (no fade logic). */
+const composeForBlock = (
+  block: ScriptBlock,
+  localT: number,
   inputs: RenderInputs,
-  layout: ReturnType<typeof computeLayout>,
   motionUrls: Map<string, string>,
-): FrameComposition => {
-  const empty: FrameComposition = { layers: [], decorations: [], fadeAlpha: 1 };
-  const hit = hitTest(layout, t);
-  if (hit.kind !== 'block') return empty;
-  const block = inputs.blocks.find(b => b.id === hit.slot.blockId);
-  if (!block) return empty;
-
-  const localT = t - hit.slot.projectStart;
-  const blockDurSec = hit.slot.sourceEnd - hit.slot.sourceStart;
-  const totalBlockFrames = Math.max(1, Math.floor(blockDurSec * FRAMERATE));
-  const localFrame = Math.floor(localT * FRAMERATE);
-
-  // Cross-fade: ease in first 10 frames, ease out last 10 frames.
-  let fadeAlpha = 1;
-  if (localFrame < FADE_FRAMES) {
-    fadeAlpha = localFrame / FADE_FRAMES;
-  } else if (localFrame > totalBlockFrames - FADE_FRAMES) {
-    fadeAlpha = (totalBlockFrames - localFrame) / FADE_FRAMES;
-  }
-  fadeAlpha = Math.max(0, Math.min(1, fadeAlpha));
-
+): { layers: FrameLayer[]; decorations: FrameDecoration[] } => {
   const motionLayer = block.motion?.layer;
   const motionUrl = motionUrls.get(block.id);
   const motionDur = block.motion?.durationSec || 4;
@@ -125,7 +105,7 @@ const frameAtProjectTime = (
 
   // Motion-replace: full frame.
   if (motionLayer === 'replace' && motionUrl) {
-    return { layers: [{ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME }], decorations: [], fadeAlpha };
+    return { layers: [{ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME }], decorations: [] };
   }
 
   // Motion split: avatar occupies one half, motion the other.
@@ -143,7 +123,7 @@ const frameAtProjectTime = (
       layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: avatarBox, zoom, offsetY: block.avatarOffsetY });
     }
     layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: motionBox });
-    return { layers, decorations: [{ kind: 'split-seam', splitY: 0.5 }], fadeAlpha };
+    return { layers, decorations: [{ kind: 'split-seam', splitY: 0.5 }] };
   }
 
   const blockLayout: BlockLayout = block.kind === 'avatar' ? (block.layout ?? 'avatar-only') : 'media-only';
@@ -179,6 +159,84 @@ const frameAtProjectTime = (
   // Decorations.
   if (blockLayout === 'avatar-top') decorations.push({ kind: 'split-seam', splitY: 0.5 });
   if (blockLayout === 'media-top') decorations.push({ kind: 'split-seam', splitY: 0.5 });
+
+  return { layers, decorations };
+};
+
+/** For a given project-time t, return all layers + decorations + fade alpha. */
+const frameAtProjectTime = (
+  t: number,
+  inputs: RenderInputs,
+  layout: ReturnType<typeof computeLayout>,
+  motionUrls: Map<string, string>,
+): FrameComposition => {
+  const empty: FrameComposition = { layers: [], decorations: [], fadeAlpha: 1 };
+  const hit = hitTest(layout, t);
+  if (hit.kind !== 'block') return empty;
+  const block = inputs.blocks.find(b => b.id === hit.slot.blockId);
+  if (!block) return empty;
+
+  const localT = t - hit.slot.projectStart;
+  const blockDurSec = hit.slot.sourceEnd - hit.slot.sourceStart;
+  const totalBlockFrames = Math.max(1, Math.floor(blockDurSec * FRAMERATE));
+  const localFrame = Math.floor(localT * FRAMERATE);
+
+  const slotIdx = layout.slots.findIndex(s => s.blockId === block.id);
+  const prevSlot = slotIdx > 0 ? layout.slots[slotIdx - 1] : null;
+  const prevBlock = prevSlot ? inputs.blocks.find(b => b.id === prevSlot.blockId) ?? null : null;
+  const nextSlot = slotIdx >= 0 && slotIdx < layout.slots.length - 1 ? layout.slots[slotIdx + 1] : null;
+  const nextBlock = nextSlot ? inputs.blocks.find(b => b.id === nextSlot.blockId) ?? null : null;
+
+  const incomingTransition: BlockTransition = prevBlock ? (prevBlock.transition ?? 'fade') : 'fade';
+  const outgoingTransition: BlockTransition = block.transition ?? 'fade';
+
+  const inFadeRegion = localFrame < FADE_FRAMES;
+  const outFadeRegion = localFrame > totalBlockFrames - FADE_FRAMES;
+
+  const own = composeForBlock(block, localT, inputs, motionUrls);
+  const layers: FrameLayer[] = [...own.layers];
+  const decorations: FrameDecoration[] = [...own.decorations];
+
+  // Black fade-to/fade-from logic. 'cut' skips it. 'dissolve' replaces it with cross-blend.
+  let fadeAlpha = 1;
+  if (inFadeRegion) {
+    if (incomingTransition === 'fade' || (!prevBlock && true)) {
+      fadeAlpha = Math.min(fadeAlpha, localFrame / FADE_FRAMES);
+    } else if (incomingTransition === 'dissolve' && prevBlock && prevSlot) {
+      // Cross-dissolve: previous block layers underneath at decreasing alpha.
+      const prevLocalT = (prevSlot.sourceEnd - prevSlot.sourceStart) - ((FADE_FRAMES - localFrame) / FRAMERATE);
+      const prev = composeForBlock(prevBlock, Math.max(0, prevLocalT), inputs, motionUrls);
+      // Prev fades OUT (alpha 1 → 0); current fades IN (we draw full opacity, but composite by drawing prev FIRST).
+      const t = localFrame / FADE_FRAMES; // 0..1
+      const prevAlpha = 1 - t;
+      for (const lyr of prev.layers) {
+        layers.unshift({ ...lyr, alpha: (lyr.alpha ?? 1) * prevAlpha });
+      }
+      // Current layers drawn at increasing alpha so the cross-blend looks right.
+      for (let i = prev.layers.length; i < layers.length; i++) {
+        layers[i] = { ...layers[i], alpha: (layers[i].alpha ?? 1) * t };
+      }
+    }
+    // 'cut': nothing extra — just show this frame at full alpha.
+  }
+  if (outFadeRegion) {
+    if (outgoingTransition === 'fade' || !nextBlock) {
+      fadeAlpha = Math.min(fadeAlpha, (totalBlockFrames - localFrame) / FADE_FRAMES);
+    } else if (outgoingTransition === 'dissolve' && nextBlock && nextSlot) {
+      // Cross-dissolve: next block layers on top at increasing alpha.
+      const nextLocalT = ((localFrame - (totalBlockFrames - FADE_FRAMES)) / FRAMERATE);
+      const next = composeForBlock(nextBlock, Math.max(0, nextLocalT), inputs, motionUrls);
+      const t = (localFrame - (totalBlockFrames - FADE_FRAMES)) / FADE_FRAMES; // 0..1
+      const ownAlpha = 1 - t;
+      for (let i = 0; i < layers.length; i++) {
+        layers[i] = { ...layers[i], alpha: (layers[i].alpha ?? 1) * ownAlpha };
+      }
+      for (const lyr of next.layers) {
+        layers.push({ ...lyr, alpha: (lyr.alpha ?? 1) * t });
+      }
+    }
+  }
+  fadeAlpha = Math.max(0, Math.min(1, fadeAlpha));
 
   return { layers, decorations, fadeAlpha };
 };
@@ -508,8 +566,8 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     // Build the output PCM by walking each slot, inserting silence for offsets, and
     // applying silence cuts within source ranges. Block silence-cut also clips the
     // intersected ranges per slot.
-    const fadeMs = 5;
-    const fadeSamples = Math.floor((fadeMs / 1000) * targetRate);
+    const FADE_MS_DEFAULT = 5;
+    const FADE_MS_DISSOLVE = 150;
     const pieces: Float32Array[] = [];
 
     const intersect = (a: { start: number; end: number }, b: { start: number; end: number }) => ({
@@ -517,29 +575,41 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       end: Math.min(a.end, b.end),
     });
 
-    const pushPcmRange = (startSec: number, endSec: number) => {
+    const pushPcmRange = (startSec: number, endSec: number, fadeInMs: number, fadeOutMs: number) => {
       const startIdx = Math.max(0, Math.floor(startSec * targetRate));
       const endIdx = Math.min(pcmFull.length, Math.floor(endSec * targetRate));
       if (endIdx <= startIdx) return;
       const seg = new Float32Array(endIdx - startIdx);
       seg.set(pcmFull.subarray(startIdx, endIdx));
-      for (let i = 0; i < Math.min(fadeSamples, seg.length); i++) {
-        seg[i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeSamples));
-        seg[seg.length - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeSamples));
+      const fadeInSamples = Math.floor((fadeInMs / 1000) * targetRate);
+      const fadeOutSamples = Math.floor((fadeOutMs / 1000) * targetRate);
+      for (let i = 0; i < Math.min(fadeInSamples, seg.length); i++) {
+        seg[i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeInSamples));
+      }
+      for (let i = 0; i < Math.min(fadeOutSamples, seg.length); i++) {
+        seg[seg.length - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeOutSamples));
       }
       pieces.push(seg);
     };
 
-    for (const slot of layout.slots) {
+    for (let s = 0; s < layout.slots.length; s++) {
+      const slot = layout.slots[s];
+      const block = inputs.blocks.find(b => b.id === slot.blockId);
+      const prevBlock = s > 0 ? inputs.blocks.find(b => b.id === layout.slots[s - 1].blockId) : null;
+      const incomingDissolve = prevBlock?.transition === 'dissolve';
+      const outgoingDissolve = block?.transition === 'dissolve';
+      const fadeIn = incomingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
+      const fadeOut = outgoingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
+
       // Push audio from sourceStart..sourceEnd, intersected with keepSegs if cut is on.
       const blockRange = { start: slot.sourceStart, end: slot.sourceEnd };
       if (cutOn) {
         for (const k of keepSegs) {
           const inter = intersect(blockRange, k);
-          if (inter.end > inter.start) pushPcmRange(inter.start, inter.end);
+          if (inter.end > inter.start) pushPcmRange(inter.start, inter.end, fadeIn, fadeOut);
         }
       } else {
-        pushPcmRange(blockRange.start, blockRange.end);
+        pushPcmRange(blockRange.start, blockRange.end, fadeIn, fadeOut);
       }
     }
 

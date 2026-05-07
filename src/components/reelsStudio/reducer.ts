@@ -282,6 +282,51 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       return { ...state, blocks: next };
     }
 
+    case 'reorder-blocks': {
+      // Apply new order while keeping each block's duration intact. Sequential
+      // start/end timestamps are rewritten so they stay contiguous in source-time.
+      // If audio is already generated, blocks become dirty (audio order no longer
+      // matches the script — user must regenerate audio).
+      const byId = new Map(state.blocks.map(b => [b.id, b]));
+      const reordered: ScriptBlock[] = [];
+      let cursor = 0;
+      for (const id of action.orderedIds) {
+        const b = byId.get(id);
+        if (!b) continue;
+        const dur = Math.max(0, b.end - b.start);
+        reordered.push({ ...b, start: cursor, end: cursor + dur });
+        cursor += dur;
+      }
+      // If list of ids didn't include every block (defensive), keep the rest at the end.
+      for (const b of state.blocks) {
+        if (!action.orderedIds.includes(b.id)) {
+          const dur = Math.max(0, b.end - b.start);
+          reordered.push({ ...b, start: cursor, end: cursor + dur });
+          cursor += dur;
+        }
+      }
+      const audioReady = state.audio.status === 'ready';
+      const blocks = audioReady
+        ? reordered.map(b => ({ ...b, dirty: true }))
+        : reordered;
+      return { ...state, blocks };
+    }
+
+    case 'set-block-transition': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          if (action.transition === 'fade') {
+            // 'fade' is the default — strip the field for clean round-trips.
+            const { transition: _, ...rest } = b;
+            return rest;
+          }
+          return { ...b, transition: action.transition };
+        }),
+      };
+    }
+
     case 'set-voice':
       return { ...state, selectedVoiceId: action.voiceId };
 

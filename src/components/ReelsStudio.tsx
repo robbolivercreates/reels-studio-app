@@ -36,7 +36,7 @@ import { detectKeepSegments, PRESET_OPTIONS } from './reelsStudio/silenceDetecto
 import { SilenceCutControl } from './reelsStudio/SilenceCutControl';
 import { computeLayout, hitTest, projectToSourceTime } from './reelsStudio/timeline';
 import { getLayoutSlots, LAYOUT_OPTIONS, defaultAvatarZoom } from './reelsStudio/layouts';
-import type { SilencePreset, BlockLayout } from './reelsStudio/types';
+import type { SilencePreset, BlockLayout, BlockTransition } from './reelsStudio/types';
 import { sliceAudioByBlocks } from './reelsStudio/audioSlicer';
 import { generateAvatarClips } from './reelsStudio/avatarGenerator';
 import { loadAvatarPhotos } from './reelsStudio/avatarPhotosStore';
@@ -91,6 +91,14 @@ export const ReelsStudio: React.FC = () => {
   const [reviewTakeId, setReviewTakeId] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [capcutExportStatus, setCapcutExportStatus] = useState<string | null>(null);
+
+  // Drag-to-reorder timeline blocks (by id). dragOverIndex = where to drop in
+  // the avatar+broll combined sequence. Both null when not dragging.
+  const [draggingBlockId, setDraggingBlockId] = useState<string | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [dragGhostX, setDragGhostX] = useState<number | null>(null);
+  // Open a transition popover for the gap between block index N and N+1.
+  const [transitionPopoverIdx, setTransitionPopoverIdx] = useState<number | null>(null);
 
   const handleCapcutExport = async () => {
     if (audio.status !== 'ready') {
@@ -619,14 +627,101 @@ export const ReelsStudio: React.FC = () => {
     if (slot) seekTo(slot.projectStart);
   };
 
-  const handleTimelineClick = (e: React.MouseEvent) => {
+  // Scrub by dragging on empty timeline space. Elements that should not trigger
+  // scrub (blocks, chips, motion overlays) tag themselves with data-no-scrub.
+  const handleTimelinePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (!timelineRef.current) return;
+    if (e.button !== 0) return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest('[data-no-scrub="true"]')) return;
     const rect = timelineRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const ratio = Math.max(0, Math.min(1, x / rect.width));
-    seekTo(ratio * totalDuration);
-    // Clicking empty timeline space clears block selection.
+    const seekToClientX = (clientX: number) => {
+      const x = clientX - rect.left;
+      const ratio = Math.max(0, Math.min(1, x / rect.width));
+      seekTo(ratio * totalDuration);
+    };
+    seekToClientX(e.clientX);
     setSelectedBlockId(null);
+    const onMove = (ev: PointerEvent) => seekToClientX(ev.clientX);
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  };
+
+  // Drag-to-reorder: pointerdown on a block starts a potential drag. If the
+  // pointer moves > 5px while held, we enter drag mode and follow the cursor.
+  // On release, compute drop index and dispatch reorder-blocks.
+  const handleBlockPointerDown = (blockId: string) => (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    if (!timelineRef.current) {
+      // Fallback: still select on click
+      selectAndSeekBlock(blockId);
+      return;
+    }
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const rect = timelineRef.current.getBoundingClientRect();
+    let dragging = false;
+
+    const computeDropIndex = (clientX: number): number => {
+      const x = clientX - rect.left;
+      const ratio = Math.max(0, Math.min(1, x / rect.width));
+      const t = ratio * Math.max(totalDuration, 0.0001);
+      // Find the nearest block boundary (between blocks N and N+1) by accumulating durations
+      // across all blocks (avatar + broll, in current order, excluding the dragged one).
+      const others = blocks.filter(b => b.id !== blockId);
+      let acc = 0;
+      for (let i = 0; i < others.length; i++) {
+        const dur = Math.max(0, others[i].end - others[i].start);
+        const mid = acc + dur / 2;
+        if (t < mid) return i;
+        acc += dur;
+      }
+      return others.length;
+    };
+
+    const onMove = (ev: PointerEvent) => {
+      const dx = ev.clientX - startX;
+      const dy = ev.clientY - startY;
+      if (!dragging && Math.hypot(dx, dy) > 5) {
+        dragging = true;
+        setDraggingBlockId(blockId);
+      }
+      if (dragging) {
+        setDragGhostX(ev.clientX - rect.left);
+        setDragOverIndex(computeDropIndex(ev.clientX));
+      }
+    };
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (!dragging) {
+        // Treat as a click — select and seek.
+        selectAndSeekBlock(blockId);
+      } else {
+        const dropIdx = computeDropIndex(ev.clientX);
+        const others = blocks.filter(b => b.id !== blockId).map(b => b.id);
+        const orderedIds = [...others.slice(0, dropIdx), blockId, ...others.slice(dropIdx)];
+        // Only dispatch if order actually changed.
+        const currentIds = blocks.map(b => b.id).join(',');
+        if (orderedIds.join(',') !== currentIds) {
+          dispatch({ type: 'reorder-blocks', orderedIds });
+        }
+      }
+      setDraggingBlockId(null);
+      setDragOverIndex(null);
+      setDragGhostX(null);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   };
 
   const playheadPct = (playhead / totalDuration) * 100;
@@ -1640,7 +1735,7 @@ export const ReelsStudio: React.FC = () => {
         </div>
 
         {/* Tracks */}
-        <div ref={timelineRef} className="relative flex-1 px-2 py-2 cursor-pointer overflow-hidden" onClick={handleTimelineClick}>
+        <div ref={timelineRef} className="relative flex-1 px-2 py-2 cursor-pointer overflow-hidden" onPointerDown={handleTimelinePointerDown}>
           {/* Audio waveform */}
           <div className={`relative h-12 mb-1.5 rounded-md bg-cyan-500/[0.04] border border-cyan-500/20 overflow-hidden ${audio.status === 'generating' ? 'animate-pulse' : ''}`}>
             <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-cyan-300/60 font-semibold pointer-events-none z-10">Audio</div>
@@ -1726,16 +1821,15 @@ export const ReelsStudio: React.FC = () => {
               const visibleSec = b.avatarVisibleSec ?? blockLen;
               const isPartial = visibleSec < blockLen - 0.05;
 
+              const isDraggingThis = draggingBlockId === b.id;
               return (
                 <div
                   key={b.id}
+                  data-no-scrub="true"
                   onMouseEnter={() => setHoveredId(b.id)}
                   onMouseLeave={() => setHoveredId(null)}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    selectAndSeekBlock(b.id);
-                  }}
-                  className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b ${tone} border cursor-pointer transition-all overflow-hidden ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : isHovered ? '-translate-y-0.5 shadow-[0_8px_24px_rgba(245,158,11,0.4)] z-10' : 'shadow-[0_2px_8px_rgba(245,158,11,0.2)]'}`}
+                  onPointerDown={handleBlockPointerDown(b.id)}
+                  className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b ${tone} border cursor-grab active:cursor-grabbing transition-all overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : isHovered ? '-translate-y-0.5 shadow-[0_8px_24px_rgba(245,158,11,0.4)] z-10' : 'shadow-[0_2px_8px_rgba(245,158,11,0.2)]'}`}
                   style={{
                     left: `${left}%`,
                     width: `${Math.max(width, 0.5)}%`,
@@ -1764,7 +1858,7 @@ export const ReelsStudio: React.FC = () => {
                     <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent" style={{ animation: 'shimmer 1.6s linear infinite' }}></div>
                   )}
                   {isReady && clip?.videoUrl && (
-                    <div className="absolute top-1 right-1 flex items-center gap-1 z-20">
+                    <div className="absolute top-1 right-1 flex items-center gap-1 z-20" onPointerDown={(e) => e.stopPropagation()}>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -1814,6 +1908,29 @@ export const ReelsStudio: React.FC = () => {
                 </div>
               );
             })}
+
+            {/* Transition junction markers — one between each pair of consecutive blocks */}
+            {!draggingBlockId && blocks.slice(0, -1).map((b, i) => {
+              const slot = slotById.get(b.id);
+              if (!slot) return null;
+              const leftPct = (slot.projectEnd / totalDuration) * 100;
+              const trans: BlockTransition = b.transition ?? 'fade';
+              const icon = trans === 'cut' ? '╳' : trans === 'dissolve' ? '◐' : '▾';
+              const tone = trans === 'cut' ? 'bg-red-500/70 hover:bg-red-500 border-red-300/60' : trans === 'dissolve' ? 'bg-cyan-500/70 hover:bg-cyan-500 border-cyan-300/60' : 'bg-zinc-700 hover:bg-zinc-600 border-white/30';
+              return (
+                <button
+                  key={`tr-${b.id}`}
+                  data-no-scrub="true"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => { e.stopPropagation(); setTransitionPopoverIdx(transitionPopoverIdx === i ? null : i); }}
+                  className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 w-4 h-4 rounded-full ${tone} border text-[8px] text-white font-bold flex items-center justify-center shadow-[0_2px_8px_rgba(0,0,0,0.6)] z-20 transition-colors`}
+                  style={{ left: `${leftPct}%` }}
+                  title={`Transição: ${trans} · clique pra mudar`}
+                >
+                  {icon}
+                </button>
+              );
+            })}
           </div>
 
           {/* Screen track */}
@@ -1843,11 +1960,13 @@ export const ReelsStudio: React.FC = () => {
               if (!slot) return null;
               const left = (slot.projectStart / totalDuration) * 100;
               const width = ((slot.projectEnd - slot.projectStart) / totalDuration) * 100;
+              const isDraggingThis = draggingBlockId === b.id;
               return (
                 <div
                   key={b.id}
-                  onClick={(e) => { e.stopPropagation(); selectAndSeekBlock(b.id); }}
-                  className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b from-emerald-400/70 to-emerald-600/80 border border-emerald-300/40 shadow-[0_2px_8px_rgba(16,185,129,0.2)] cursor-pointer hover:-translate-y-0.5 transition-transform overflow-hidden ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E]' : ''}`}
+                  data-no-scrub="true"
+                  onPointerDown={handleBlockPointerDown(b.id)}
+                  className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b from-emerald-400/70 to-emerald-600/80 border border-emerald-300/40 shadow-[0_2px_8px_rgba(16,185,129,0.2)] cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-transform overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E]' : ''}`}
                   style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}
                 >
                   <div className="px-2 py-1.5">
@@ -1875,6 +1994,8 @@ export const ReelsStudio: React.FC = () => {
               return (
                 <div
                   key={`mot-${b.id}`}
+                  data-no-scrub="true"
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => { e.stopPropagation(); setMotionPickerBlockId(b.id); }}
                   className={`absolute top-1 bottom-1 rounded bg-gradient-to-r from-fuchsia-500/60 to-fuchsia-600/70 border border-fuchsia-400/50 shadow-[0_2px_8px_rgba(217,70,239,0.3)] cursor-pointer hover:from-fuchsia-500/80 hover:to-fuchsia-600/90 transition-colors overflow-hidden ${selectedBlockId === b.id ? 'ring-2 ring-violet-400' : ''}`}
                   style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
@@ -1917,6 +2038,76 @@ export const ReelsStudio: React.FC = () => {
             <div className="absolute top-0 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-violet-400 drop-shadow-[0_0_6px_rgba(167,139,250,0.8)]"></div>
             <div className="absolute top-0 bottom-0 w-0.5 bg-violet-400 -translate-x-1/2 shadow-[0_0_8px_rgba(167,139,250,0.6)]"></div>
           </div>
+
+          {/* Drop indicator while dragging a block to reorder */}
+          {draggingBlockId && dragOverIndex !== null && (() => {
+            const others = blocks.filter(b => b.id !== draggingBlockId);
+            let acc = 0;
+            for (let i = 0; i < dragOverIndex && i < others.length; i++) {
+              acc += Math.max(0, others[i].end - others[i].start);
+            }
+            const dropPct = (acc / Math.max(totalDuration, 0.0001)) * 100;
+            return (
+              <div className="absolute top-0 bottom-0 pointer-events-none z-30" style={{ left: `calc(${dropPct}% + 8px)` }}>
+                <div className="absolute top-0 bottom-0 w-1 bg-cyan-300 -translate-x-1/2 shadow-[0_0_12px_rgba(103,232,249,0.9)]"></div>
+              </div>
+            );
+          })()}
+          {dragGhostX !== null && draggingBlockId && (() => {
+            const dragged = blocks.find(b => b.id === draggingBlockId);
+            if (!dragged) return null;
+            return (
+              <div
+                className="absolute top-1/2 -translate-y-1/2 px-2 py-1 rounded-md bg-cyan-500/90 text-[10px] text-white font-semibold pointer-events-none z-40 shadow-[0_8px_24px_rgba(0,0,0,0.6)]"
+                style={{ left: `${dragGhostX}px`, transform: 'translate(-50%, -50%)' }}
+              >
+                {dragged.text.slice(0, 24) || dragged.kind}
+              </div>
+            );
+          })()}
+
+          {/* Transition popover */}
+          {transitionPopoverIdx !== null && blocks[transitionPopoverIdx] && (() => {
+            const fromBlock = blocks[transitionPopoverIdx];
+            const slot = slotById.get(fromBlock.id);
+            if (!slot) return null;
+            const leftPct = (slot.projectEnd / totalDuration) * 100;
+            const current: BlockTransition = fromBlock.transition ?? 'fade';
+            const opts: { value: BlockTransition; label: string; desc: string }[] = [
+              { value: 'cut',      label: '╳ Cut',       desc: 'Corte seco, sem transição' },
+              { value: 'fade',     label: '▾ Fade',      desc: 'Fade pro preto (~333ms)' },
+              { value: 'dissolve', label: '◐ Dissolve',  desc: 'Cross-dissolve com áudio' },
+            ];
+            return (
+              <>
+                <div
+                  className="fixed inset-0 z-30"
+                  onClick={() => setTransitionPopoverIdx(null)}
+                />
+                <div
+                  data-no-scrub="true"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  className="absolute -top-1 -translate-x-1/2 -translate-y-full rounded-lg bg-[#141416] border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.8)] z-40 p-1.5 min-w-[200px]"
+                  style={{ left: `calc(${leftPct}% + 8px)` }}
+                >
+                  <div className="text-[9px] uppercase tracking-wider text-zinc-500 font-semibold px-2 pt-1 pb-1.5">Transição entre blocos</div>
+                  {opts.map(opt => (
+                    <button
+                      key={opt.value}
+                      onClick={() => {
+                        dispatch({ type: 'set-block-transition', id: fromBlock.id, transition: opt.value });
+                        setTransitionPopoverIdx(null);
+                      }}
+                      className={`w-full text-left px-2 py-1.5 rounded-md transition-colors ${current === opt.value ? 'bg-violet-500/20 border border-violet-500/40' : 'border border-transparent hover:bg-white/5'}`}
+                    >
+                      <div className="text-[11px] font-medium text-zinc-100">{opt.label}</div>
+                      <div className="text-[9px] text-zinc-500 leading-tight">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
         </div>
       </div>
 

@@ -11,6 +11,15 @@ import type { MotionConfig } from './motionLibrary';
  */
 export type BlockLayout = 'avatar-only' | 'media-only' | 'avatar-top' | 'media-top';
 
+/**
+ * Transition that plays AT THE END of this block, into the next one.
+ *  - cut:      no transition, hard cut (no black, no dissolve)
+ *  - fade:     fade to black at end + fade in next block from black (legacy default ~333ms)
+ *  - dissolve: cross-dissolve avatar A → avatar B over ~333ms with audio cross-fade
+ * undefined = 'fade' (current behaviour, kept for back-compat).
+ */
+export type BlockTransition = 'cut' | 'fade' | 'dissolve';
+
 export interface ScriptBlock {
   id: string;
   kind: BlockKind;
@@ -48,6 +57,11 @@ export interface ScriptBlock {
    * undefined = no motion. Picker assigns this via `set-block-motion`.
    */
   motion?: MotionConfig;
+  /**
+   * Transition into the NEXT block. undefined = default fade (back-compat).
+   * Last block's value is ignored (no next block).
+   */
+  transition?: BlockTransition;
 }
 
 export type AudioStatus = 'idle' | 'generating' | 'ready' | 'error';
@@ -201,6 +215,8 @@ export type ReelsAction =
   | { type: 'update-block-text'; id: string; text: string }
   | { type: 'toggle-block-kind'; id: string }
   | { type: 'move-block'; id: string; direction: 'up' | 'down' }
+  | { type: 'reorder-blocks'; orderedIds: string[] }
+  | { type: 'set-block-transition'; id: string; transition: BlockTransition }
   | { type: 'replace-blocks'; blocks: ScriptBlock[]; analysis?: PersistedAnalysis }
   | { type: 'remove-analysis'; createdAt: number }
   | { type: 'set-avatar-visible-sec'; id: string; sec: number | undefined }
