@@ -90,41 +90,64 @@ If no brand colors are provided, use the FALLBACK palette specified in the brand
 - Add text-shadow or drop-shadow to ALL text elements for depth: filter: drop-shadow(0 2px 12px rgba(0,0,0,0.8))
 
 ════════════════════════════════════════
- RULE #3 — RICHNESS (minimum 6 elements)
+ RULE #3 — YOU ARE A MOTION DESIGNER, NOT A SLIDE DESIGNER
 ════════════════════════════════════════
-Every composition MUST have AT LEAST these layers:
-1. BACKGROUND — full-bleed gradient or solid using brandBackgroundColor. Add subtle radial glow in brandPrimaryColor at 15% opacity.
-2. MID LAYER — decorative geometric shapes (circles, lines, dots) in brandPrimaryColor at 10-20% opacity, animated slowly (rotate, float)
-3. LOGO/ICON — inline SVG icon representing the brand or concept, 120-200px, in brandPrimaryColor
-4. HEADLINE TEXT — large bold text (72-120px), brandTextColor, with drop-shadow
-5. SUPPORTING ELEMENT — the main visual (diagram, counter, mockup, checklist, chart) — THIS is where the content lives
-6. ACCENT — a bright highlight, underline, badge, or glow in brandAccentColor that draws the eye to the key message
+You are the world's best motion graphics designer (think: Buck, Ordinary Folk, Giant Ant).
+Your job is to ANIMATE the IDEA the narrator is talking about, not to label it with text.
+
+❌ BAD (text-as-graphic): A card that says "CRIE PRODUTOS RÁPIDO" with a sparkle icon next to it.
+✅ GOOD (motion graphic): A pencil drawing a rectangle that morphs into a finished cover thumbnail in 1 second, while a small "⚡" zips past — no headline at all.
+
+❌ BAD: 3 cards "Capas para YouTube / Fotos E-commerce / Identidade Visual" stacked.
+✅ GOOD: A blank rectangle that quickly transforms (morph → fill → checkmark) into 3 different shapes one after the other (a YouTube thumb 16:9, then a square product photo, then a logo mark), telling the story of "many things made fast" through TRANSFORMATION, not through writing the categories.
+
+❌ BAD: Number "10X" with the word "MAIS RÁPIDO" beside it.
+✅ GOOD: A horizontal bar chart where one bar grows 10x faster than the other, with small dust particles trailing behind the fast bar.
+
+THE PRINCIPLE: Find the VISUAL VERB in the block — what is happening? Then animate that verb.
+- "ganhar dinheiro" → coins falling/stacking, a wallet filling, a graph going up
+- "criar arte rápido" → a brush stroking, shapes morphing, a rectangle filling with content
+- "carrossel viral" → cards swiping horizontally, hearts/likes popping, view counter ticking up
+- "identidade visual" → a logo mark drawing itself stroke by stroke (SVG path animation)
+- "comandos simples" → a cursor typing on a tiny invisible keyboard, ⏎ key pressing, output appearing
+- "perder horas" → an hourglass spinning fast, clock hands flying, calendar pages flipping
+
+Composition layers (still required, but now in service of the IDEA):
+1. BACKGROUND — solid brandBackgroundColor or subtle brand-colored gradient. NO decorative shapes that aren't part of the visual story.
+2. THE ANIMATION — the central visual idea, doing its motion. This is 70% of the screen real estate.
+3. OPTIONAL HEADLINE — only if there's a 1-3 word punch line that the visual itself can't deliver. Often: NO headline.
+4. OPTIONAL ACCENT — a single highlight/glow on the focal element at the climax of the animation.
+
+If you find yourself reaching for "card with text + icon", STOP. Re-read the block. Ask: "What VERB happens here? What MOTION shows that verb?"
 
 ════════════════════════════════════════
  RULE #3.5 — INSTAGRAM/TIKTOK SAFE AREA
 ════════════════════════════════════════
-Vertical 1080×1920 will be uploaded to Reels/Shorts/TikTok. The platform UI overlays the corners and edges:
-- TOP 220px: clock, status bar, account name, "Reels" tab
+Vertical 1080×1920 will be uploaded to Reels/Shorts/TikTok. Platform UI overlays the edges:
+- TOP 220px: status bar, account name, "Reels" tab
 - BOTTOM 380px: caption text, like/comment/share UI, music ticker
 - LEFT 80px and RIGHT 80px: side action rails
 
-KEEP ALL CRITICAL CONTENT (headlines, key icons, the "money" element) inside this SAFE BOX:
-  x: 80   to 1000   (920px wide)
-  y: 220  to 1540   (1320px tall)
+KEEP ALL CRITICAL CONTENT (the focal animation, any headline) inside this SAFE BOX:
+  x: 80 to 1000   (920px wide)
+  y: 220 to 1540  (1320px tall)
 
-Decorative background elements (gradients, subtle particles, glow) MAY extend to the bleed area, but no text or icon the viewer needs to read should land outside the safe box. Center the focal element vertically around y=880-960.
+Decorative background elements (gradients, subtle particles) MAY extend to the bleed area. The focal animation should center around y=880-960 (vertical middle of the safe box).
 
 ════════════════════════════════════════
- RULE #3.6 — VISUAL FIRST, TEXT MINIMAL
+ RULE #3.6 — TEXT IS THE LAST RESORT
 ════════════════════════════════════════
-The narrator's voice + auto-generated captions cover the full script. The motion graphic exists to ADD visual punch, NOT to repeat what the narrator says.
-- MAXIMUM 5 words on screen at once across the entire composition
-- Headline: 3-5 words max, never a full sentence
-- Cards/list items: ONE noun each (e.g. "Capas", "Fotos", "Logos") — not full phrases
-- Replace text with ICONS wherever possible (use SVG)
-- If the block has a number/stat, the number is the hero — words around it are secondary
-- Empty space is good — composition should breathe
-- DO NOT transcribe the narration into the motion. Find the ONE visual idea that complements it.
+The narrator's voice + auto-generated captions cover EVERYTHING in the script. The motion exists to ILLUSTRATE, not to repeat.
+
+HARD LIMITS:
+- DEFAULT: zero text on screen. Show, don't write.
+- IF text is necessary (because the visual genuinely cannot stand alone): MAXIMUM 3 words total across the entire composition
+- NEVER write a full sentence
+- NEVER stack multiple text cards
+- A number can be on screen ONLY if it IS the visual (e.g. "10X" sized at 280px as the hero element)
+- Replace any text impulse with: an icon, a morph, a transform, a path-draw, a particle effect
+
+The narrator already said it. The captions will already show it. Your job is the third dimension — the VISUAL.
 
 ════════════════════════════════════════
  RULE #4 — VIRAL ANIMATION TECHNIQUES
@@ -152,58 +175,72 @@ F) SCALE PUNCH — headline scales 0.7→1.05→1.0 on entry for that "pop" feel
 G) FLOATING PARTICLES — 3-5 small circles (10-20px) with slow infinite y-movement using yoyo:true repeat:-1, staggered starts
 
 ════════════════════════════════════════
- STEP 1 — CLASSIFY THE BLOCK
+ STEP 1 — FIND THE VISUAL VERB IN THE BLOCK
 ════════════════════════════════════════
-• TUTORIAL_STEP → phone/app mockup + animated cursor + highlighted element + step badge
-• HOW_IT_WORKS → flow diagram: boxes connected by self-drawing arrows, left→right sequence
-• STAT_OR_NUMBER → giant counter (technique C above) + growing ring/bar + context label
-• BENEFIT_OR_RESULT → before/after split OR animated checklist with SVG checkmarks drawing themselves
-• LIST_OR_TIPS → staggered cards (technique E) with number badges, icons, short labels
-• CONCEPT_OR_METAPHOR → central SVG metaphor with orbiting/pulsing elements (technique D)
-• HOOK_OR_CTA → scale punch headline (technique F) + minimal bold layout
+Read the block. Identify the action/concept being described. Pick the SIMPLEST POSSIBLE animation that shows that idea visually:
+
+• Action verbs ("create", "make", "build") → an object materializing/morphing/being drawn (SVG path animation, scale-up, mask reveal)
+• Speed claims ("fast", "in seconds", "rapid") → time compression visual: clock spinning, bar racing, hourglass dumping, particles streaking
+• Quantity claims ("more", "a lot of", "many") → multiplication: one shape splits into many, items stack up, counter ticks up
+• Transformation ("turn X into Y") → literal morph from shape A to shape B (clip-path, SVG morph)
+• Comparison ("better than", "vs") → split screen, both halves animate but one wins (grows bigger, brighter, faster)
+• Process ("how it works", "step by step") → small icons drawn one at a time with arrows linking them — but PURE ICONS, no text labels
+• Result/benefit ("you'll get", "imagine") → an empty container fills up, a pile grows, a graph rises, a face/heart/checkmark appears
+• Hook/question ("do you know", "want to") → a single element pulses/glows/scales rhythmically, drawing the eye
+• Numbers/stats → the number IS the hero. Sized 240-320px. Counts up. Background is just a subtle pulse.
 
 ════════════════════════════════════════
- STEP 2 — VISUAL PATTERNS BY TYPE
+ STEP 2 — CONCRETE VISUAL TECHNIQUES
 ════════════════════════════════════════
 
-TUTORIAL_STEP:
-  - Phone frame: SVG rounded rect 540×960px centered, with status bar, header bar in brandPrimaryColor
-  - Inside frame: simplified UI, target element has glowing animated border (brandPrimaryColor glow)
-  - Animated cursor SVG moving to target with click ripple
-  - Step badge: circle top-left with number, brandPrimaryColor fill
+PURE-VISUAL TEMPLATES (no text required):
 
-HOW_IT_WORKS:
-  - 3 boxes (240×180px each) horizontally centered, connected by arrows
-  - Arrow path draws itself via strokeDashoffset (technique B)
-  - Each box: SVG icon + short label. Boxes enter with stagger (technique A)
-  - Final box: brandPrimaryColor fill, larger scale — the "result"
+A) MORPH SEQUENCE — one shape becomes another over time
+   - SVG shape with multiple <path> elements; cross-fade between them via opacity
+   - OR clip-path: from rectangle → circle → triangle (use polygon coords)
+   - 0.6s per morph, 3 morphs total = 1.8s of pure visual storytelling
 
-STAT_OR_NUMBER:
-  - Number counter technique C — font-size 160px, font-weight 900
-  - Circular SVG arc (stroke-dashoffset) growing to represent the value
-  - Small label above (what it measures) + large label below (context)
-  - Floating particles in background (technique G)
+B) PATH DRAW (logo / icon being made)
+   - <path stroke> with strokeDasharray = pathLength, animate strokeDashoffset to 0
+   - Looks like a hand drawing the icon. Powerful for "create / craft / build" verbs
 
-BENEFIT_OR_RESULT:
-  - Two columns: "Antes" (desaturated, small, fading) vs "Depois" (bright, large, scaling up)
-  - OR: vertical checklist, each item: SVG checkmark draws itself + text slides in (techniques B+E)
-  - Checkmark in brandPrimaryColor, text in brandTextColor
+C) ASSEMBLY — pieces flying in to form a whole
+   - 3-5 small shapes start scattered (off-screen or x-offset 200-400px)
+   - They converge to assembly positions, stagger 0.15s
+   - Final shape is the "result" — pulse it briefly when assembly completes
 
-LIST_OR_TIPS:
-  - 3-4 cards, each 900×160px, rounded 20px, bg rgba(255,255,255,0.08), border brandPrimaryColor 2px
-  - Each card: number badge (brandPrimaryColor circle) + SVG icon + text
-  - Enter staggered from right (technique E)
-  - Active/last card: brandPrimaryColor background at 20% opacity
+D) CASCADE / STACK — items piling up
+   - Repeat the same shape 5-8 times with y-offset stagger
+   - Each enters from above with bounce ease, lands on the previous one
+   - Great for "muitos / many / pile of"
 
-CONCEPT_OR_METAPHOR:
-  - Central SVG 200px in brandPrimaryColor — use the brand logo SVG if provided
-  - 4-6 orbiting small elements (brandSecondaryColor circles/dots) rotating around center
-  - Label below: 80px bold, brandTextColor
-  - Background radial glow: brandPrimaryColor at 20% opacity
+E) SCALE-AND-FADE — a single hero element grows from nothing
+   - Start scale: 0, opacity: 0 → end scale: 1, opacity: 1, ease: 'back.out(1.4)'
+   - Add a glow ring that expands behind it (ripple)
+   - Use this for: "you can have / imagine / picture this"
 
-HOOK_OR_CTA:
-  - Full-bleed gradient background (brandBackgroundColor → slightly lighter variant)
-  - Single headline, font-size 96-120px, font-weight 900, scale punch (technique F)
+F) PHONE / SCREEN MOCK — simplified device showing content morphing
+   - SVG rounded rect 540×960px = phone frame
+   - Inside: a UI block that changes (image → image, list grows, button highlights)
+   - NO ACTUAL TEXT in the mock — use rounded rectangles as "fake content lines"
+   - This is for tutorial/product blocks. The phone frame itself is the visual
+
+G) NUMBER COUNTER — the digit is the entire composition
+   - One number, font-size 240-320px, font-weight 900, centered
+   - Counts up via gsap.to({v:0}, {v:TARGET, onUpdate})
+   - Optional: thin bar/arc growing alongside, NO labels
+
+H) PARTICLE FIELD — energy / flow / abundance
+   - 12-20 small circles (8-16px) drifting upward with stagger and yoyo
+   - Use brandPrimaryColor at 30-60% opacity
+   - Background layer; the focal element sits on top
+
+I) BEFORE/AFTER MORPH — split screen with motion
+   - Vertical split: left side is "before" (simplified, dim, small), right is "after" (vivid, large, glowing)
+   - The right side animates in or transforms; left stays static
+   - 0 words required; the contrast tells the story
+
+REMEMBER: pick ONE primary technique per composition. Combine with H (particles) for richness. Keep it CLEAN.
   - Animated underline that draws itself (brandPrimaryColor, 6px thick)
   - Optional: floating particles (technique G)
 
@@ -360,15 +397,20 @@ async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: G
       const parsed = JSON.parse(match[0]) as BrandResearch;
       if (!parsed.brandPrimaryColor || !parsed.brandBackgroundColor) continue;
 
-      // Sanity-check the colors. If the brand isn't known for purple/magenta/blue
-      // but Gemini returned one of those defaults, reject the result so we fall
-      // back to the neutral palette instead of poisoning the motion.
+      // Sanity-check colors. If the brand isn't known for the color but Gemini
+      // returned a banned default (purple/magenta/blue), reject the result.
+      // Even ONE banned color in the primary slot is enough — Gemini hallucinating
+      // a magenta primary for a generic topic poisons the whole motion.
       const topic = (parsed.topic || '').toLowerCase();
-      const checks = [parsed.brandPrimaryColor, parsed.brandSecondaryColor, parsed.brandAccentColor].filter(Boolean);
+      const primaryBan = isBannedColor(parsed.brandPrimaryColor, topic);
+      if (primaryBan.banned) {
+        console.warn('[motion] brand research returned a banned primary color, falling back to neutral', { topic, color: parsed.brandPrimaryColor, label: primaryBan.label });
+        return null;
+      }
+      const checks = [parsed.brandSecondaryColor, parsed.brandAccentColor].filter(Boolean);
       const offenders = checks.map(h => isBannedColor(h, topic)).filter(r => r.banned);
-      if (offenders.length >= 2) {
-        // Two or more colors fell into banned defaults — almost certainly Gemini hallucinating.
-        console.warn('[motion] brand research returned banned color defaults, falling back to neutral palette', { topic, offenders });
+      if (offenders.length >= 1) {
+        console.warn('[motion] brand research returned banned accent colors, falling back to neutral', { topic, offenders });
         return null;
       }
       return parsed;
@@ -422,17 +464,19 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
   ].filter(Boolean).join('\n') : [
     `╔══════════════════════════════════════════════════════╗`,
-    `  NO BRAND IDENTIFIED — USE THIS NEUTRAL DARK PALETTE LITERALLY`,
+    `  NO BRAND IDENTIFIED — STRICT BLACK & WHITE PALETTE`,
     `╚══════════════════════════════════════════════════════╝`,
-    `brandBackgroundColor: #0a0a0a   ← pure near-black`,
+    `brandBackgroundColor: #000000   ← pure black`,
     `brandTextColor: #ffffff         ← pure white`,
-    `brandPrimaryColor: #f59e0b      ← warm amber (use this everywhere accent is called for)`,
-    `brandSecondaryColor: #78716c    ← warm grey`,
-    `brandAccentColor: #fbbf24       ← lighter amber (single hot-spot only)`,
+    `brandPrimaryColor: #ffffff      ← white (used for icons, borders, accents)`,
+    `brandSecondaryColor: #a3a3a3    ← neutral grey (60% white)`,
+    `brandAccentColor: #ffffff       ← white (single hot-spot — emphasize via scale/glow not colour)`,
     ``,
-    `STRICTLY FORBIDDEN in fallback mode: any purple, violet, indigo, magenta, fuchsia, pink, blue.`,
-    `If the style preset suggests a gradient, use #0a0a0a → #1a1a1a (subtle dark grey).`,
-    `If the style preset suggests "vibrant" or "energy", express it through SCALE/MOTION/CONTRAST, NOT colour.`,
+    `THIS IS BLACK & WHITE MODE. NO COLORS AT ALL.`,
+    `STRICTLY FORBIDDEN: any purple, violet, indigo, magenta, fuchsia, pink, blue, red, orange, yellow, green, cyan, teal, amber.`,
+    `If the style preset suggests a gradient, use #000000 → #1a1a1a (subtle dark grey).`,
+    `If the style preset suggests "vibrant" or "energy", express it through SCALE / MOTION / CONTRAST / TYPOGRAPHY WEIGHT, NEVER colour.`,
+    `Highlights: use a thin white border, a white glow (rgba(255,255,255,0.5)), or pure white text against #000.`,
     '',
   ].join('\n');
 
