@@ -39,7 +39,13 @@ const getApiKey = (): string => {
 };
 
 // Pro for highest quality HTML/GSAP generation; Flash as fallback.
-const MODEL_CANDIDATES = ['gemini-3.1-pro-preview', 'gemini-3.1-flash-preview'];
+// Tries the newest preview models first, falls back to stable 2.5 line if unavailable.
+const MODEL_CANDIDATES = [
+  'gemini-3.1-pro-preview',
+  'gemini-3.1-flash-preview',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
+];
 
 const RESPONSE_SCHEMA = {
   type: Type.OBJECT,
@@ -362,7 +368,12 @@ const isBannedColor = (hex: string, topic: string): { banned: boolean; label: st
 };
 
 async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: GenerateMotionInput['reelContext']): Promise<BrandResearch | null> {
-  const groundingModels = ['gemini-3.1-pro-preview', 'gemini-3.1-flash-preview'];
+  const groundingModels = [
+    'gemini-3.1-pro-preview',
+    'gemini-3.1-flash-preview',
+    'gemini-2.5-pro',
+    'gemini-2.5-flash',
+  ];
 
   const query = [
     BRAND_RESEARCH_PROMPT,
@@ -606,7 +617,9 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     } catch (err) {
       lastError = err;
       const msg = err instanceof Error ? err.message : String(err);
-      if (!/not found|NOT_FOUND|not supported|404/i.test(msg)) throw err;
+      // Fallback to next model on: model not found, model unavailable, overload, server errors
+      const retryable = /not found|NOT_FOUND|not supported|404|503|UNAVAILABLE|overload|RESOURCE_EXHAUSTED|429|500|INTERNAL/i.test(msg);
+      if (!retryable) throw err;
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Falha ao gerar HTML do motion.');

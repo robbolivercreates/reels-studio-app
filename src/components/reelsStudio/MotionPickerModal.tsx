@@ -439,7 +439,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
                   <iframe
                     ref={iframeRef}
                     title="motion preview"
-                    sandbox="allow-scripts"
+                    sandbox="allow-scripts allow-same-origin"
                     style={{ width: 1080, height: 1920, border: 'none', transform: 'scale(0.333333)', transformOrigin: 'top left' }}
                   />
                 </div>
