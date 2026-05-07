@@ -584,6 +584,12 @@ export const ReelsStudio: React.FC = () => {
     totalDurationRef.current = totalDuration;
   }, [state.audio.silenceCut, state.audio.keepSegments, layout, totalDuration]);
 
+  // Ref so the play effect can read current audio status without re-running on changes.
+  const audioReadyRef = useRef(false);
+  useEffect(() => {
+    audioReadyRef.current = state.audio.status === 'ready' && !!state.audio.url;
+  }, [state.audio.status, state.audio.url]);
+
   useEffect(() => {
     if (!playing) {
       const el = audioElRef.current;
@@ -593,7 +599,7 @@ export const ReelsStudio: React.FC = () => {
     }
 
     const el = audioElRef.current;
-    const hasAudio = !!el && state.audio.status === 'ready' && !!state.audio.url;
+    const hasAudio = audioReadyRef.current && !!el;
 
     if (hasAudio && el) {
       // ─── AUDIO MODE: audio is the clock, playhead reads from el.currentTime ───
@@ -666,7 +672,7 @@ export const ReelsStudio: React.FC = () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, state.audio.status, state.audio.url]);
+  }, [playing]);
 
   const seekTo = (t: number) => {
     const clamped = Math.max(0, Math.min(totalDuration, t));
