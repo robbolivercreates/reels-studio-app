@@ -121,8 +121,8 @@ TYPOGRAPHY:
 
 LAYOUT:
   frosted glass cards (backdrop-filter: blur(20px))
-  thin glowing borders
-  cyan accent particles drifting in background
+  thin glowing borders in brandPrimaryColor
+  brandPrimaryColor accent particles drifting in background
   grid lines very faint at 8% opacity
 
 MOTION:
@@ -155,7 +155,7 @@ TYPOGRAPHY:
 LAYOUT:
   text fills the canvas
   one or two words on screen at a time
-  important word gets amber block background
+  important word gets brandPrimaryColor block background
   mask-style reveals (clip-path)
 
 MOTION:

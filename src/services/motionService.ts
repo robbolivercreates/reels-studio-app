@@ -59,17 +59,25 @@ You generate HyperFrames-compatible HTML compositions (9:16, 1080×1920). Your o
 ════════════════════════════════════════
  RULE #1 — BRAND COLORS ARE LAW
 ════════════════════════════════════════
-You will receive a BRAND IDENTITY section with researched colors. These are NOT suggestions — they are MANDATORY.
-- Set the background to brandBackgroundColor
-- Set ALL primary text to brandTextColor
-- Use brandPrimaryColor as the dominant accent (borders, highlights, glow, icons)
+You will receive a BRAND IDENTITY section with EXACT hex values. ONLY use those hexes.
+- Set the background to brandBackgroundColor (literal hex, e.g. #1a1a2e)
+- Set ALL primary text to brandTextColor (literal hex)
+- Use brandPrimaryColor as the dominant accent — borders, highlights, icon fills, glow
 - Use brandSecondaryColor for supporting elements
-- The STYLE PRESET below uses placeholder names like "brandPrimaryColor" or "brandBackgroundColor" — REPLACE every placeholder with the actual hex value from the BRAND IDENTITY section. The style preset never wins over brand colors.
-- NEVER default to blue (#0000ff, #3b82f6, #60a5fa, or any blue shade) unless the brand IS blue
-- NEVER use purple, violet, indigo, or any shade in the range #4c1d95, #5b21b6, #6d28d9, #7c3aed, #8b5cf6, #a855f7, #9333ea, #c084fc, #1e1b4b unless the brand's PRIMARY color is demonstrably purple (e.g. Twitch, Figma, Discord, Yahoo)
-- NEVER use a deep-purple gradient background (e.g. #1E1B4B → #4C1D95) — that is a forbidden default
-- NEVER use generic purple/violet/indigo unless the brand uses it
-- If no brand colors are provided, use high-contrast dark background (#0a0a0a) with white text and a warm amber (#f59e0b) accent — NOT blue, NOT purple
+- Use brandAccentColor for the single key highlight (CTA, badge, hot-spot)
+- The STYLE PRESET below references placeholders like "brandPrimaryColor" — REPLACE every placeholder with the EXACT hex from BRAND IDENTITY. Preset never overrides brand colors.
+
+HARD COLOR BANS (apply unless the brand's primary color demonstrably IS this color):
+- NO purple/violet/indigo in any shade: #4c1d95, #5b21b6, #6d28d9, #7c3aed, #8b5cf6, #a855f7, #9333ea, #c084fc, #1e1b4b, #2e1065
+- NO magenta/fuchsia/pink defaults: #d946ef, #ec4899, #f472b6, #c026d3, #db2777
+- NO deep-purple gradients (e.g. #1E1B4B → #4C1D95) — forbidden default
+- NO generic blue: #0000ff, #3b82f6, #60a5fa, #2563eb, #1d4ed8
+
+ONLY use a forbidden color if BOTH conditions are true:
+  (a) The brand identity section explicitly lists that hex as one of brand{Primary,Secondary,Accent}Color, AND
+  (b) The brand is famously associated with that color (Twitch=purple, Instagram=pink/magenta gradient, Figma=multi-color, Discord=blurple)
+
+If no brand colors are provided, use the FALLBACK palette specified in the brand section literally — do not improvise, do not add purple/magenta/blue accents.
 
 ════════════════════════════════════════
  RULE #2 — CONTRAST IS NON-NEGOTIABLE
@@ -91,6 +99,32 @@ Every composition MUST have AT LEAST these layers:
 4. HEADLINE TEXT — large bold text (72-120px), brandTextColor, with drop-shadow
 5. SUPPORTING ELEMENT — the main visual (diagram, counter, mockup, checklist, chart) — THIS is where the content lives
 6. ACCENT — a bright highlight, underline, badge, or glow in brandAccentColor that draws the eye to the key message
+
+════════════════════════════════════════
+ RULE #3.5 — INSTAGRAM/TIKTOK SAFE AREA
+════════════════════════════════════════
+Vertical 1080×1920 will be uploaded to Reels/Shorts/TikTok. The platform UI overlays the corners and edges:
+- TOP 220px: clock, status bar, account name, "Reels" tab
+- BOTTOM 380px: caption text, like/comment/share UI, music ticker
+- LEFT 80px and RIGHT 80px: side action rails
+
+KEEP ALL CRITICAL CONTENT (headlines, key icons, the "money" element) inside this SAFE BOX:
+  x: 80   to 1000   (920px wide)
+  y: 220  to 1540   (1320px tall)
+
+Decorative background elements (gradients, subtle particles, glow) MAY extend to the bleed area, but no text or icon the viewer needs to read should land outside the safe box. Center the focal element vertically around y=880-960.
+
+════════════════════════════════════════
+ RULE #3.6 — VISUAL FIRST, TEXT MINIMAL
+════════════════════════════════════════
+The narrator's voice + auto-generated captions cover the full script. The motion graphic exists to ADD visual punch, NOT to repeat what the narrator says.
+- MAXIMUM 5 words on screen at once across the entire composition
+- Headline: 3-5 words max, never a full sentence
+- Cards/list items: ONE noun each (e.g. "Capas", "Fotos", "Logos") — not full phrases
+- Replace text with ICONS wherever possible (use SVG)
+- If the block has a number/stat, the number is the hero — words around it are secondary
+- Empty space is good — composition should breathe
+- DO NOT transcribe the narration into the motion. Find the ONE visual idea that complements it.
 
 ════════════════════════════════════════
  RULE #4 — VIRAL ANIMATION TECHNIQUES
@@ -278,6 +312,23 @@ CRITICAL RULES:
 - Do NOT default to blue (#3b82f6, #60a5fa) unless the brand actually IS blue
 - logoSvg must use inline shapes only — no external hrefs, no images, no text elements`;
 
+// Hex shades to be wary of — only allowed if the topic is a brand famous for them.
+const BANNED_HEX_RANGES: Array<{ pattern: RegExp; allowedTopicsRegex: RegExp; label: string }> = [
+  { pattern: /^#(7c3aed|8b5cf6|a855f7|9333ea|6d28d9|5b21b6|4c1d95|c084fc|1e1b4b|2e1065)/i, allowedTopicsRegex: /(twitch|figma|discord|yahoo|roxo|purple|violet)/i, label: 'purple' },
+  { pattern: /^#(d946ef|ec4899|f472b6|c026d3|db2777|be185d|9d174d)/i, allowedTopicsRegex: /(instagram|barbie|pink|magenta|fuchsia|rosa)/i, label: 'magenta/pink' },
+  { pattern: /^#(3b82f6|60a5fa|2563eb|1d4ed8|1e40af)/i, allowedTopicsRegex: /(facebook|twitter|linkedin|paypal|samsung|dell|ibm|intel|chase|visa|ford|wal\s?mart|blue|azul)/i, label: 'generic blue' },
+];
+
+const isBannedColor = (hex: string, topic: string): { banned: boolean; label: string } => {
+  if (!hex) return { banned: false, label: '' };
+  for (const ban of BANNED_HEX_RANGES) {
+    if (ban.pattern.test(hex) && !ban.allowedTopicsRegex.test(topic)) {
+      return { banned: true, label: ban.label };
+    }
+  }
+  return { banned: false, label: '' };
+};
+
 async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: GenerateMotionInput['reelContext']): Promise<BrandResearch | null> {
   const groundingModels = ['gemini-3.1-pro-preview', 'gemini-3.1-flash-preview'];
 
@@ -307,7 +358,20 @@ async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: G
       const match = raw.match(/\{[\s\S]*\}/);
       if (!match) continue;
       const parsed = JSON.parse(match[0]) as BrandResearch;
-      if (parsed.brandPrimaryColor && parsed.brandBackgroundColor) return parsed;
+      if (!parsed.brandPrimaryColor || !parsed.brandBackgroundColor) continue;
+
+      // Sanity-check the colors. If the brand isn't known for purple/magenta/blue
+      // but Gemini returned one of those defaults, reject the result so we fall
+      // back to the neutral palette instead of poisoning the motion.
+      const topic = (parsed.topic || '').toLowerCase();
+      const checks = [parsed.brandPrimaryColor, parsed.brandSecondaryColor, parsed.brandAccentColor].filter(Boolean);
+      const offenders = checks.map(h => isBannedColor(h, topic)).filter(r => r.banned);
+      if (offenders.length >= 2) {
+        // Two or more colors fell into banned defaults — almost certainly Gemini hallucinating.
+        console.warn('[motion] brand research returned banned color defaults, falling back to neutral palette', { topic, offenders });
+        return null;
+      }
+      return parsed;
     } catch {
       // grounding failed or model not available — proceed without brand colors
     }
@@ -358,14 +422,17 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
   ].filter(Boolean).join('\n') : [
     `╔══════════════════════════════════════════════════════╗`,
-    `  NO BRAND FOUND — use high-contrast dark theme`,
+    `  NO BRAND IDENTIFIED — USE THIS NEUTRAL DARK PALETTE LITERALLY`,
     `╚══════════════════════════════════════════════════════╝`,
-    `brandBackgroundColor: #0a0a0a`,
-    `brandTextColor: #ffffff`,
-    `brandPrimaryColor: #f59e0b  ← warm amber accent`,
-    `brandSecondaryColor: #78716c`,
-    `brandAccentColor: #fbbf24`,
-    `⚠️  DO NOT use blue, purple, or violet. Use the amber palette above.`,
+    `brandBackgroundColor: #0a0a0a   ← pure near-black`,
+    `brandTextColor: #ffffff         ← pure white`,
+    `brandPrimaryColor: #f59e0b      ← warm amber (use this everywhere accent is called for)`,
+    `brandSecondaryColor: #78716c    ← warm grey`,
+    `brandAccentColor: #fbbf24       ← lighter amber (single hot-spot only)`,
+    ``,
+    `STRICTLY FORBIDDEN in fallback mode: any purple, violet, indigo, magenta, fuchsia, pink, blue.`,
+    `If the style preset suggests a gradient, use #0a0a0a → #1a1a1a (subtle dark grey).`,
+    `If the style preset suggests "vibrant" or "energy", express it through SCALE/MOTION/CONTRAST, NOT colour.`,
     '',
   ].join('\n');
 
