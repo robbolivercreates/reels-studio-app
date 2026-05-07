@@ -127,14 +127,42 @@ export const loadProject = async (): Promise<PersistedProject | null> => {
 
 // ─── AUDIO ────────────────────────────────────────────────────────────
 
+// Stored as ArrayBuffer (+ MIME) instead of Blob directly. WebKit (Tauri's
+// engine) has a bug where Blobs persisted across app sessions become "zombie"
+// — the JS reference looks valid but the underlying data can't be read,
+// causing 'WebKitBlobResource error 1' / NotFoundError when consumed by
+// <audio>, <video>, or fetch. ArrayBuffers don't have this problem; we
+// reconstruct a fresh Blob on load.
+interface PersistedAudio {
+  buffer: ArrayBuffer;
+  type: string;
+}
+
 export const saveAudioBlob = async (blob: Blob): Promise<void> => {
-  await reqOf(STORE_AUDIO, 'readwrite', s => s.put(blob, AUDIO_KEY));
+  const buffer = await blob.arrayBuffer();
+  const payload: PersistedAudio = { buffer, type: blob.type || 'audio/mpeg' };
+  await reqOf(STORE_AUDIO, 'readwrite', s => s.put(payload, AUDIO_KEY));
 };
 
 export const loadAudioBlob = async (): Promise<Blob | null> => {
   try {
     const result = await reqOf(STORE_AUDIO, 'readonly', s => s.get(AUDIO_KEY));
-    return (result as Blob | undefined) ?? null;
+    if (!result) return null;
+    // New format: { buffer, type }
+    if (typeof (result as PersistedAudio).buffer === 'object' && (result as PersistedAudio).buffer instanceof ArrayBuffer) {
+      const p = result as PersistedAudio;
+      return new Blob([p.buffer], { type: p.type });
+    }
+    // Legacy format: raw Blob (may be a zombie — try to revive by reading bytes)
+    if (result instanceof Blob) {
+      try {
+        const buffer = await result.arrayBuffer();
+        return new Blob([buffer], { type: result.type || 'audio/mpeg' });
+      } catch {
+        return null;
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -144,16 +172,36 @@ export const clearAudioBlob = async (): Promise<void> => {
   await reqOf(STORE_AUDIO, 'readwrite', s => s.delete(AUDIO_KEY));
 };
 
+// Revive a stored value (new format = {buffer,type}, legacy = raw Blob) into
+// a fresh, readable Blob. Returns null if the value can't be revived.
+const reviveStoredBlob = async (raw: unknown, defaultMime: string): Promise<Blob | null> => {
+  if (!raw) return null;
+  const obj = raw as Partial<PersistedAudio>;
+  if (obj && obj.buffer instanceof ArrayBuffer) {
+    return new Blob([obj.buffer], { type: obj.type || defaultMime });
+  }
+  if (raw instanceof Blob) {
+    try {
+      const buffer = await raw.arrayBuffer();
+      return new Blob([buffer], { type: raw.type || defaultMime });
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
 // ─── CLIPS (per-block video Blobs) ──────────────────────────────────
 
 export const saveClipBlob = async (blockId: string, blob: Blob): Promise<void> => {
-  await reqOf(STORE_CLIPS, 'readwrite', s => s.put(blob, blockId));
+  const buffer = await blob.arrayBuffer();
+  await reqOf(STORE_CLIPS, 'readwrite', s => s.put({ buffer, type: blob.type || 'video/mp4' }, blockId));
 };
 
 export const loadClipBlob = async (blockId: string): Promise<Blob | null> => {
   try {
     const result = await reqOf(STORE_CLIPS, 'readonly', s => s.get(blockId));
-    return (result as Blob | undefined) ?? null;
+    return await reviveStoredBlob(result, 'video/mp4');
   } catch {
     return null;
   }
@@ -164,15 +212,23 @@ export const loadAllClipBlobs = async (): Promise<Record<string, Blob>> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_CLIPS, 'readonly');
     const store = transaction.objectStore(STORE_CLIPS);
-    const result: Record<string, Blob> = {};
+    const raws: Record<string, unknown> = {};
     const req = store.openCursor();
     req.onsuccess = () => {
       const cursor = req.result;
       if (cursor) {
-        result[String(cursor.key)] = cursor.value as Blob;
+        raws[String(cursor.key)] = cursor.value;
         cursor.continue();
       } else {
-        resolve(result);
+        // Revive each blob asynchronously, then resolve.
+        const entries = Object.entries(raws);
+        Promise.all(entries.map(async ([k, v]) => [k, await reviveStoredBlob(v, 'video/mp4')] as const))
+          .then(pairs => {
+            const result: Record<string, Blob> = {};
+            for (const [k, blob] of pairs) if (blob) result[k] = blob;
+            resolve(result);
+          })
+          .catch(reject);
       }
     };
     req.onerror = () => reject(req.error);
@@ -199,13 +255,14 @@ export const downloadAndStoreClip = async (blockId: string, videoUrl: string): P
 // ─── TAKES (screen recordings) ──────────────────────────────────
 
 export const saveTakeBlob = async (takeId: string, blob: Blob): Promise<void> => {
-  await reqOf(STORE_TAKES, 'readwrite', s => s.put(blob, takeId));
+  const buffer = await blob.arrayBuffer();
+  await reqOf(STORE_TAKES, 'readwrite', s => s.put({ buffer, type: blob.type || 'video/mp4' }, takeId));
 };
 
 export const loadTakeBlob = async (takeId: string): Promise<Blob | null> => {
   try {
     const result = await reqOf(STORE_TAKES, 'readonly', s => s.get(takeId));
-    return (result as Blob | undefined) ?? null;
+    return await reviveStoredBlob(result, 'video/mp4');
   } catch {
     return null;
   }
@@ -216,15 +273,22 @@ export const loadAllTakeBlobs = async (): Promise<Record<string, Blob>> => {
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_TAKES, 'readonly');
     const store = transaction.objectStore(STORE_TAKES);
-    const result: Record<string, Blob> = {};
+    const raws: Record<string, unknown> = {};
     const req = store.openCursor();
     req.onsuccess = () => {
       const cursor = req.result;
       if (cursor) {
-        result[String(cursor.key)] = cursor.value as Blob;
+        raws[String(cursor.key)] = cursor.value;
         cursor.continue();
       } else {
-        resolve(result);
+        const entries = Object.entries(raws);
+        Promise.all(entries.map(async ([k, v]) => [k, await reviveStoredBlob(v, 'video/mp4')] as const))
+          .then(pairs => {
+            const result: Record<string, Blob> = {};
+            for (const [k, blob] of pairs) if (blob) result[k] = blob;
+            resolve(result);
+          })
+          .catch(reject);
       }
     };
     req.onerror = () => reject(req.error);
