@@ -386,7 +386,13 @@ export const ReelsStudio: React.FC = () => {
           prevBlockText: blockIndex > 0 ? blocks[blockIndex - 1].text : undefined,
           nextBlockText: blockIndex < blocks.length - 1 ? blocks[blockIndex + 1].text : undefined,
         },
+        // Reuse the reel's brand identity so all motions stay visually consistent.
+        existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
       });
+      // Cache the brand identity if this was the first motion (research happened).
+      if (result.brand && !state.brandIdentity) {
+        dispatch({ type: 'set-brand-identity', brand: result.brand as unknown as Record<string, unknown> });
+      }
       // Post-process: replace repeat:-1 with a finite count derived from the duration.
       // HyperFrames is a deterministic renderer — infinite GSAP loops break it.
       const sanitizedHtml = result.htmlBody.replace(
@@ -2376,6 +2382,8 @@ export const ReelsStudio: React.FC = () => {
         return (
           <MotionPickerModal
             block={block}
+            brandIdentity={state.brandIdentity}
+            onBrandLearned={(brand) => dispatch({ type: 'set-brand-identity', brand })}
             onClose={() => setMotionPickerBlockId(null)}
             onSave={(motion) => {
               dispatch({ type: 'set-block-motion', id: block.id, motion });

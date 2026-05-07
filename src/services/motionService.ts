@@ -360,11 +360,17 @@ export interface GenerateMotionInput {
   };
   /** Motion layer mode — affects canvas dimensions and composition design. */
   motionLayer?: 'overlay' | 'replace' | 'split-bottom' | 'split-top';
+  /**
+   * Brand identity from a previous motion in this reel. When provided, brand
+   * research is SKIPPED and these colors are used as-is. This keeps every
+   * motion in the same reel visually consistent (same palette, same style).
+   */
+  existingBrand?: BrandResearch;
 }
 
 // ─── Step 1: Brand research via Google Search grounding ───────────────────────
 
-interface BrandResearch {
+export interface BrandResearch {
   topic: string;
   brandPrimaryColor: string;
   brandSecondaryColor: string;
@@ -538,13 +544,16 @@ async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: G
 
 // ─── Step 2: HTML generation ──────────────────────────────────────────────────
 
-export const generateMotionHtml = async (input: GenerateMotionInput): Promise<GenerationOutput> => {
+export const generateMotionHtml = async (input: GenerateMotionInput): Promise<GenerationOutput & { brand?: BrandResearch }> => {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const preset = findStylePreset(input.presetId);
 
-  // Run brand research in parallel with context assembly (non-blocking — if it
-  // fails we just proceed without brand colors).
-  const brandPromise = researchBrand(ai, input.blockText, input.reelContext);
+  // If the reel already has a brand identity (from the first motion), reuse it
+  // — every motion in the same reel must share the same palette/style.
+  // Otherwise, run brand research now.
+  const brandPromise: Promise<BrandResearch | null> = input.existingBrand
+    ? Promise.resolve(input.existingBrand)
+    : researchBrand(ai, input.blockText, input.reelContext);
 
   const ctx = input.reelContext;
   const reelContextSection = ctx ? [
@@ -561,12 +570,21 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
 
   // Wait for brand research
   const brand = await brandPromise;
+  const isReusedBrand = !!input.existingBrand;
   const brandSection = brand ? [
     `╔══════════════════════════════════════════════════════╗`,
-    `  BRAND IDENTITY — MANDATORY COLORS (researched via Google Search)`,
+    isReusedBrand
+      ? `  BRAND IDENTITY — REUSED FROM REEL (consistency LOCKED)`
+      : `  BRAND IDENTITY — MANDATORY COLORS (researched via Google Search)`,
     `  YOU MUST USE THESE. DO NOT SUBSTITUTE WITH BLUE OR GENERIC COLORS.`,
+    isReusedBrand
+      ? `  Other motions in this reel already use these EXACT colors and visual style.`
+      : ``,
+    isReusedBrand
+      ? `  STAY CONSISTENT — same palette, same typography weights, same animation language.`
+      : ``,
     `╚══════════════════════════════════════════════════════╝`,
-    `Topic identified: ${brand.topic}`,
+    `Topic: ${brand.topic}`,
     `brandPrimaryColor: ${brand.brandPrimaryColor}  ← use for icons, borders, glows, highlights`,
     `brandSecondaryColor: ${brand.brandSecondaryColor}  ← use for supporting elements`,
     `brandAccentColor: ${brand.brandAccentColor}  ← use for CTAs, badges, key highlights`,
@@ -721,6 +739,9 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           text: (parsed.text ?? input.text ?? '').trim(),
           htmlBody: parsed.htmlBody,
           rationale: (parsed.rationale ?? '').trim(),
+          // Return the brand so the caller can cache it on the reel state and
+          // pass it back via existingBrand on subsequent motions.
+          brand: brand ?? undefined,
         };
       }
     } catch (err) {

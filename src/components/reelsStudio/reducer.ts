@@ -250,8 +250,10 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       const nextAnalyses = action.analysis
         ? dedupeAnalysis(state.analyses, action.analysis)
         : state.analyses;
+      // Drop cached brand identity — new script may have a different brand.
+      const { brandIdentity: _, ...stateWithoutBrand } = state;
       return {
-        ...state,
+        ...stateWithoutBrand,
         blocks: action.blocks,
         audio: INITIAL_STATE.audio,
         avatarClips: {},
@@ -325,6 +327,14 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
           return { ...b, transition: action.transition };
         }),
       };
+    }
+
+    case 'set-brand-identity': {
+      if (action.brand === undefined) {
+        const { brandIdentity: _, ...rest } = state;
+        return rest;
+      }
+      return { ...state, brandIdentity: action.brand };
     }
 
     case 'set-voice':

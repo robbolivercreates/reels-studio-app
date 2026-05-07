@@ -16,6 +16,10 @@ import type { ScriptBlock } from './types';
 
 interface Props {
   block: ScriptBlock;
+  /** Cached brand identity from the reel; reused so motions stay visually consistent. */
+  brandIdentity?: Record<string, unknown>;
+  /** Called when generation produced a new brand (first motion of the reel). */
+  onBrandLearned?: (brand: Record<string, unknown>) => void;
   onClose: () => void;
   onSave: (motion: MotionConfig | undefined) => void;
 }
@@ -35,7 +39,7 @@ const deriveDefaultText = (blockText: string): string => {
   return sentence.slice(0, 60).split(' ').slice(0, -1).join(' ') + '…';
 };
 
-export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) => {
+export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBrandLearned, onClose, onSave }) => {
   // Existing motion or fresh draft.
   const initial: MotionConfig = useMemo(() => block.motion ?? {
     id: newMotionId(),
@@ -97,7 +101,12 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
         durationSec: motion.durationSec,
         compositionId: motion.id,
         motionLayer: motion.layer,
+        existingBrand: brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
       });
+      // First motion of the reel? Cache the brand so subsequent motions reuse it.
+      if (result.brand && !brandIdentity && onBrandLearned) {
+        onBrandLearned(result.brand as unknown as Record<string, unknown>);
+      }
       setRationale(result.rationale);
       setMotion(m => ({
         ...m,

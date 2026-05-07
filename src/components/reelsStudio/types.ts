@@ -206,6 +206,14 @@ export interface ReelsState {
   emotion: ReelEmotion;
   /** Voice pacing multiplier 0.85..1.2 (Minimax `speed`). 1.0 = normal. */
   voiceSpeed: number;
+  /**
+   * Cached brand identity for the reel. Set once when the FIRST motion is
+   * generated (via Gemini Google Search grounding). All subsequent motions in
+   * this reel reuse it so the visual identity stays consistent across blocks.
+   * Cleared when blocks are replaced (replace-blocks action).
+   * Stored as Record<string, unknown> to avoid circular import with the service.
+   */
+  brandIdentity?: Record<string, unknown>;
 }
 
 export type ReelsAction =
@@ -217,6 +225,7 @@ export type ReelsAction =
   | { type: 'move-block'; id: string; direction: 'up' | 'down' }
   | { type: 'reorder-blocks'; orderedIds: string[] }
   | { type: 'set-block-transition'; id: string; transition: BlockTransition }
+  | { type: 'set-brand-identity'; brand: Record<string, unknown> | undefined }
   | { type: 'replace-blocks'; blocks: ScriptBlock[]; analysis?: PersistedAnalysis }
   | { type: 'remove-analysis'; createdAt: number }
   | { type: 'set-avatar-visible-sec'; id: string; sec: number | undefined }
