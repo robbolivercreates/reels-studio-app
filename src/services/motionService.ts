@@ -241,8 +241,6 @@ I) BEFORE/AFTER MORPH — split screen with motion
    - 0 words required; the contrast tells the story
 
 REMEMBER: pick ONE primary technique per composition. Combine with H (particles) for richness. Keep it CLEAN.
-  - Animated underline that draws itself (brandPrimaryColor, 6px thick)
-  - Optional: floating particles (technique G)
 
 ════════════════════════════════════════
  TECHNICAL REQUIREMENTS
@@ -264,9 +262,9 @@ REMEMBER: pick ONE primary technique per composition. Combine with H (particles)
  OUTPUT
 ════════════════════════════════════════
 - "intent": pt-BR, one sentence: "[BLOCK_TYPE]: [what visual you built and why]"
-- "text": the punchy on-screen headline, max 6 words, pulled from block text
+- "text": empty string by default. Only fill if you genuinely need an on-screen word/phrase, max 3 words. PREFER EMPTY.
 - "htmlBody": full HTML content (elements + script)
-- "rationale": 1-2 sentences pt-BR explaining the brand colors used and animation choice
+- "rationale": 1-2 sentences pt-BR explaining the visual choice (what verb you animated and how)
 
 Override intent/text if user provided manual values.`.trim();
 
