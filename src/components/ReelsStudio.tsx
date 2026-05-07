@@ -636,22 +636,42 @@ export const ReelsStudio: React.FC = () => {
         try { el.currentTime = 0; } catch { /* ignore */ }
         setPlayhead(0);
       }
+      let audioPlayConfirmed = false;
+      let switchedToWalltime = false;
+      const playStartedAt = performance.now();
       const playPromise = el.play();
       if (playPromise && typeof playPromise.then === 'function') {
-        playPromise.then(() => console.log('[reels/play] audio playing'))
-          .catch((err) => {
-            console.warn('[reels/play] audio.play() failed, falling back to walltime:', err);
-            // If raf is already running, keep it. Otherwise start walltime.
-            if (rafRef.current == null) startWalltimeMode();
-          });
+        playPromise.then(() => {
+          audioPlayConfirmed = true;
+          console.log('[reels/play] audio playing');
+        }).catch((err) => {
+          console.warn('[reels/play] audio.play() failed, falling back to walltime:', err);
+          if (!switchedToWalltime) {
+            switchedToWalltime = true;
+            if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+            startWalltimeMode();
+          }
+        });
+      } else {
+        // Sync return — older WebKit. Assume it started.
+        audioPlayConfirmed = true;
       }
 
       const tick = () => {
-        if (cancelled) return;
+        if (cancelled || switchedToWalltime) return;
         const a = audioElRef.current;
         if (!a) return;
         if (a.ended) {
           setPlaying(false);
+          return;
+        }
+        // Detection: if 500ms passed since play() and currentTime is still 0
+        // (or hasn't advanced), the browser silently rejected playback.
+        // Switch to walltime mode so the user still sees the playhead move.
+        if (!audioPlayConfirmed && performance.now() - playStartedAt > 500 && a.currentTime < 0.05) {
+          console.warn('[reels/play] audio currentTime not advancing — falling back to walltime');
+          switchedToWalltime = true;
+          startWalltimeMode();
           return;
         }
         let t = a.currentTime;
