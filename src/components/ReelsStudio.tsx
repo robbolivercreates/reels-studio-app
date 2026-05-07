@@ -1852,16 +1852,57 @@ export const ReelsStudio: React.FC = () => {
             })()}
           </div>
 
-          {/* Avatar track */}
-          <div className="relative h-14 mb-1.5 rounded-md bg-amber-500/[0.03] border border-amber-500/15 overflow-hidden">
-            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-amber-300/60 font-semibold pointer-events-none z-10">Avatar</div>
-            {blocks.filter(b => b.kind === 'avatar').map(b => {
+          {/* Unified content track — avatar + broll blocks share one row in source-time order */}
+          <div className="relative h-14 mb-1.5 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
+            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-zinc-400/70 font-semibold pointer-events-none z-10 flex items-center gap-1.5">
+              Conteúdo
+              {activeTake && (
+                <>
+                  <span className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-200 normal-case font-normal">{activeTake.name}</span>
+                  {activeTake.cutSilence && activeTake.detectedSilenceSec > 0.1 && (
+                    <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-200 normal-case font-normal" title={`${activeTake.detectedSilenceSec.toFixed(1)}s de silêncio cortado`}>
+                      ✂ −{activeTake.detectedSilenceSec.toFixed(1)}s
+                    </span>
+                  )}
+                </>
+              )}
+            </div>
+            {blocks.map(b => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
               const left = viewPct(slot.projectStart);
               const width = Math.max(0, viewPct(slot.projectEnd) - left);
+              const isDraggingThis = draggingBlockId === b.id;
               const isHovered = hoveredId === b.id;
-              const cost = (slot.projectEnd - slot.projectStart) * PRICE_PER_AVATAR_SECOND;
+              const blockLen = b.end - b.start;
+
+              if (b.kind === 'broll') {
+                return (
+                  <div
+                    key={b.id}
+                    data-no-scrub="true"
+                    onMouseEnter={() => setHoveredId(b.id)}
+                    onMouseLeave={() => setHoveredId(null)}
+                    onPointerDown={handleBlockPointerDown(b.id)}
+                    className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b from-emerald-400/70 to-emerald-600/80 border border-emerald-300/40 shadow-[0_2px_8px_rgba(16,185,129,0.2)] cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-transform overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : ''}`}
+                    style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}
+                  >
+                    <div className="px-2 py-1.5 flex items-center gap-1">
+                      <svg className="w-3 h-3 text-emerald-50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <rect x="3" y="5" width="18" height="14" rx="2" />
+                        <path d="M8 21h8" strokeLinecap="round" />
+                      </svg>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-semibold text-emerald-50 truncate">B-roll</div>
+                        <div className="text-[9px] font-mono text-emerald-100/70">{blockLen.toFixed(1)}s</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              }
+
+              // Avatar block
+              const cost = blockLen * PRICE_PER_AVATAR_SECOND;
               const clip = state.avatarClips[b.id];
               const status = clip?.status ?? 'idle';
               const isGenerating = status === 'queued' || status === 'uploading' || status === 'submitting' || status === 'rendering';
@@ -1871,24 +1912,22 @@ export const ReelsStudio: React.FC = () => {
               const tone = isError
                 ? 'from-red-400/80 to-red-600/90 border-red-300/40'
                 : isReady
-                ? 'from-emerald-400/80 to-emerald-600/90 border-emerald-300/40 ring-1 ring-emerald-300/30'
+                ? 'from-amber-400/85 to-amber-600/95 border-amber-300/40 ring-1 ring-amber-300/30'
                 : isGenerating
                 ? 'from-violet-400/80 to-violet-600/90 border-violet-300/40'
-                : 'from-amber-400/80 to-amber-600/90 border-amber-300/40';
+                : 'from-amber-400/70 to-amber-600/80 border-amber-300/40';
 
               const statusLabel = status === 'queued'      ? 'na fila'
                                 : status === 'uploading'   ? 'enviando'
                                 : status === 'submitting'  ? 'submetendo'
                                 : status === 'rendering'   ? (clip?.message ?? 'renderizando')
-                                : status === 'ready'       ? '✓ pronto'
+                                : status === 'ready'       ? '✓'
                                 : status === 'error'       ? 'erro'
                                 : null;
 
-              const blockLen = b.end - b.start;
               const visibleSec = b.avatarVisibleSec ?? blockLen;
               const isPartial = visibleSec < blockLen - 0.05;
 
-              const isDraggingThis = draggingBlockId === b.id;
               return (
                 <div
                   key={b.id}
@@ -1897,12 +1936,9 @@ export const ReelsStudio: React.FC = () => {
                   onMouseLeave={() => setHoveredId(null)}
                   onPointerDown={handleBlockPointerDown(b.id)}
                   className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b ${tone} border cursor-grab active:cursor-grabbing transition-all overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : isHovered ? '-translate-y-0.5 shadow-[0_8px_24px_rgba(245,158,11,0.4)] z-10' : 'shadow-[0_2px_8px_rgba(245,158,11,0.2)]'}`}
-                  style={{
-                    left: `${left}%`,
-                    width: `${Math.max(width, 0.5)}%`,
-                  }}
+                  style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}
                 >
-                  {/* Visual indicator: when avatar is partially visible, show a divider showing where B-roll takes over */}
+                  {/* When avatar is partially visible, divider shows where B-roll takes over */}
                   {isPartial && (
                     <div
                       className="absolute top-0 bottom-0 border-r-2 border-dashed border-emerald-300/70 pointer-events-none"
@@ -1911,14 +1947,19 @@ export const ReelsStudio: React.FC = () => {
                       <div className="absolute right-0 top-0 bottom-0 left-0 bg-emerald-500/15"></div>
                     </div>
                   )}
-                  <div className="px-2 py-1.5 truncate relative z-10">
-                    <div className="text-[10px] font-semibold text-white truncate">{b.text.slice(0, 30) || '(vazio)'}</div>
-                    <div className="text-[9px] font-mono text-white/80 flex items-center justify-between gap-1">
-                      <span>
-                        {blockLen.toFixed(1)}s
-                        {isPartial && <span className="text-emerald-200 ml-1">· avatar {visibleSec.toFixed(1)}s</span>}
-                      </span>
-                      {statusLabel && <span className="truncate">{statusLabel}</span>}
+                  <div className="px-2 py-1.5 truncate relative z-10 flex items-start gap-1">
+                    <svg className="w-3 h-3 text-white/80 shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                    </svg>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[10px] font-semibold text-white truncate">{b.text.slice(0, 30) || '(vazio)'}</div>
+                      <div className="text-[9px] font-mono text-white/80 flex items-center justify-between gap-1">
+                        <span>
+                          {blockLen.toFixed(1)}s
+                          {isPartial && <span className="text-emerald-200 ml-1">· {visibleSec.toFixed(1)}s</span>}
+                        </span>
+                        {statusLabel && <span className="truncate">{statusLabel}</span>}
+                      </div>
                     </div>
                   </div>
                   {isGenerating && (
@@ -1927,10 +1968,7 @@ export const ReelsStudio: React.FC = () => {
                   {isReady && clip?.videoUrl && (
                     <div className="absolute top-1 right-1 flex items-center gap-1 z-20" onPointerDown={(e) => e.stopPropagation()}>
                       <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          window.open(clip.videoUrl, '_blank', 'noopener,noreferrer');
-                        }}
+                        onClick={(e) => { e.stopPropagation(); window.open(clip.videoUrl, '_blank', 'noopener,noreferrer'); }}
                         className="w-5 h-5 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur flex items-center justify-center text-white transition-all hover:scale-110"
                         title="Abrir em nova aba"
                       >
@@ -1969,14 +2007,14 @@ export const ReelsStudio: React.FC = () => {
                   {b.dirty && <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-200" title="Texto alterado · regenere o áudio"></div>}
                   {isHovered && (
                     <div className="absolute -top-9 left-1/2 -translate-x-1/2 px-2 py-1 rounded-md bg-zinc-900 border border-amber-500/30 text-[10px] text-amber-200 whitespace-nowrap shadow-2xl z-20">
-                      {(b.end - b.start).toFixed(1)}s · ${cost.toFixed(2)}{isError && clip?.error ? ` · ${clip.error.slice(0, 40)}` : ''}
+                      {blockLen.toFixed(1)}s · ${cost.toFixed(2)}{isError && clip?.error ? ` · ${clip.error.slice(0, 40)}` : ''}
                     </div>
                   )}
                 </div>
               );
             })}
 
-            {/* Transition junction markers — one between each pair of consecutive blocks */}
+            {/* Transition junction markers — between each pair of consecutive blocks (any kind) */}
             {!draggingBlockId && blocks.slice(0, -1).map((b, i) => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
@@ -1996,51 +2034,6 @@ export const ReelsStudio: React.FC = () => {
                 >
                   {icon}
                 </button>
-              );
-            })}
-          </div>
-
-          {/* Screen track */}
-          <div className="relative h-12 mb-1.5 rounded-md bg-emerald-500/[0.03] border border-emerald-500/15 overflow-hidden">
-            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-emerald-300/60 font-semibold pointer-events-none z-10 flex items-center gap-1.5">
-              Screen
-              {activeTake && (
-                <>
-                  <span className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-200 normal-case font-normal">{activeTake.name}</span>
-                  {activeTake.cutSilence && activeTake.detectedSilenceSec > 0.1 && (
-                    <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-200 normal-case font-normal" title={`${activeTake.detectedSilenceSec.toFixed(1)}s de silêncio cortado`}>
-                      ✂ −{activeTake.detectedSilenceSec.toFixed(1)}s
-                    </span>
-                  )}
-                </>
-              )}
-            </div>
-            {blocks.filter(b => b.kind === 'avatar').map(b => {
-              const slot = slotById.get(b.id);
-              if (!slot) return null;
-              const left = viewPct(slot.projectStart);
-              const width = Math.max(0, viewPct(slot.projectEnd) - left);
-              return <div key={`gap-${b.id}`} className="absolute top-0 bottom-0 opacity-50" style={{ left: `${left}%`, width: `${width}%`, backgroundImage: 'repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,0.04) 4px 8px)' }}></div>;
-            })}
-            {blocks.filter(b => b.kind === 'broll').map(b => {
-              const slot = slotById.get(b.id);
-              if (!slot) return null;
-              const left = viewPct(slot.projectStart);
-              const width = Math.max(0, viewPct(slot.projectEnd) - left);
-              const isDraggingThis = draggingBlockId === b.id;
-              return (
-                <div
-                  key={b.id}
-                  data-no-scrub="true"
-                  onPointerDown={handleBlockPointerDown(b.id)}
-                  className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b from-emerald-400/70 to-emerald-600/80 border border-emerald-300/40 shadow-[0_2px_8px_rgba(16,185,129,0.2)] cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-transform overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E]' : ''}`}
-                  style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}
-                >
-                  <div className="px-2 py-1.5">
-                    <div className="text-[10px] font-semibold text-emerald-50">B-roll</div>
-                    <div className="text-[9px] font-mono text-emerald-100/70">{(slot.projectEnd - slot.projectStart).toFixed(1)}s</div>
-                  </div>
-                </div>
               );
             })}
           </div>
