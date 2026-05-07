@@ -30,6 +30,20 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   const [quality, setQuality] = useState<'high' | 'lite'>('high');
   const [progress, setProgress] = useState<RenderProgress | null>(null);
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
+  const [resultUrl, setResultUrl] = useState<string | null>(null);
+
+  // Build a single object URL for the result blob and reuse it across preview +
+  // download. Revoke only when the blob changes or the modal closes — never
+  // during an active download (was causing 'object can not be found here').
+  useEffect(() => {
+    if (!resultBlob) {
+      setResultUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(resultBlob);
+    setResultUrl(url);
+    return () => { URL.revokeObjectURL(url); };
+  }, [resultBlob]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [capabilityChecked, setCapabilityChecked] = useState(false);
   const [unsupportedReason, setUnsupportedReason] = useState<string | null>(null);
@@ -156,15 +170,15 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   };
 
   const downloadResult = () => {
-    if (!resultBlob) return;
-    const url = URL.createObjectURL(resultBlob);
+    if (!resultBlob || !resultUrl) return;
     const a = document.createElement('a');
-    a.href = url;
+    a.href = resultUrl;
     a.download = `${state.projectName.replace(/[^\w-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.mp4`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Don't revoke — the URL stays valid until the blob changes or the modal
+    // closes (handled by the useEffect cleanup above).
   };
 
   const shareResult = async () => {
@@ -346,12 +360,14 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
             <div className="text-xs text-zinc-500">{formatBytes(resultBlob.size)} · {formatTime(state.audio.duration)} · {state.aspect}</div>
           </div>
 
-          <video
-            src={URL.createObjectURL(resultBlob)}
-            controls
-            playsInline
-            className="w-full aspect-[9/16] bg-black object-contain"
-          />
+          {resultUrl && (
+            <video
+              src={resultUrl}
+              controls
+              playsInline
+              className="w-full aspect-[9/16] bg-black object-contain"
+            />
+          )}
 
           <div className="px-6 py-4 flex gap-2 border-t border-white/5">
             <button onClick={shareResult} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors flex items-center justify-center gap-2">
