@@ -157,10 +157,16 @@ You will receive a BRAND IDENTITY section with EXACT hex values. ONLY use those 
 - The STYLE PRESET below uses placeholders ("brandPrimaryColor", etc.) — REPLACE every placeholder with the EXACT hex from BRAND IDENTITY. Preset never overrides brand colors.
 
 HARD COLOR BANS (apply UNLESS the brand's primary color demonstrably IS that color):
-- NO purple/violet/indigo: #4c1d95, #5b21b6, #6d28d9, #7c3aed, #8b5cf6, #a855f7, #9333ea, #c084fc, #1e1b4b, #2e1065
-- NO magenta/fuchsia/pink: #d946ef, #ec4899, #f472b6, #c026d3, #db2777
+- NO purple / violet / indigo / LILAC / LAVENDER in ANY shade — vibrant or pastel:
+  vibrant:  #4c1d95, #5b21b6, #6d28d9, #7c3aed, #8b5cf6, #a855f7, #9333ea, #c084fc, #1e1b4b, #2e1065
+  pastel:   #ddd6fe, #e9d5ff, #f3e8ff, #ede9fe, #c4b5fd, #b8a4d4, #dda0dd (these are forbidden too — pastel lilac is still purple)
+- NO magenta / fuchsia / pink / ROSE in ANY shade:
+  vibrant:  #d946ef, #ec4899, #f472b6, #c026d3, #db2777
+  pastel:   #fbcfe8, #fce7f3, #fdf2f8, #f9a8d4 (pastel pink is still pink)
 - NO deep-purple gradients (e.g. #1E1B4B → #4C1D95) as default
 - NO generic blue: #0000ff, #3b82f6, #60a5fa, #2563eb, #1d4ed8
+
+Any color whose HUE (HSL) falls between 250-345 degrees is suspect — that's the entire purple-to-pink band including all lilac/lavender/rose shades. Use it ONLY if the brand's identity explicitly uses it.
 
 A forbidden color is ONLY allowed if BOTH (a) it appears explicitly in the BRAND IDENTITY section, AND (b) the topic is famous for that color (Twitch=purple, Instagram=pink/magenta gradient, Figma=multi-color, Discord=blurple).
 
@@ -324,12 +330,15 @@ SEARCH STRATEGY:
 2. Search for "[subject] brand colors hex code", "[subject] visual identity", "[subject] logo colors"
 3. Return the REAL colors — not generic ones. If the block mentions Claude AI → search "Anthropic Claude brand colors" → it's #DE7356 peach/terracotta primary, #1a1a2e dark bg, #f5f0eb text — NOT purple, NOT blue, NOT violet. If it mentions Canva → #00C4CC teal + #7D2AE7 purple. If it mentions ChatGPT → #10A37F green. If it mentions Instagram → gradient orange/pink/purple.
 
-For generic concepts (productivity, automation, marketing, etc.) choose the dominant color culture:
+For generic concepts (productivity, automation, marketing, etc.) choose a dominant color culture — but DO NOT default to purple/pink/violet/lilac/lavender unless the brand IS that color:
 - AI/Tech generic → deep navy #0f0f23 bg, electric cyan #00d4ff accent
 - Finance/Money → dark green #0a2e1a bg, gold #f59e0b accent
 - Health/Wellness → dark teal #0a1f1a bg, soft green #4ade80 accent
-- Creative/Design → deep purple #1a0a2e bg, hot pink #f72585 accent
+- Creative/Design → charcoal #1a1a1a bg, warm orange #f97316 OR amber #f59e0b accent (NEVER purple, NEVER pink, NEVER lilac)
 - Business/Corporate → charcoal #1a1a1a bg, steel blue #3b82f6 accent (ONLY for corporate topics)
+- Generic/unknown → black #000000 bg, white #ffffff text, amber #f59e0b OR cyan #00d4ff accent
+
+ABSOLUTE BAN: even if the topic feels "creative" or "design-y", DO NOT return purple, pink, magenta, fuchsia, lilac, lavender, violet, indigo for brandPrimaryColor or brandAccentColor unless the actual brand uses that color. When in doubt, use orange, amber, cyan, green, or pure white.
 
 Return ONLY this JSON (no markdown, no explanation):
 {
@@ -350,19 +359,67 @@ CRITICAL RULES:
 - Do NOT default to blue (#3b82f6, #60a5fa) unless the brand actually IS blue
 - logoSvg must use inline shapes only — no external hrefs, no images, no text elements`;
 
-// Hex shades to be wary of — only allowed if the topic is a brand famous for them.
-const BANNED_HEX_RANGES: Array<{ pattern: RegExp; allowedTopicsRegex: RegExp; label: string }> = [
-  { pattern: /^#(7c3aed|8b5cf6|a855f7|9333ea|6d28d9|5b21b6|4c1d95|c084fc|1e1b4b|2e1065)/i, allowedTopicsRegex: /(twitch|figma|discord|yahoo|roxo|purple|violet)/i, label: 'purple' },
-  { pattern: /^#(d946ef|ec4899|f472b6|c026d3|db2777|be185d|9d174d)/i, allowedTopicsRegex: /(instagram|barbie|pink|magenta|fuchsia|rosa)/i, label: 'magenta/pink' },
-  { pattern: /^#(3b82f6|60a5fa|2563eb|1d4ed8|1e40af)/i, allowedTopicsRegex: /(facebook|twitter|linkedin|paypal|samsung|dell|ibm|intel|chase|visa|ford|wal\s?mart|blue|azul)/i, label: 'generic blue' },
-];
-
-const isBannedColor = (hex: string, topic: string): { banned: boolean; label: string } => {
-  if (!hex) return { banned: false, label: '' };
-  for (const ban of BANNED_HEX_RANGES) {
-    if (ban.pattern.test(hex) && !ban.allowedTopicsRegex.test(topic)) {
-      return { banned: true, label: ban.label };
+// Convert hex (#rrggbb or #rgb) to HSL. Returns null if invalid.
+const hexToHsl = (hex: string): { h: number; s: number; l: number } | null => {
+  if (!hex) return null;
+  let m = hex.trim().match(/^#?([0-9a-f]{6})$/i);
+  if (!m) {
+    // try #rgb shorthand
+    const sm = hex.trim().match(/^#?([0-9a-f]{3})$/i);
+    if (!sm) return null;
+    const [r, g, b] = sm[1].split('').map(c => parseInt(c + c, 16));
+    m = [hex, [r, g, b].map(n => n.toString(16).padStart(2, '0')).join('')] as RegExpMatchArray;
+  }
+  const r = parseInt(m[1].slice(0, 2), 16) / 255;
+  const g = parseInt(m[1].slice(2, 4), 16) / 255;
+  const b = parseInt(m[1].slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  let h = 0;
+  let s = 0;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = ((g - b) / d + (g < b ? 6 : 0)) * 60; break;
+      case g: h = ((b - r) / d + 2) * 60; break;
+      case b: h = ((r - g) / d + 4) * 60; break;
     }
+  }
+  return { h, s, l };
+};
+
+// Allowed-topic guards — bans only apply when topic is NOT one of these.
+const PURPLE_TOPICS = /(twitch|figma|discord|yahoo|roxo|purple|violet|lavender|lilás|lilac)/i;
+const PINK_TOPICS = /(instagram|barbie|pink|magenta|fuchsia|rosa|lipstick|valentine)/i;
+const BLUE_TOPICS = /(facebook|twitter|linkedin|paypal|samsung|dell|ibm|intel|chase|visa|ford|walmart|wal\s?mart|blue|azul)/i;
+
+// Detect whether a hex falls into the banned color space (purple/violet/lilac/pink/magenta/generic-blue).
+// Uses HSL hue ranges so all shades (vibrant + pastel + lilac + lavender) are caught.
+const isBannedColor = (hex: string, topic: string): { banned: boolean; label: string } => {
+  const hsl = hexToHsl(hex);
+  if (!hsl) return { banned: false, label: '' };
+  const { h, s, l } = hsl;
+  // Ignore near-greys/neutrals — they're never a "color" decision.
+  if (s < 0.12) return { banned: false, label: '' };
+  // Ignore very dark colors (likely background, hue is irrelevant there).
+  if (l < 0.08) return { banned: false, label: '' };
+
+  // PURPLE/VIOLET/INDIGO/LILAC/LAVENDER: hue 250-295
+  // Includes vibrant violets (h~270, s>0.5) AND pastel lilacs (h~280, s~0.3, l~0.8)
+  if (h >= 250 && h <= 295 && !PURPLE_TOPICS.test(topic)) {
+    return { banned: true, label: 'purple/lilac' };
+  }
+  // MAGENTA/FUCHSIA/PINK/ROSE: hue 295-345 (wraps slightly toward red)
+  // Includes hot pink (h~330, s>0.7) AND pastel rose (h~340, s~0.4, l~0.85)
+  if (h >= 295 && h <= 345 && !PINK_TOPICS.test(topic)) {
+    return { banned: true, label: 'pink/magenta' };
+  }
+  // GENERIC BLUE (medium-saturated, not navy): hue 200-240, s>0.4, l>0.4
+  // Don't ban dark navy bg colors (l<0.2) since those can legitimately be backgrounds.
+  if (h >= 200 && h <= 240 && s > 0.4 && l > 0.4 && !BLUE_TOPICS.test(topic)) {
+    return { banned: true, label: 'generic blue' };
   }
   return { banned: false, label: '' };
 };
