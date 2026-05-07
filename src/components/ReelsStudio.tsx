@@ -585,67 +585,88 @@ export const ReelsStudio: React.FC = () => {
   }, [state.audio.silenceCut, state.audio.keepSegments, layout, totalDuration]);
 
   useEffect(() => {
-    const el = audioElRef.current;
-    if (!el) return;
     if (!playing) {
-      el.pause();
+      const el = audioElRef.current;
+      if (el) el.pause();
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       return;
     }
 
-    // If the playhead is at (or past) the end, rewind before playing — otherwise
-    // the tick below would immediately fire `t >= total` and stop play instantly.
-    if (el.currentTime >= totalDurationRef.current - 0.05) {
-      try { el.currentTime = 0; } catch { /* ignore */ }
+    const el = audioElRef.current;
+    const hasAudio = !!el && state.audio.status === 'ready' && !!state.audio.url;
+
+    if (hasAudio && el) {
+      // ─── AUDIO MODE: audio is the clock, playhead reads from el.currentTime ───
+      if (el.currentTime >= totalDurationRef.current - 0.05) {
+        try { el.currentTime = 0; } catch { /* ignore */ }
+        setPlayhead(0);
+      }
+      el.play().catch(() => setPlaying(false));
+
+      const tick = () => {
+        const a = audioElRef.current;
+        if (!a) return;
+        if (a.ended) {
+          setPlaying(false);
+          return;
+        }
+        let t = a.currentTime;
+        const total = totalDurationRef.current;
+        if (t >= total) {
+          setPlayhead(total);
+          setPlaying(false);
+          return;
+        }
+        if (silenceCutRef.current && keepSegmentsRef.current.length > 0) {
+          const segs = keepSegmentsRef.current;
+          const inside = segs.find(s => t >= s.start && t < s.end);
+          if (!inside) {
+            const next = segs.find(s => s.start > t);
+            if (next) {
+              try { a.currentTime = next.start; t = next.start; } catch { /* ignore */ }
+            } else {
+              setPlayhead(total);
+              setPlaying(false);
+              return;
+            }
+          }
+        }
+        setPlayhead(t);
+        rafRef.current = requestAnimationFrame(tick);
+      };
+      rafRef.current = requestAnimationFrame(tick);
+      return () => {
+        if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+      };
+    }
+
+    // ─── NO-AUDIO MODE: walltime is the clock, playhead advances by elapsed seconds ───
+    let startWall = performance.now();
+    let startPlayhead = playhead;
+    if (startPlayhead >= totalDurationRef.current - 0.05) {
+      // Rewind to 0 so play from the end starts over.
+      startPlayhead = 0;
       setPlayhead(0);
     }
 
-    // Audio is the source of truth — we only read its currentTime each frame
-    // and use it as the playhead. We never force-seek during normal playback;
-    // the only time we seek is when entering a silent region we should skip.
-    el.play().catch(() => setPlaying(false));
-
-    const tick = () => {
-      const a = audioElRef.current;
-      if (!a) return;
-      if (a.ended) {
-        setPlaying(false);
-        return;
-      }
-      let t = a.currentTime;
+    const tickNoAudio = () => {
       const total = totalDurationRef.current;
+      const elapsed = (performance.now() - startWall) / 1000;
+      const t = startPlayhead + elapsed;
       if (t >= total) {
         setPlayhead(total);
         setPlaying(false);
         return;
       }
-
-      // Skip silent regions when silence cut is on.
-      if (silenceCutRef.current && keepSegmentsRef.current.length > 0) {
-        const segs = keepSegmentsRef.current;
-        const inside = segs.find(s => t >= s.start && t < s.end);
-        if (!inside) {
-          const next = segs.find(s => s.start > t);
-          if (next) {
-            try { a.currentTime = next.start; t = next.start; } catch { /* ignore */ }
-          } else {
-            setPlayhead(total);
-            setPlaying(false);
-            return;
-          }
-        }
-      }
-
       setPlayhead(t);
-      rafRef.current = requestAnimationFrame(tick);
+      rafRef.current = requestAnimationFrame(tickNoAudio);
     };
-
-    rafRef.current = requestAnimationFrame(tick);
+    rafRef.current = requestAnimationFrame(tickNoAudio);
     return () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
+  }, [playing, state.audio.status, state.audio.url]);
 
   const seekTo = (t: number) => {
     const clamped = Math.max(0, Math.min(totalDuration, t));
@@ -856,9 +877,8 @@ export const ReelsStudio: React.FC = () => {
 
       if (inEditable) return;
 
-      // Space — play/pause (only when audio is ready).
+      // Space — play/pause (works with or without audio).
       if (e.code === 'Space') {
-        if (!r.audioReady) return;
         e.preventDefault();
         setPlaying(p => !p);
         return;
@@ -1273,10 +1293,9 @@ export const ReelsStudio: React.FC = () => {
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
             </button>
             <button
-              disabled={audio.status !== 'ready'}
               onClick={() => setPlaying(p => !p)}
-              className="w-12 h-12 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-2xl disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
-              title={audio.status === 'ready' ? (playing ? 'Pausar (Space)' : 'Tocar (Space)') : 'Gere o áudio primeiro'}
+              className="w-12 h-12 rounded-full bg-white text-black flex items-center justify-center hover:scale-105 active:scale-95 transition-transform shadow-2xl"
+              title={playing ? 'Pausar (Space)' : 'Tocar (Space)'}
             >
               {playing ? <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 4h4v16H6zM14 4h4v16h-4z"/></svg>
                        : <svg className="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>}
@@ -1804,7 +1823,8 @@ export const ReelsStudio: React.FC = () => {
 
         {/* Tracks */}
         <div ref={timelineRef} className="relative flex-1 px-2 py-2 cursor-pointer overflow-hidden" onPointerDown={handleTimelinePointerDown}>
-          {/* Audio waveform */}
+          {/* Audio waveform — only shown when audio exists OR is being generated. */}
+          {(audio.status === 'ready' || audio.status === 'generating') && (
           <div className={`relative h-12 mb-1.5 rounded-md bg-cyan-500/[0.04] border border-cyan-500/20 overflow-hidden ${audio.status === 'generating' ? 'animate-pulse' : ''}`}>
             <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-cyan-300/60 font-semibold pointer-events-none z-10">Audio</div>
             <div className="absolute inset-0 flex items-center px-2 pl-12">
@@ -1881,6 +1901,7 @@ export const ReelsStudio: React.FC = () => {
               });
             })()}
           </div>
+          )}
 
           {/* Unified content track — avatar + broll blocks share one row in source-time order */}
           <div className="relative h-14 mb-1.5 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
