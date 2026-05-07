@@ -600,16 +600,54 @@ export const ReelsStudio: React.FC = () => {
 
     const el = audioElRef.current;
     const hasAudio = audioReadyRef.current && !!el;
+    console.log('[reels/play] starting · hasAudio=', hasAudio, '· status=', state.audio.status, '· hasEl=', !!el, '· hasUrl=', !!state.audio.url);
+
+    let cancelled = false;
+
+    // Walltime fallback — used when no audio OR when audio.play() fails.
+    const startWalltimeMode = () => {
+      if (cancelled) return;
+      console.log('[reels/play] using walltime mode');
+      let startWall = performance.now();
+      let startPlayhead = playhead;
+      if (startPlayhead >= totalDurationRef.current - 0.05) {
+        startPlayhead = 0;
+        setPlayhead(0);
+      }
+      const tickNoAudio = () => {
+        if (cancelled) return;
+        const total = totalDurationRef.current;
+        const elapsed = (performance.now() - startWall) / 1000;
+        const t = startPlayhead + elapsed;
+        if (t >= total) {
+          setPlayhead(total);
+          setPlaying(false);
+          return;
+        }
+        setPlayhead(t);
+        rafRef.current = requestAnimationFrame(tickNoAudio);
+      };
+      rafRef.current = requestAnimationFrame(tickNoAudio);
+    };
 
     if (hasAudio && el) {
-      // ─── AUDIO MODE: audio is the clock, playhead reads from el.currentTime ───
+      // ─── AUDIO MODE ───
       if (el.currentTime >= totalDurationRef.current - 0.05) {
         try { el.currentTime = 0; } catch { /* ignore */ }
         setPlayhead(0);
       }
-      el.play().catch(() => setPlaying(false));
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.then === 'function') {
+        playPromise.then(() => console.log('[reels/play] audio playing'))
+          .catch((err) => {
+            console.warn('[reels/play] audio.play() failed, falling back to walltime:', err);
+            // If raf is already running, keep it. Otherwise start walltime.
+            if (rafRef.current == null) startWalltimeMode();
+          });
+      }
 
       const tick = () => {
+        if (cancelled) return;
         const a = audioElRef.current;
         if (!a) return;
         if (a.ended) {
@@ -642,33 +680,15 @@ export const ReelsStudio: React.FC = () => {
       };
       rafRef.current = requestAnimationFrame(tick);
       return () => {
+        cancelled = true;
         if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
       };
     }
 
-    // ─── NO-AUDIO MODE: walltime is the clock, playhead advances by elapsed seconds ───
-    let startWall = performance.now();
-    let startPlayhead = playhead;
-    if (startPlayhead >= totalDurationRef.current - 0.05) {
-      // Rewind to 0 so play from the end starts over.
-      startPlayhead = 0;
-      setPlayhead(0);
-    }
-
-    const tickNoAudio = () => {
-      const total = totalDurationRef.current;
-      const elapsed = (performance.now() - startWall) / 1000;
-      const t = startPlayhead + elapsed;
-      if (t >= total) {
-        setPlayhead(total);
-        setPlaying(false);
-        return;
-      }
-      setPlayhead(t);
-      rafRef.current = requestAnimationFrame(tickNoAudio);
-    };
-    rafRef.current = requestAnimationFrame(tickNoAudio);
+    // ─── NO-AUDIO MODE ───
+    startWalltimeMode();
     return () => {
+      cancelled = true;
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
