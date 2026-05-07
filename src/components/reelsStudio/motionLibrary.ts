@@ -69,12 +69,15 @@ const deriveHeadline = (text: string): string => {
 };
 
 /** Build a fresh MotionConfig with sensible defaults inferred from the block. */
-export const createMotionFromBlock = (block: { text: string; start: number; end: number }): MotionConfig => {
+export const createMotionFromBlock = (block: { text: string; start: number; end: number; kind?: 'avatar' | 'broll' }): MotionConfig => {
   const blockDur = Math.max(2, Math.min(8, Math.round(block.end - block.start)));
+  // Avatar blocks → split-bottom (50/50 with the avatar). B-roll blocks → replace
+  // (B-roll is full-frame anyway; motion takes over the whole frame).
+  const layer: MotionLayer = block.kind === 'broll' ? 'replace' : 'split-bottom';
   return {
     id: newMotionId(),
     presetId: 'glass-tech',
-    layer: 'split-bottom',
+    layer,
     intent: '',
     text: deriveHeadline(block.text),
     durationSec: blockDur || 4,

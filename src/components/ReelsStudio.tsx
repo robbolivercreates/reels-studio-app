@@ -1169,11 +1169,12 @@ export const ReelsStudio: React.FC = () => {
               </div>
             )}
 
-            {/* Motion overlay — only for split modes (split-bottom / split-top).
-                Overlay and replace are not shown in the live preview to keep it unobstructed. */}
+            {/* Motion overlay — split-bottom/split-top show in their half; replace
+                fills the whole frame. Overlay (screen blend over avatar) is excluded
+                here to keep the avatar preview clean. */}
             {currentBlock?.motion && (() => {
               const motion = currentBlock.motion;
-              if (motion.layer === 'overlay' || motion.layer === 'replace') return null;
+              if (motion.layer === 'overlay') return null;
               const blockSlot = slotById.get(currentBlock.id);
               const blockStart = blockSlot?.projectStart ?? currentBlock.start;
               const elapsedInBlock = Math.max(0, playhead - blockStart);

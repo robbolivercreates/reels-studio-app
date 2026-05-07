@@ -40,7 +40,8 @@ export const MotionPickerModal: React.FC<Props> = ({ block, onClose, onSave }) =
   const initial: MotionConfig = useMemo(() => block.motion ?? {
     id: newMotionId(),
     presetId: 'editorial-clean',
-    layer: 'split-bottom',
+    // Avatar blocks → split-bottom (50/50). B-roll blocks → replace (full-frame).
+    layer: block.kind === 'broll' ? 'replace' : 'split-bottom',
     intent: '',
     text: deriveDefaultText(block.text),
     durationSec: 4,
