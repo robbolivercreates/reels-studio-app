@@ -2099,15 +2099,23 @@ export const ReelsStudio: React.FC = () => {
           {/* Motion track */}
           <div className="relative h-10 mb-1.5 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
             <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-zinc-400/70 font-semibold pointer-events-none z-10">🎨 Motion</div>
-            {blocks.filter(b => !!b.motion).map(b => {
+            {(() => {
+              // Motion plays once and freezes on its last frame, so each motion is
+              // visually active during the ENTIRE block (or until the next block that
+              // also has a motion). Chips are magnetic — they extend up to the next
+              // motion's block start, closing inter-chip gaps.
+              const blocksWithMotion = blocks.filter(b => !!b.motion);
+              return blocksWithMotion.map((b, mIdx) => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
               const motion = b.motion!;
               const motionDur = motion.durationSec ?? 3;
-              const blockDur = slot.projectEnd - slot.projectStart;
-              const useDur = Math.min(motionDur, blockDur);
+              // Right edge: start of next motion-block, or end of current block, whichever is greater.
+              const nextMotionBlock = mIdx < blocksWithMotion.length - 1 ? blocksWithMotion[mIdx + 1] : null;
+              const nextSlot = nextMotionBlock ? slotById.get(nextMotionBlock.id) : null;
+              const rightAt = nextSlot ? nextSlot.projectStart : slot.projectEnd;
               const left = viewPct(slot.projectStart);
-              const width = Math.max(0, viewPct(slot.projectStart + useDur) - left);
+              const width = Math.max(0, viewPct(rightAt) - left);
               const layerLabel = motion.layer === 'overlay' ? 'over' : motion.layer === 'replace' ? 'full' : motion.layer === 'split-bottom' ? 'split↑' : motion.layer === 'split-top' ? 'split↓' : 'over';
               const busyMessage = motionBusyByBlock[b.id];
               const isBusy = !!busyMessage;
@@ -2141,7 +2149,7 @@ export const ReelsStudio: React.FC = () => {
                                 : isDraft       ? 'rascunho'
                                 : layerLabel;
 
-              const titleText = `${motion.presetId} · ${motion.layer} · ${useDur.toFixed(1)}s · ${motion.status}${motion.errorMessage ? ' · ' + motion.errorMessage.slice(0, 60) : ''}`;
+              const titleText = `${motion.presetId} · ${motion.layer} · ${motionDur.toFixed(1)}s · ${motion.status}${motion.errorMessage ? ' · ' + motion.errorMessage.slice(0, 60) : ''}`;
               const showShimmer = isGenerating || isRendering;
 
               return (
@@ -2178,7 +2186,8 @@ export const ReelsStudio: React.FC = () => {
                   )}
                 </div>
               );
-            })}
+              });
+            })()}
           </div>
 
           {/* Captions track */}
