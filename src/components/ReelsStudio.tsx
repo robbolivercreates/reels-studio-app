@@ -196,6 +196,32 @@ export const ReelsStudio: React.FC = () => {
     ? state.audio.keepSegments.reduce((s, k) => s + (k.end - k.start), 0)
     : state.audio.duration;
 
+  // Map a source-time second to an "effective" (silence-cut applied) second.
+  // When silence cut is off OR no segments detected, this is identity.
+  const cutOn = state.audio.silenceCut && state.audio.keepSegments.length > 0;
+  const cutSegments = state.audio.keepSegments;
+  const sourceToEffective = useCallback((sec: number): number => {
+    if (!cutOn) return sec;
+    let acc = 0;
+    for (const k of cutSegments) {
+      if (sec <= k.start) return acc;
+      if (sec < k.end) return acc + (sec - k.start);
+      acc += k.end - k.start;
+    }
+    return acc;
+  }, [cutOn, cutSegments]);
+  const effectiveToSource = useCallback((sec: number): number => {
+    if (!cutOn) return sec;
+    let remaining = sec;
+    for (const k of cutSegments) {
+      const segLen = k.end - k.start;
+      if (remaining <= segLen) return k.start + remaining;
+      remaining -= segLen;
+    }
+    // Past the end → return last segment's end.
+    return cutSegments.length > 0 ? cutSegments[cutSegments.length - 1].end : sec;
+  }, [cutOn, cutSegments]);
+
   // Force re-render every 30s so the relative "saved X ago" label stays fresh.
   const [, forceTick] = useState(0);
   useEffect(() => {
@@ -232,6 +258,15 @@ export const ReelsStudio: React.FC = () => {
   const baseDuration = audio.status === 'ready' ? audio.duration : Math.max(estimateScriptDuration(blocks), 1);
   // totalDuration accounts for offsets; falls back to baseDuration if there's no layout yet.
   const totalDuration = Math.max(layout.totalDuration, baseDuration > 0 ? baseDuration : 1);
+  // Visual denominator for the timeline. When silence cut is on, the timeline
+  // is compressed: gaps disappear and blocks slide together.
+  const viewDuration = cutOn ? audioEffectiveDuration : totalDuration;
+  // Left/width helpers: take a source-time second and return the % position
+  // on the visible (compressed-when-cut) timeline.
+  const viewPct = useCallback((sec: number): number => {
+    const v = sourceToEffective(sec);
+    return (v / Math.max(viewDuration, 0.0001)) * 100;
+  }, [sourceToEffective, viewDuration]);
   const slotById = useMemo(() => {
     const m = new Map<string, typeof layout.slots[number]>();
     for (const s of layout.slots) m.set(s.blockId, s);
@@ -638,7 +673,9 @@ export const ReelsStudio: React.FC = () => {
     const seekToClientX = (clientX: number) => {
       const x = clientX - rect.left;
       const ratio = Math.max(0, Math.min(1, x / rect.width));
-      seekTo(ratio * totalDuration);
+      const effectiveT = ratio * viewDuration;
+      const sourceT = cutOn ? effectiveToSource(effectiveT) : effectiveT;
+      seekTo(sourceT);
     };
     seekToClientX(e.clientX);
     setSelectedBlockId(null);
@@ -672,7 +709,7 @@ export const ReelsStudio: React.FC = () => {
     const computeDropIndex = (clientX: number): number => {
       const x = clientX - rect.left;
       const ratio = Math.max(0, Math.min(1, x / rect.width));
-      const t = ratio * Math.max(totalDuration, 0.0001);
+      const t = ratio * Math.max(viewDuration, 0.0001);
       // Find the nearest block boundary (between blocks N and N+1) by accumulating durations
       // across all blocks (avatar + broll, in current order, excluding the dragged one).
       const others = blocks.filter(b => b.id !== blockId);
@@ -724,7 +761,7 @@ export const ReelsStudio: React.FC = () => {
     window.addEventListener('pointercancel', onUp);
   };
 
-  const playheadPct = (playhead / totalDuration) * 100;
+  const playheadPct = viewPct(playhead);
   const aspectClass = aspect === '9:16' ? 'aspect-[9/16] h-full' : aspect === '16:9' ? 'aspect-video w-full max-w-3xl' : 'aspect-square h-full';
 
   const layoutHit = hitTest(layout, playhead);
@@ -1191,7 +1228,7 @@ export const ReelsStudio: React.FC = () => {
             })()}
 
             <div className="absolute top-3 right-3 px-2.5 py-1 rounded-md bg-black/60 backdrop-blur text-[10px] font-mono text-zinc-300">
-              {formatTime(playhead)} / {formatTime(totalDuration)}
+              {formatTime(cutOn ? sourceToEffective(playhead) : playhead)} / {formatTime(viewDuration)}
             </div>
             <div className="absolute top-3 left-3 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur text-[10px] font-medium text-zinc-400">{aspect}</div>
             {currentBlock?.motion && (
@@ -1723,10 +1760,10 @@ export const ReelsStudio: React.FC = () => {
         {/* Time ruler */}
         <div className="relative h-6 border-b border-white/5 px-2">
           <div className="relative h-full">
-            {Array.from({ length: Math.ceil(totalDuration) + 1 }).map((_, i) => {
+            {Array.from({ length: Math.ceil(viewDuration) + 1 }).map((_, i) => {
               const isMajor = i % 5 === 0;
               return (
-                <div key={i} className="absolute top-0 bottom-0 flex items-end pb-0.5" style={{ left: `${(i / totalDuration) * 100}%` }}>
+                <div key={i} className="absolute top-0 bottom-0 flex items-end pb-0.5" style={{ left: `${(i / Math.max(viewDuration, 0.0001)) * 100}%` }}>
                   <div className={`w-px ${isMajor ? 'h-3 bg-zinc-500' : 'h-1.5 bg-zinc-700'}`}></div>
                   {isMajor && <span className="text-[9px] text-zinc-500 font-mono ml-1">0:{String(i).padStart(2,'0')}</span>}
                 </div>
@@ -1742,11 +1779,24 @@ export const ReelsStudio: React.FC = () => {
             <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-cyan-300/60 font-semibold pointer-events-none z-10">Audio</div>
             <div className="absolute inset-0 flex items-center px-2 pl-12">
               {audio.peaks.length > 0 ? (
-                <div className="flex items-center gap-px h-full w-full">
-                  {audio.peaks.map((p, i) => (
-                    <div key={i} className="flex-1 bg-gradient-to-t from-cyan-500/40 to-cyan-300/80 rounded-sm" style={{ height: `${Math.max(8, p * 90)}%` }}></div>
-                  ))}
-                </div>
+                cutOn ? (
+                  <div className="flex items-center gap-px h-full w-full">
+                    {audio.peaks.map((p, i) => {
+                      const peakSec = (i / audio.peaks.length) * audio.duration;
+                      const inKeep = cutSegments.some(k => peakSec >= k.start && peakSec < k.end);
+                      if (!inKeep) return null;
+                      return (
+                        <div key={i} className="flex-1 bg-gradient-to-t from-cyan-500/40 to-cyan-300/80 rounded-sm" style={{ height: `${Math.max(8, p * 90)}%` }}></div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-px h-full w-full">
+                    {audio.peaks.map((p, i) => (
+                      <div key={i} className="flex-1 bg-gradient-to-t from-cyan-500/40 to-cyan-300/80 rounded-sm" style={{ height: `${Math.max(8, p * 90)}%` }}></div>
+                    ))}
+                  </div>
+                )
               ) : (
                 <div className="text-[10px] text-cyan-300/40 italic">{audio.status === 'generating' ? 'Sintetizando...' : 'Sem áudio · clique em Gerar Áudio'}</div>
               )}
@@ -1754,11 +1804,27 @@ export const ReelsStudio: React.FC = () => {
             {audio.status === 'generating' && (
               <div className="absolute inset-0 bg-gradient-to-r from-transparent via-violet-400/15 to-transparent" style={{ animation: 'shimmer 1.6s linear infinite' }}></div>
             )}
-            {/* Silence cut regions overlay */}
-            {state.audio.silenceCut && state.audio.keepSegments.length > 0 && state.audio.duration > 0 && (() => {
-              const total = state.audio.duration;
+            {/* Silence cut indicators.
+                - Cut OFF: vermelho hash sobre as regiões silenciosas (preview do que seria cortado)
+                - Cut ON: linha vertical fina onde os silêncios foram colados (junções) */}
+            {state.audio.keepSegments.length > 0 && state.audio.duration > 0 && (() => {
               const segs = state.audio.keepSegments;
-              // Build inverse: silent ranges = gaps between keep segments.
+              if (cutOn) {
+                // Junctions: between consecutive keep segments — at the END of each keep segment except the last.
+                return segs.slice(0, -1).map((k, i) => {
+                  const leftPct = viewPct(k.end);
+                  return (
+                    <div
+                      key={`junction-${i}`}
+                      className="absolute top-0 bottom-0 w-0.5 bg-red-400/40 pointer-events-none"
+                      style={{ left: `${leftPct}%` }}
+                      title="Silêncio removido aqui"
+                    ></div>
+                  );
+                });
+              }
+              // OFF mode: highlight what WOULD be cut.
+              const total = state.audio.duration;
               const cuts: { start: number; end: number }[] = [];
               let cursor = 0;
               for (const k of segs) {
@@ -1792,8 +1858,8 @@ export const ReelsStudio: React.FC = () => {
             {blocks.filter(b => b.kind === 'avatar').map(b => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
-              const left = (slot.projectStart / totalDuration) * 100;
-              const width = ((slot.projectEnd - slot.projectStart) / totalDuration) * 100;
+              const left = viewPct(slot.projectStart);
+              const width = Math.max(0, viewPct(slot.projectEnd) - left);
               const isHovered = hoveredId === b.id;
               const cost = (slot.projectEnd - slot.projectStart) * PRICE_PER_AVATAR_SECOND;
               const clip = state.avatarClips[b.id];
@@ -1914,7 +1980,7 @@ export const ReelsStudio: React.FC = () => {
             {!draggingBlockId && blocks.slice(0, -1).map((b, i) => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
-              const leftPct = (slot.projectEnd / totalDuration) * 100;
+              const leftPct = viewPct(slot.projectEnd);
               const trans: BlockTransition = b.transition ?? 'fade';
               const icon = trans === 'cut' ? '╳' : trans === 'dissolve' ? '◐' : '▾';
               const tone = trans === 'cut' ? 'bg-red-500/70 hover:bg-red-500 border-red-300/60' : trans === 'dissolve' ? 'bg-cyan-500/70 hover:bg-cyan-500 border-cyan-300/60' : 'bg-zinc-700 hover:bg-zinc-600 border-white/30';
@@ -1952,15 +2018,15 @@ export const ReelsStudio: React.FC = () => {
             {blocks.filter(b => b.kind === 'avatar').map(b => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
-              const left = (slot.projectStart / totalDuration) * 100;
-              const width = ((slot.projectEnd - slot.projectStart) / totalDuration) * 100;
+              const left = viewPct(slot.projectStart);
+              const width = Math.max(0, viewPct(slot.projectEnd) - left);
               return <div key={`gap-${b.id}`} className="absolute top-0 bottom-0 opacity-50" style={{ left: `${left}%`, width: `${width}%`, backgroundImage: 'repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,0.04) 4px 8px)' }}></div>;
             })}
             {blocks.filter(b => b.kind === 'broll').map(b => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
-              const left = (slot.projectStart / totalDuration) * 100;
-              const width = ((slot.projectEnd - slot.projectStart) / totalDuration) * 100;
+              const left = viewPct(slot.projectStart);
+              const width = Math.max(0, viewPct(slot.projectEnd) - left);
               const isDraggingThis = draggingBlockId === b.id;
               return (
                 <div
@@ -1989,8 +2055,8 @@ export const ReelsStudio: React.FC = () => {
               const motionDur = motion.durationSec ?? 3;
               const blockDur = slot.projectEnd - slot.projectStart;
               const useDur = Math.min(motionDur, blockDur);
-              const left = (slot.projectStart / totalDuration) * 100;
-              const width = (useDur / totalDuration) * 100;
+              const left = viewPct(slot.projectStart);
+              const width = Math.max(0, viewPct(slot.projectStart + useDur) - left);
               const layerLabel = motion.layer === 'overlay' ? 'over' : motion.layer === 'replace' ? 'full' : motion.layer === 'split-bottom' ? 'split↑' : motion.layer === 'split-top' ? 'split↓' : 'over';
               return (
                 <div
@@ -2047,7 +2113,7 @@ export const ReelsStudio: React.FC = () => {
             for (let i = 0; i < dragOverIndex && i < others.length; i++) {
               acc += Math.max(0, others[i].end - others[i].start);
             }
-            const dropPct = (acc / Math.max(totalDuration, 0.0001)) * 100;
+            const dropPct = viewPct(acc);
             return (
               <div className="absolute top-0 bottom-0 pointer-events-none z-30" style={{ left: `calc(${dropPct}% + 8px)` }}>
                 <div className="absolute top-0 bottom-0 w-1 bg-cyan-300 -translate-x-1/2 shadow-[0_0_12px_rgba(103,232,249,0.9)]"></div>
@@ -2072,7 +2138,7 @@ export const ReelsStudio: React.FC = () => {
             const fromBlock = blocks[transitionPopoverIdx];
             const slot = slotById.get(fromBlock.id);
             if (!slot) return null;
-            const leftPct = (slot.projectEnd / totalDuration) * 100;
+            const leftPct = viewPct(slot.projectEnd);
             const current: BlockTransition = fromBlock.transition ?? 'fade';
             const opts: { value: BlockTransition; label: string; desc: string }[] = [
               { value: 'cut',      label: '╳ Cut',       desc: 'Corte seco, sem transição' },
