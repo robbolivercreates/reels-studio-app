@@ -184,7 +184,7 @@ const sanitizeMime = (file: Blob | { type?: string }): string => {
   return 'video/mp4';
 };
 
-const MODEL_CANDIDATES = ['gemini-3.1-flash-preview', 'gemini-3.1-flash-lite-preview'];
+const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview'];
 
 const callGemini = async (
   mimeType: string,

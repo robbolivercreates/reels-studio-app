@@ -164,7 +164,7 @@ const getApiKey = (): string => {
   return key;
 };
 
-const MODEL_CANDIDATES = ['gemini-3.1-flash-preview', 'gemini-3.1-flash-lite-preview'];
+const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview'];
 
 // Source content can be very long. Gemini Flash-Lite handles 1M tokens, but we still
 // trim to a sane upper bound to keep latency + cost down. Most articles fit in 30k chars.

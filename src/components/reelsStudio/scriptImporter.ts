@@ -105,7 +105,7 @@ export const importScriptWithAI = async (rawText: string): Promise<ScriptBlock[]
   const ai = new GoogleGenAI({ apiKey });
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3.1-flash-preview',
+    model: 'gemini-3-flash-preview',
     contents: {
       parts: [
         { text: SYSTEM_PROMPT },
