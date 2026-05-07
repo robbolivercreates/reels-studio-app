@@ -89,7 +89,7 @@ interface FrameComposition {
 
 const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
 
-const FADE_FRAMES = 10; // ~333ms at 30fps
+const FADE_FRAMES = 6; // ~200ms at 30fps — modern Reels/TikTok pacing
 
 /** Render layers + decorations for a single block at a given local time (no fade logic). */
 const composeForBlock = (

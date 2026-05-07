@@ -127,23 +127,51 @@ Every shot has these layers, top to bottom:
 KEEP IT TIGHT: most great compositions use only layers 1, 3, and one of {2, 4, 5}. If you have all 5 active simultaneously, you're probably overdesigning. Subtract until each remaining element earns its place.
 
 ═══════════════════════════════════════════════════════════
- PRINCIPLE 5 — TIMING & EASING (this is what makes it feel professional)
+ PRINCIPLE 5 — PACING: STRUCTURE THE MOTION AS A SEQUENCE
 ═══════════════════════════════════════════════════════════
-Amateur motion uses linear or default easing on everything. Professional motion is curated:
+This is the most common mistake amateur motion designers make: ONE big animation
+that finishes by t=1.5s, then 5+ seconds of frozen last frame. Looks dead.
 
-- Entrances → ease: "back.out(1.4)" or "expo.out". Duration 0.4-0.7s.
-- Exits → ease: "power3.in" or "expo.in". Duration 0.3-0.5s.
-- Atmosphere/loops → ease: "sine.inOut" with yoyo:true, repeat: calculated finite count (e.g. for a 4s block with 0.8s pulse: repeat: 4)
-- Punches/scale-pops → ease: "back.out(2)" or "elastic.out(1, 0.5)". Duration 0.3-0.5s.
-- Slow zooms → ease: "power1.inOut". Duration 1.5-3s.
+Professional pacing: BREAK THE BLOCK INTO BEATS. Every 1.5-3s, something new
+happens on screen — a new word reveals, an icon enters or swaps, a number ticks,
+a shape morphs, an accent flashes. The motion stays alive across the entire
+duration of the block.
 
-PACING:
-- First 0.5s — set the scene (background + first hero element entering)
-- 0.5s to 1.5s — main animation/storytelling beat
-- 1.5s onward — text reveal, accent, climax, hold for 0.3-0.6s, then begin exit
-- Last 0.3s — graceful exit (fade or scale-down) so cuts to the next block don't feel jarring
+For a {DURATION_SEC}s block, plan your timeline like this:
+- 0.0s → 0.4s    Opening beat: background drift starts (continues throughout),
+                 first hero element enters
+- Every 1.5-3s   A new sub-event: word reveal, icon swap, accent flash,
+                 morph, scale-pop, count-up tick
+- Last 0.4s     Graceful exit on the most recent sub-event
 
-A 4-second piece should feel like 4 distinct beats, not a single static held shape.
+Concrete example for a 7s block:
+  t=0.0  bg gradient drift starts (continuous, 7s total)
+  t=0.3  first word/icon scale-pops in
+  t=2.0  second element wipes in (clip-path)
+  t=4.0  third element swaps via cross-fade morph
+  t=5.5  accent glow pulses on the final element (climax)
+  t=6.6  exit fade
+
+For a 4s block:
+  t=0.0  bg drift starts
+  t=0.3  hero element enters
+  t=1.8  secondary reveal
+  t=3.2  accent climax
+  t=3.7  exit
+
+EASING (curated by event type):
+- Entrances → "back.out(1.4)" or "expo.out", duration 0.4-0.7s
+- Exits → "power3.in" or "expo.in", duration 0.3-0.5s
+- Atmosphere/loops → "sine.inOut" with yoyo:true, repeat: finite count
+  (e.g. for a 4s block with 0.8s pulse: repeat: 4 — never -1)
+- Punches/scale-pops → "back.out(2)" or "elastic.out(1, 0.5)", duration 0.3-0.5s
+- Slow zooms → "power1.inOut", duration 1.5-3s
+- Background drift → "power1.inOut", duration = full block length
+
+NEVER: a single tl.from() that finishes by t=1s, leaving the rest dead.
+ALWAYS: a timeline with multiple .from()/.to() positioned across the FULL DURATION.
+Verify by checking your timeline: are there events happening past the halfway mark?
+If not, add more.
 
 ═══════════════════════════════════════════════════════════
  PRINCIPLE 6 — BRAND COLORS ARE LAW
@@ -235,7 +263,31 @@ I) FLOATING PARTICLES (atmosphere)
 J) BACKGROUND DRIFT — a slow, almost-imperceptible scale on the bg
    tl.to('.bg', { scale: 1.04, duration: DURATION, ease: 'power1.inOut' }, 0)
 
-Combine: most great pieces = (J background drift) + (A or E for entrance) + (D or F as climax) + (I particles for atmosphere). Three or four GSAP calls is enough.
+K) MULTI-BEAT TYPOGRAPHY — phrase reveals one chunk at a time across the block
+   Best for blocks with multiple narration beats. Each chunk lands ~1.5-2s apart.
+   <h1 class="line"><span class="w1">Crie</span> <span class="w2">tudo</span></h1>
+   <h1 class="line2"><span class="w3">com comandos</span></h1>
+   <h1 class="line3"><span class="w4">simples</span></h1>
+   tl.from('.w1', { y: 60, opacity: 0, duration: 0.5, ease: 'back.out(1.4)' }, 0.2)
+   tl.from('.w2', { y: 60, opacity: 0, duration: 0.5, ease: 'back.out(1.4)' }, 1.8)
+   tl.from('.w3', { y: 60, opacity: 0, duration: 0.5, ease: 'back.out(1.4)' }, 3.5)
+   tl.from('.w4', { scale: 0.7, opacity: 0, duration: 0.5, ease: 'back.out(2)' }, 5.2)
+   tl.to('.line, .line2, .line3', { opacity: 0, y: -20, duration: 0.4, ease: 'expo.in' }, DURATION - 0.4)
+
+L) ICON SWAP CHAIN — same slot, different icons appear/swap over time
+   Best for "vários tipos de coisa" / "transformações" — tells a story across the block.
+   3-5 SVG icons stacked at the same position, only one visible at a time.
+   tl.set(['.icon2', '.icon3', '.icon4'], { opacity: 0 })
+   tl.from('.icon1', { scale: 0.8, opacity: 0, duration: 0.4, ease: 'back.out(1.4)' }, 0.2)
+   tl.to('.icon1', { opacity: 0, duration: 0.3 }, 2.0)
+   tl.fromTo('.icon2', { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: 'back.out(1.4)' }, 2.1)
+   tl.to('.icon2', { opacity: 0, duration: 0.3 }, 4.0)
+   tl.fromTo('.icon3', { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: 'back.out(1.4)' }, 4.1)
+   Optionally pulse the last icon as climax: tl.to('.icon3', { scale: 1.08, duration: 0.4, yoyo: true, repeat: 1 }, 5.5)
+
+Combine: pick ONE of the multi-beat structures (K or L) for blocks > 4s, then
+combine with (J background drift) and (I particles) for atmosphere. For blocks
+≤ 3s, a simpler arc (A entrance + F punch + exit) is fine.
 
 ═══════════════════════════════════════════════════════════
  ANTI-PATTERNS — avoid these mistakes
@@ -243,7 +295,8 @@ Combine: most great pieces = (J background drift) + (A or E for entrance) + (D o
 × Stacking 3+ rectangle "cards" with text inside — that's a slide deck, not motion design
 × Using emojis (🔥, ⚡, 💡) as content. They look amateur — use SVG icons instead
 × Default linear easing on multiple elements — feels robotic
-× Static held shots with no motion happening for >1s — this is a motion piece
+× Static held shots with no motion happening for >1.5s — this is a motion piece. If your timeline ends by t=2s but the block is 7s long, ADD MORE EVENTS (use technique K or L).
+× Single-arc animation that finishes at t=1-2s leaving the rest of the block frozen — for blocks > 4s, you MUST stagger events across the full duration
 × Repeat -1 (infinite loops) — HyperFrames forbids them; calculate finite repeat from DURATION
 × Tiny text (<60px) — invisible on phone screens
 × More than one focal element competing for attention
