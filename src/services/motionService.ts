@@ -39,12 +39,10 @@ const getApiKey = (): string => {
 };
 
 // Pro for highest quality HTML/GSAP generation; Flash as fallback.
-// Tries the newest preview models first, falls back to stable 2.5 line if unavailable.
+// 3.1 only — never fall back to 2.5 (user requirement).
 const MODEL_CANDIDATES = [
   'gemini-3.1-pro-preview',
   'gemini-3.1-flash-preview',
-  'gemini-2.5-pro',
-  'gemini-2.5-flash',
 ];
 
 const RESPONSE_SCHEMA = {
@@ -368,11 +366,10 @@ const isBannedColor = (hex: string, topic: string): { banned: boolean; label: st
 };
 
 async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: GenerateMotionInput['reelContext']): Promise<BrandResearch | null> {
+  // 3.1 only — never fall back to 2.5 (user requirement).
   const groundingModels = [
     'gemini-3.1-pro-preview',
     'gemini-3.1-flash-preview',
-    'gemini-2.5-pro',
-    'gemini-2.5-flash',
   ];
 
   const query = [
