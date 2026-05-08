@@ -2,12 +2,10 @@ import type { PersistedAnalysis, ReelsAction, ReelsState, ScriptBlock } from './
 
 const uid = () => `b_${Math.random().toString(36).slice(2, 9)}`;
 
+// Empty starter — one blank avatar block, ready for the user to type into.
+// Limpar projeto traz o app de volta exatamente a este estado.
 const DEFAULT_BLOCKS: ScriptBlock[] = [
-  { id: uid(), kind: 'avatar', text: 'Olá pessoal, hoje eu vou mostrar uma ferramenta incrível que vai mudar como vocês criam conteúdo.', start: 0,    end: 5.2 },
-  { id: uid(), kind: 'broll',  text: 'Aqui mostro a interface principal abrindo na tela do computador.',                                            start: 5.2,  end: 13.8 },
-  { id: uid(), kind: 'avatar', text: 'Repare como tudo é fluido e intuitivo, do roteiro até a exportação final.',                                  start: 13.8, end: 18.4 },
-  { id: uid(), kind: 'broll',  text: 'Demonstração rápida de export pra MP4 e timeline editável.',                                                 start: 18.4, end: 26.0 },
-  { id: uid(), kind: 'avatar', text: 'Se gostou, salva esse vídeo e me segue pra mais. Tchau!',                                                    start: 26.0, end: 30.0 },
+  { id: uid(), kind: 'avatar', text: '', start: 0, end: 0 },
 ];
 
 export const INITIAL_STATE: ReelsState = {
@@ -71,8 +69,18 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       return { ...state, blocks: next };
     }
 
-    case 'remove-block':
-      return { ...state, blocks: state.blocks.filter(b => b.id !== action.id) };
+    case 'remove-block': {
+      // Remove the block AND every piece of state keyed by its id, so nothing
+      // orphaned lingers on the timeline (avatar clip, motion overlay, etc.).
+      // The block's `motion` and `attachedAsset` live inside the block object,
+      // so they vanish with the filter automatically.
+      const { [action.id]: _droppedClip, ...remainingClips } = state.avatarClips;
+      return {
+        ...state,
+        blocks: state.blocks.filter(b => b.id !== action.id),
+        avatarClips: remainingClips,
+      };
+    }
 
     case 'update-block-text':
       return markBlockDirty(
@@ -83,7 +91,18 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
     case 'toggle-block-kind':
       return {
         ...state,
-        blocks: state.blocks.map(b => b.id === action.id ? { ...b, kind: b.kind === 'avatar' ? 'broll' : 'avatar' } : b),
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          const newKind = b.kind === 'avatar' ? 'broll' : 'avatar';
+          // If the block has an attached asset, re-derive the layout from the
+          // new kind. avatar+asset = media-top (split). broll+asset = media-only
+          // (full frame, no avatar half). Without this, switching kind leaves
+          // the old layout on, which produces the "asset floating above empty
+          // bottom half" bug for broll.
+          if (!b.attachedAsset) return { ...b, kind: newKind };
+          const layout = newKind === 'broll' ? 'media-only' : 'media-top';
+          return { ...b, kind: newKind, layout };
+        }),
       };
 
     case 'split-block': {
@@ -215,6 +234,25 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
             return rest;
           }
           return { ...b, motion: action.motion };
+        }),
+      };
+    }
+
+    case 'set-block-asset': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          if (action.asset === undefined) {
+            // Detach: drop the asset and the auto-applied layout.
+            const { attachedAsset: _a, layout: _l, ...rest } = b;
+            return rest;
+          }
+          // Attach: store asset + force the right layout for the block kind:
+          //   - avatar block → media-top (asset on top half, avatar on bottom)
+          //   - broll block  → media-only (no avatar exists; full frame is media)
+          const layout = b.kind === 'broll' ? 'media-only' : 'media-top';
+          return { ...b, attachedAsset: action.asset, layout };
         }),
       };
     }
@@ -393,10 +431,13 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       return { ...state, audio: INITIAL_STATE.audio, avatarClips: {} };
 
     case 'audio-silence-toggle':
+      // Just flips the flag — the apply/revert side-effect lives in a UI
+      // effect that calls the cut worker (or restores the original blob).
       return { ...state, audio: { ...state.audio, silenceCut: action.on } };
 
     case 'audio-silence-preset':
-      // Switching preset invalidates current detection until rerun.
+      // Switching preset invalidates current detection until rerun. If cuts
+      // were already applied, the UI effect will re-apply with the new preset.
       return { ...state, audio: { ...state.audio, silencePreset: action.preset, keepSegments: [], detectedSilenceSec: 0 } };
 
     case 'audio-silence-detect-start':
@@ -412,6 +453,68 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
           detectedSilenceSec: action.detectedSilenceSec,
         },
       };
+
+    case 'audio-cuts-applying':
+      return { ...state, audio: { ...state.audio, applyingCuts: true } };
+
+    case 'audio-cuts-apply-done': {
+      // Revoke the previous active object URL (might be the original).
+      if (state.audio.url && state.audio.url !== action.url) {
+        try { URL.revokeObjectURL(state.audio.url); } catch { /* noop */ }
+      }
+      return {
+        ...state,
+        blocks: action.blocks,
+        audio: {
+          ...state.audio,
+          url: action.url,
+          duration: action.duration,
+          peaks: action.peaks,
+          words: action.words,
+          applyingCuts: false,
+          cutsApplied: true,
+          originalBlocks: action.originalBlocks,
+          originalWords: action.originalWords,
+          originalDuration: action.originalDuration,
+          originalPeaks: action.originalPeaks,
+        },
+      };
+    }
+
+    case 'audio-cuts-revert': {
+      // Restore the original audio + blocks. Caller has already created a
+      // fresh object URL for the original blob and passes it in `url`.
+      if (state.audio.url && state.audio.url !== action.url) {
+        try { URL.revokeObjectURL(state.audio.url); } catch { /* noop */ }
+      }
+      return {
+        ...state,
+        blocks: state.audio.originalBlocks ?? state.blocks,
+        audio: {
+          ...state.audio,
+          url: action.url,
+          duration: state.audio.originalDuration ?? state.audio.duration,
+          peaks: state.audio.originalPeaks ?? state.audio.peaks,
+          words: state.audio.originalWords ?? state.audio.words,
+          cutsApplied: false,
+          applyingCuts: false,
+          originalBlocks: undefined,
+          originalWords: undefined,
+          originalDuration: undefined,
+          originalPeaks: undefined,
+        },
+      };
+    }
+
+    case 'audio-cuts-cancel': {
+      // Used when an apply attempt fails before the new audio URL is ready —
+      // simply clear the in-flight flag so the user isn't stuck on the
+      // "aplicando cortes..." spinner. State otherwise unchanged.
+      return {
+        ...state,
+        audio: { ...state.audio, applyingCuts: false },
+      };
+    }
 
     case 'set-avatar-model':
       return { ...state, avatarModel: action.model };

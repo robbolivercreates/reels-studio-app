@@ -122,6 +122,16 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
             keepSegments: persisted.audio.keepSegments ?? [],
             detectedSilenceSec: persisted.audio.detectedSilenceSec ?? 0,
             detectingSilence: false,
+            // Cut state is in-memory only — never trust the persisted values.
+            // The cut audio blob lives only as an object URL during a session;
+            // on reload we always start from the pristine source and let the
+            // user re-enable cuts if they want them.
+            applyingCuts: false,
+            cutsApplied: false,
+            originalBlocks: undefined,
+            originalWords: undefined,
+            originalDuration: undefined,
+            originalPeaks: undefined,
             url: audioUrl,
             peaks,
             duration,
@@ -204,10 +214,15 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
   // ─── PERSIST AUDIO BLOB WHEN URL CHANGES ──────────────────────────
   // The audio Blob is created inside audioEngine and its object URL flows through state.
   // We snapshot the Blob to IndexedDB on first ready event.
+  // IMPORTANT: only persist when cuts have NOT been applied — `state.audio.url`
+  // points at the in-memory cut audio when cutsApplied is true, and we never
+  // want to overwrite the pristine source with a cut copy. Cuts are recomputed
+  // from the original on demand, so we don't lose anything.
   useEffect(() => {
     if (!hydratedRef.current) return;
     if (state.audio.status !== 'ready') return;
     if (!state.audio.url) return;
+    if (state.audio.cutsApplied) return; // skip saving cut audio
     let cancelled = false;
     (async () => {
       try {
@@ -222,7 +237,7 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.audio.url, state.audio.status]);
+  }, [state.audio.url, state.audio.status, state.audio.cutsApplied]);
 
   const clearProject = async (): Promise<void> => {
     await clearAllProjectData();

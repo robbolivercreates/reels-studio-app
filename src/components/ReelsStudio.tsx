@@ -18,6 +18,7 @@ import { ReferencesModal } from './reelsStudio/ReferencesModal';
 import type { PersistedAnalysis } from './reelsStudio/types';
 import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
 import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
+import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
 import { createMotionFromBlock, type MotionConfig } from './reelsStudio/motionLibrary';
 import { generateMotionHtml, buildFullHtmlDoc } from '../services/motionService';
@@ -32,8 +33,11 @@ import { TakeReviewModal } from './reelsStudio/TakeReviewModal';
 import { TakeVideoPlayer } from './reelsStudio/TakeVideoPlayer';
 import { ExportRenderModal } from './reelsStudio/ExportRenderModal';
 import { SettingsModal } from './SettingsModal';
-import { buildCapcutPackage, downloadPackage } from './reelsStudio/packageBuilder';
+import { buildCapcutPackage, downloadPackage, openCapcutDraft, revealCapcutFolder } from './reelsStudio/packageBuilder';
 import { detectKeepSegments, PRESET_OPTIONS } from './reelsStudio/silenceDetector';
+import { cutAudioByKeepSegments } from './reelsStudio/audioCutter';
+import { applyLipsyncRule, remapBlocks, remapWords } from './reelsStudio/silenceCutMath';
+import { setCutSession, clearCutSession, getCutSession } from './reelsStudio/cutSession';
 import { SilenceCutControl } from './reelsStudio/SilenceCutControl';
 import { computeLayout, hitTest, projectToSourceTime } from './reelsStudio/timeline';
 import { getLayoutSlots, LAYOUT_OPTIONS, defaultAvatarZoom } from './reelsStudio/layouts';
@@ -71,6 +75,9 @@ export const ReelsStudio: React.FC = () => {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [vibeExpanded, setVibeExpanded] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  // 'new' = positive framing ("começar projeto novo"), 'clear' = destructive
+  // ("limpar tudo"). Both run the same wipe; only the dialog copy changes.
+  const [confirmClearMode, setConfirmClearMode] = useState<'new' | 'clear'>('clear');
   const [clearing, setClearing] = useState(false);
   const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -83,6 +90,7 @@ export const ReelsStudio: React.FC = () => {
   const [planAnalysis, setPlanAnalysis] = useState<PersistedAnalysis | null>(null);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [motionPickerBlockId, setMotionPickerBlockId] = useState<string | null>(null);
+  const [assetPickerBlockId, setAssetPickerBlockId] = useState<string | null>(null);
   const [motionBusyByBlock, setMotionBusyByBlock] = useState<Record<string, string>>({});
   const [avatarsModalOpen, setAvatarsModalOpen] = useState(false);
   const [generatingClips, setGeneratingClips] = useState(false);
@@ -92,6 +100,7 @@ export const ReelsStudio: React.FC = () => {
   const [reviewTakeId, setReviewTakeId] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [capcutExportStatus, setCapcutExportStatus] = useState<string | null>(null);
+  const capcutLastFolderRef = useRef<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Drag-to-reorder timeline blocks (by id). dragOverIndex = where to drop in
@@ -110,13 +119,72 @@ export const ReelsStudio: React.FC = () => {
     setExportMenuOpen(false);
     setCapcutExportStatus('Iniciando...');
     try {
+      // Cut session lives in a module-level singleton (cutSession.ts) so HMR
+      // remounts, persistence rehydration, and reducer races can't blank it.
+      // The session captures audio + remapped block timings at the moment cuts
+      // were applied — but motions/clips generated AFTER that point live only
+      // in `state.blocks`. We merge: keep the cut timings (start/end) from the
+      // session but pull `motion`/`attachedAsset` from current state by id.
+      const session = getCutSession();
+      type SessionBlocks = NonNullable<ReturnType<typeof getCutSession>>['blocks'];
+      let cutOverride: { audioBlob: Blob; blocks: SessionBlocks; duration: number } | undefined;
+      if (session) {
+        const stateBlockById = new Map(blocks.map(b => [b.id, b]));
+        const mergedBlocks = session.blocks.map(sb => {
+          const current = stateBlockById.get(sb.id);
+          if (!current) return sb;
+          // Keep cut-remapped timings from the session, but inherit motion +
+          // attached asset (and any other live edits like text) from state.
+          return {
+            ...current,
+            start: sb.start,
+            end: sb.end,
+          };
+        });
+        cutOverride = { audioBlob: session.audioBlob, blocks: mergedBlocks, duration: session.duration };
+      }
+      const motionsCount = cutOverride ? cutOverride.blocks.filter(b => b.motion?.status === 'ready').length : blocks.filter(b => b.motion?.status === 'ready').length;
+      console.log('[capcut-export] cutOverride present?', !!cutOverride, 'cutDur=', session?.duration ?? null, '· readyMotions=', motionsCount);
+      const result = await openCapcutDraft(state, (p) => setCapcutExportStatus(p.message), cutOverride);
+      setCapcutExportStatus('✓ Projeto pronto no CapCut · veja em "Recentes"');
+      // Stash media folder so the fallback UI can reveal it if needed.
+      capcutLastFolderRef.current = result.mediaPath;
+      setTimeout(() => setCapcutExportStatus(null), 5000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao exportar';
+      console.error('[reels/capcut-export]', err);
+      const isCapCutMissing = /CapCut não encontrado|Pasta de projetos do CapCut/i.test(msg);
+      if (isCapCutMissing && capcutLastFolderRef.current) {
+        try {
+          await revealCapcutFolder(capcutLastFolderRef.current);
+          setCapcutExportStatus('⚠ CapCut não encontrado · pasta aberta');
+        } catch {
+          setCapcutExportStatus(`⚠ ${msg}`);
+        }
+      } else {
+        setCapcutExportStatus(`⚠ ${msg}`);
+      }
+      setTimeout(() => setCapcutExportStatus(null), 6000);
+    }
+  };
+
+  // Web-only fallback: download the zip bundle (when running outside Tauri or
+  // when the user explicitly wants the offline package).
+  const handleCapcutDownloadZip = async () => {
+    if (audio.status !== 'ready') {
+      alert('Gere o áudio antes de exportar pra CapCut.');
+      return;
+    }
+    setExportMenuOpen(false);
+    setCapcutExportStatus('Iniciando...');
+    try {
       const pkg = await buildCapcutPackage(state, (p) => setCapcutExportStatus(p.message));
       downloadPackage(pkg);
       setCapcutExportStatus(`✓ Baixado · ${(pkg.size / 1024 / 1024).toFixed(1)}MB`);
       setTimeout(() => setCapcutExportStatus(null), 4000);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Falha ao exportar';
-      console.error('[reels/capcut-export]', err);
+      console.error('[reels/capcut-export-zip]', err);
       setCapcutExportStatus(`⚠ ${msg}`);
       setTimeout(() => setCapcutExportStatus(null), 6000);
     }
@@ -150,7 +218,6 @@ export const ReelsStudio: React.FC = () => {
     detectingLockRef.current = true;
     let cancelled = false;
     let watchdog: ReturnType<typeof setTimeout> | null = null;
-    const audioUrl = state.audio.url;
     const preset = state.audio.silencePreset;
 
     (async () => {
@@ -163,9 +230,13 @@ export const ReelsStudio: React.FC = () => {
         dispatch({ type: 'audio-silence-detect-done', keepSegments: [], detectedSilenceSec: 0 });
       }, 20_000);
       try {
-        console.log('[reels/silence] fetching audio blob...');
-        const resp = await fetch(audioUrl);
-        const blob = await resp.blob();
+        // Always detect against the PRISTINE blob in IndexedDB. `state.audio.url`
+        // may point at a cut version (when cutsApplied=true), and detecting on
+        // the cut audio would produce nonsensical "no silence" results.
+        const { loadAudioBlob } = await import('./reelsStudio/persistence');
+        const blob = await loadAudioBlob();
+        if (!blob) throw new Error('Blob original não encontrado em IndexedDB');
+        console.log('[reels/silence] using IDB blob for detection...');
         console.log('[reels/silence] blob size =', (blob.size / 1024).toFixed(1), 'KB · type=', blob.type);
         if (cancelled) { detectingLockRef.current = false; return; }
         const opts = PRESET_OPTIONS[preset];
@@ -193,14 +264,221 @@ export const ReelsStudio: React.FC = () => {
     };
   }, [state.audio.status, state.audio.url, state.audio.silencePreset, state.audio.keepSegments.length, state.audio.duration]);
 
-  // Effective duration after silence cut.
-  const audioEffectiveDuration = state.audio.silenceCut && state.audio.keepSegments.length > 0
-    ? state.audio.keepSegments.reduce((s, k) => s + (k.end - k.start), 0)
-    : state.audio.duration;
+  // ─── Apply / revert silence cuts to the actual audio + blocks ─────
+  // When silenceCut goes ON (with detected segments) → re-encode the MP3
+  // through the worker, remap block/word timestamps, and swap state to the
+  // compressed timeline. When it goes OFF → restore the pristine blob from
+  // IndexedDB and restore the snapshotted blocks.
+  // The lipsync rule (250ms tolerance inside ready avatar clips) is applied
+  // before the worker runs, so the audio cut and the block remap stay in sync.
+  const applyingLockRef = useRef(false);
+  // Tracks the keepSegments that were used for the currently-applied cut.
+  // When state.audio.keepSegments differs from this (e.g. user switched preset),
+  // we revert + re-apply.
+  const appliedKeepRef = useRef<{ start: number; end: number }[] | null>(null);
+  useEffect(() => {
+    if (!hydrated) return;
+    const a = state.audio;
+    console.log('[reels/cut] effect run · status=', a.status,
+      '· silenceCut=', a.silenceCut,
+      '· keepCount=', a.keepSegments.length,
+      '· cutsApplied=', a.cutsApplied,
+      '· applyingCuts=', a.applyingCuts,
+      '· detecting=', a.detectingSilence,
+      '· locked=', applyingLockRef.current);
+    if (a.status !== 'ready') return;
+    if (a.detectingSilence) return;
+    // Trust the local ref over the state flag — the state flag can persist
+    // across crashes (and hidration doesn't always clear it depending on
+    // ordering). If the ref says we're not actively applying, we shouldn't
+    // be blocked by a stale state flag.
+    if (applyingLockRef.current) return;
+    // If state thinks we're applying but the ref disagrees, that's a stale
+    // flag. Clear it now and re-run the effect on the next dispatch.
+    if (a.applyingCuts) {
+      console.warn('[reels/cut] stale applyingCuts=true detected, clearing');
+      dispatch({ type: 'audio-cuts-cancel' });
+      return;
+    }
 
-  // Map a source-time second to an "effective" (silence-cut applied) second.
-  // When silence cut is off OR no segments detected, this is identity.
-  const cutOn = state.audio.silenceCut && state.audio.keepSegments.length > 0;
+    const wantCut = a.silenceCut && a.keepSegments.length > 0;
+
+    // Detect "segments changed while cuts applied" by comparing the segments
+    // we last applied with the segments now in state. If they differ (because
+    // the user switched presets, or detection re-ran), revert + re-apply.
+    // We treat a missing `appliedKeepRef` as "always changed" so the case
+    // where the ref got cleared by a preset reset is handled correctly.
+    const segsChanged = (() => {
+      if (!a.cutsApplied) return false;
+      if (a.keepSegments.length === 0) return false; // handled by Case 2 (revert)
+      const prev = appliedKeepRef.current;
+      if (!prev) return true; // unknown applied set → safer to revert and re-apply
+      if (prev.length !== a.keepSegments.length) return true;
+      for (let i = 0; i < prev.length; i++) {
+        if (Math.abs(prev[i].start - a.keepSegments[i].start) > 0.001) return true;
+        if (Math.abs(prev[i].end - a.keepSegments[i].end) > 0.001) return true;
+      }
+      return false;
+    })();
+
+    if (segsChanged) {
+      console.log('[reels/cut] segs changed → reverting to allow re-apply');
+      // Revert silently — the next render will re-enter this effect with
+      // cutsApplied=false and apply the new segments fresh.
+      applyingLockRef.current = true;
+      (async () => {
+        try {
+          const { loadAudioBlob } = await import('./reelsStudio/persistence');
+          const sourceBlob = await loadAudioBlob();
+          if (sourceBlob) {
+            const url = URL.createObjectURL(sourceBlob);
+            dispatch({ type: 'audio-cuts-revert', url });
+            appliedKeepRef.current = null;
+            clearCutSession();
+          }
+        } finally {
+          applyingLockRef.current = false;
+        }
+      })();
+      return;
+    }
+
+    // Case 1: cut is ON, but state is still on original → apply cuts.
+    if (wantCut && !a.cutsApplied) {
+      console.log('[reels/cut] Case 1 · APPLYING cuts');
+      applyingLockRef.current = true;
+      let cancelled = false;
+      (async () => {
+        dispatch({ type: 'audio-cuts-applying' });
+        try {
+          console.log('[reels/cut] loading source blob from IDB...');
+          const { loadAudioBlob } = await import('./reelsStudio/persistence');
+          const sourceBlob = await loadAudioBlob();
+          if (!sourceBlob) throw new Error('Áudio original não encontrado');
+          console.log('[reels/cut] source blob loaded, size=', sourceBlob.size);
+
+          // Hybrid lipsync rule: preserve silences ≥250ms that fall inside
+          // ready avatar clips so the boca/áudio stay in sync there.
+          const protectedKeep = applyLipsyncRule(
+            a.keepSegments,
+            a.duration,
+            state.blocks,
+            state.avatarClips,
+          );
+          console.log('[reels/cut] protected keep segments:', protectedKeep);
+
+          // The original blocks/words are what we'll snapshot before remap.
+          const originalBlocks = state.blocks;
+          const originalWords = a.words;
+          const originalDuration = a.duration;
+          const originalPeaks = a.peaks;
+
+          console.log('[reels/cut] calling cutAudioByKeepSegments...');
+          const { blob: cutBlob, duration: cutDuration, peaks: cutPeaks } =
+            await cutAudioByKeepSegments(sourceBlob, protectedKeep);
+          console.log('[reels/cut] cut done · newDuration=', cutDuration, 'newSize=', cutBlob.size);
+          // Don't bail on `cancelled` here — once we've paid for the encode,
+          // we always want to land the result. The effect re-running just
+          // means deps changed; the next dispatch will reconcile state.
+
+          const url = URL.createObjectURL(cutBlob);
+          const remappedBlocks = remapBlocks(originalBlocks, protectedKeep);
+          const remappedWords = remapWords(originalWords, protectedKeep);
+
+          dispatch({
+            type: 'audio-cuts-apply-done',
+            url,
+            duration: cutDuration,
+            peaks: cutPeaks,
+            words: remappedWords,
+            blocks: remappedBlocks,
+            originalBlocks,
+            originalWords,
+            originalDuration,
+            originalPeaks,
+          });
+          appliedKeepRef.current = protectedKeep.map(k => ({ ...k }));
+          // Module-level singleton — survives HMR remounts and reducer races
+          // that would blank a useRef on the component instance.
+          setCutSession({ audioBlob: cutBlob, blocks: remappedBlocks, duration: cutDuration });
+          console.log('[reels/cut] cut session set · blob.size=', cutBlob.size, '· blocks=', remappedBlocks.length, '· duration=', cutDuration);
+        } catch (err) {
+          console.error('[reels/cut] apply failed:', err);
+          // Always clear the in-flight flag so the spinner stops; also turn
+          // the toggle off so the user gets a clean slate (otherwise the
+          // detect→apply cycle would loop forever on the same broken inputs).
+          dispatch({ type: 'audio-cuts-cancel' });
+          dispatch({ type: 'audio-silence-toggle', on: false });
+        } finally {
+          applyingLockRef.current = false;
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+
+    // Case 2: cut is OFF (or no segments), but state has cuts applied → revert.
+    if (!wantCut && a.cutsApplied) {
+      applyingLockRef.current = true;
+      (async () => {
+        try {
+          const { loadAudioBlob } = await import('./reelsStudio/persistence');
+          const sourceBlob = await loadAudioBlob();
+          if (!sourceBlob) throw new Error('Áudio original não encontrado');
+          const url = URL.createObjectURL(sourceBlob);
+          dispatch({ type: 'audio-cuts-revert', url });
+          appliedKeepRef.current = null;
+          clearCutSession();
+        } catch (err) {
+          console.error('[reels/cut] revert failed:', err);
+        } finally {
+          applyingLockRef.current = false;
+        }
+      })();
+    }
+
+    // Case 3: cut is ON and already applied, but preset changed (keepSegments
+    // changed) → re-apply with the new segments. The detection effect already
+    // resets cutsApplied implicitly by emitting fresh keepSegments; but we
+    // need to re-run apply when the new segments arrive.
+    // Detection clears keepSegments first, then fills them in — so when
+    // length transitions from 0 → N while cutsApplied is still true from a
+    // previous run, we need to re-apply. We do that by also reverting first
+    // when the active set of segments differs from what's currently applied.
+    // For MVP we keep it simple: changing preset turns toggle off-then-on.
+    // The detection-done dispatch already produces fresh segments; this
+    // effect reacts to (cutsApplied=true && keepSegments=[freshly-different])
+    // by checking duration: if blocks state still references the old segs,
+    // we'd need to revert+re-apply. Skipped for v1 — user can toggle.
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    hydrated,
+    state.audio.status,
+    state.audio.silenceCut,
+    state.audio.cutsApplied,
+    state.audio.keepSegments,
+    state.audio.applyingCuts,
+    state.audio.detectingSilence,
+  ]);
+
+  // Effective duration after silence cut.
+  // When cutsApplied is true the audio's `duration` is *already* the compressed
+  // duration, so we just use it as-is. The skip-based "compress on the fly"
+  // path (cutOn) only kicks in when we have detected segments but haven't
+  // applied them yet (legacy preview, kept for the brief window between
+  // detect-done and apply-done).
+  const audioEffectiveDuration = state.audio.cutsApplied
+    ? state.audio.duration
+    : state.audio.silenceCut && state.audio.keepSegments.length > 0
+      ? state.audio.keepSegments.reduce((s, k) => s + (k.end - k.start), 0)
+      : state.audio.duration;
+
+  // cutOn means "show a compressed view via re-mapping" — once cuts have been
+  // physically applied, the timeline IS the compressed view, so cutOn is false
+  // and the waveform/playhead use plain identity.
+  const cutOn = !state.audio.cutsApplied
+    && state.audio.silenceCut
+    && state.audio.keepSegments.length > 0;
   const cutSegments = state.audio.keepSegments;
   const sourceToEffective = useCallback((sec: number): number => {
     if (!cutOn) return sec;
@@ -239,6 +517,10 @@ export const ReelsStudio: React.FC = () => {
 
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const audioBlobRef = useRef<Blob | null>(null);
+  // Holds the cut audio blob whenever cuts are applied. Independent of
+  // state.audio.cutsApplied so race conditions in re-renders / HMR don't
+  // make the export pick up the wrong blob. Cleared on revert.
+  // Cut session state moved to module-level (cutSession.ts) so HMR can't blank it.
   // Restore audioBlobRef from IndexedDB after hydration so export works without regenerating audio.
   useEffect(() => {
     if (!hydrated || audioBlobRef.current) return;
@@ -248,6 +530,7 @@ export const ReelsStudio: React.FC = () => {
   }, [hydrated]);
   const rafRef = useRef<number | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
+  const timelineScrollRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
   // Refs that the playback tick reads — kept up-to-date via effect below.
   const silenceCutRef = useRef<boolean>(false);
@@ -364,27 +647,81 @@ export const ReelsStudio: React.FC = () => {
       dispatch({ type: 'set-block-motion', id: blockId, motion: { ...seed, status: 'generating' } });
 
       // Load project assets (screenshots) if available
-      let projectAssets: Array<{ name: string; path: string }> = [];
+      let projectAssets: Array<{ name: string; path: string; kind?: 'image' | 'video' }> = [];
       try {
-        const raw = await invoke<Array<{ name: string; path: string; ext: string; size_bytes: number }>>(
+        const raw = await invoke<Array<{ name: string; path: string; ext: string; size_bytes: number; kind: 'image' | 'video' }>>(
           'list_project_assets', { projectName: state.projectName }
         );
         projectAssets = raw;
       } catch { /* no assets folder yet — proceed without */ }
+
+      // If the user attached a specific asset to this block, it becomes the
+      // pinned protagonist. Force split-top layout so the motion (with asset as
+      // centerpiece) sits on the top half and the avatar fills the bottom half.
+      //
+      // We also copy the file into the motion's own assets/ folder so the HTML
+      // can reference it with a project-relative path. HyperFrames runs in a
+      // sandboxed headless Chromium that does NOT resolve asset:// URLs — using
+      // them produces ERR_UNKNOWN_URL_SCHEME and the render dies in frame
+      // capture (with a 45s timeout per asset). Relative paths fix this.
+      let pinnedAsset: {
+        name: string; path: string; kind: 'image' | 'video' | undefined;
+        type: 'image' | 'video' | undefined; relativeUrl?: string;
+      } | undefined;
+      if (block.attachedAsset) {
+        pinnedAsset = {
+          name: block.attachedAsset.name,
+          path: block.attachedAsset.path,
+          kind: block.attachedAsset.type,
+          type: block.attachedAsset.type,
+        };
+        console.log('[motion] copying asset into motion folder · motion=', seed.id, '· src=', block.attachedAsset.path);
+        try {
+          const copied = await invoke<{ relative_path: string; absolute_path: string }>('copy_asset_to_motion', {
+            motionId: seed.id,
+            sourcePath: block.attachedAsset.path,
+          });
+          pinnedAsset.relativeUrl = copied.relative_path; // e.g. "assets/foo.mp4"
+          console.log('[motion] asset copied OK · relativeUrl=', copied.relative_path, '· at=', copied.absolute_path);
+        } catch (e) {
+          console.error('[motion] FAILED to copy asset into motion folder · falling back to asset://', e);
+          // Fall through — generation will use asset:// (live preview will work,
+          // but the render will show a frozen first frame for video assets).
+        }
+      }
+      // Layer choice when an asset is attached:
+      //   - Avatar block: split-top (asset on the top half, avatar fills bottom)
+      //   - B-roll block: replace (no avatar exists, so the motion + asset
+      //     should fill the entire 1080×1920 frame; otherwise the bottom half
+      //     would just be black).
+      const effectiveLayer = pinnedAsset
+        ? (block.kind === 'broll' ? 'replace' : 'split-top')
+        : seed.layer;
+
+      // Universal asset list: only forward it to Gemini if NO block in the reel
+      // has an explicit pinned asset. Otherwise the model may "borrow" assets
+      // intended for other blocks. Pinned-only mode keeps the user in control.
+      const reelHasPinnedAssets = blocks.some(b => !!b.attachedAsset);
+      const universalAssetsToSend = reelHasPinnedAssets ? undefined : projectAssets;
 
       const result = await generateMotionHtml({
         presetId: seed.presetId,
         blockText: block.text,
         durationSec: seed.durationSec,
         compositionId: seed.id,
-        motionLayer: seed.layer,
-        projectAssets,
+        motionLayer: effectiveLayer,
+        projectAssets: pinnedAsset ? undefined : universalAssetsToSend,
+        pinnedAsset,
         reelContext: {
           projectName: state.projectName,
           allBlocks: blocks.map(b => b.text),
           blockIndex,
           prevBlockText: blockIndex > 0 ? blocks[blockIndex - 1].text : undefined,
           nextBlockText: blockIndex < blocks.length - 1 ? blocks[blockIndex + 1].text : undefined,
+          // Storyboard continuity: feed recent motion intents so Gemini varies the focal grammar.
+          // We look back up to 2 blocks for any block that already has a generated motion.
+          prevMotionIntent: blockIndex > 0 ? blocks[blockIndex - 1].motion?.intent : undefined,
+          prevPrevMotionIntent: blockIndex > 1 ? blocks[blockIndex - 2].motion?.intent : undefined,
         },
         // Reuse the reel's brand identity so all motions stay visually consistent.
         existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
@@ -406,6 +743,11 @@ export const ReelsStudio: React.FC = () => {
         html: sanitizedHtml,
         status: 'rendering',
         generatedAt: Date.now(),
+        // Snapshot the pinned asset (if any) so we can later detect when the
+        // user swaps/removes the attached asset and the motion goes stale.
+        assetSnapshot: pinnedAsset
+          ? { path: pinnedAsset.path, name: pinnedAsset.name }
+          : undefined,
       };
       dispatch({ type: 'set-block-motion', id: blockId, motion: generated });
 
@@ -583,12 +925,16 @@ export const ReelsStudio: React.FC = () => {
   }, [audio.url]);
 
   // Keep refs in sync so the playback tick always reads the latest config.
+  // When cutsApplied is true, the <audio> element is already playing the cut
+  // MP3 (silences physically removed) — we MUST NOT skip again, otherwise we'd
+  // pull the playhead forward for silences that no longer exist in the source.
   useEffect(() => {
-    silenceCutRef.current = state.audio.silenceCut;
-    keepSegmentsRef.current = state.audio.keepSegments;
+    const cutsApplied = !!state.audio.cutsApplied;
+    silenceCutRef.current = state.audio.silenceCut && !cutsApplied;
+    keepSegmentsRef.current = cutsApplied ? [] : state.audio.keepSegments;
     layoutRef.current = layout;
     totalDurationRef.current = totalDuration;
-  }, [state.audio.silenceCut, state.audio.keepSegments, layout, totalDuration]);
+  }, [state.audio.silenceCut, state.audio.cutsApplied, state.audio.keepSegments, layout, totalDuration]);
 
   // Ref so the play effect can read current audio status without re-running on changes.
   const audioReadyRef = useRef(false);
@@ -837,6 +1183,33 @@ export const ReelsStudio: React.FC = () => {
   };
 
   const playheadPct = viewPct(playhead);
+
+  // Auto-scroll: keep playhead inside the viewport. Triggers on zoom change or
+  // when the playhead drifts off-screen during playback. We center the playhead
+  // when it leaves the middle 60% band of the visible viewport.
+  useEffect(() => {
+    const scroller = timelineScrollRef.current;
+    if (!scroller) return;
+    if (zoom <= 1) {
+      // No zoom = full timeline visible, no scroll needed.
+      if (scroller.scrollLeft !== 0) scroller.scrollLeft = 0;
+      return;
+    }
+    const inner = scroller.firstElementChild as HTMLElement | null;
+    if (!inner) return;
+    const innerWidth = inner.scrollWidth;
+    const viewWidth = scroller.clientWidth;
+    const playheadX = (playheadPct / 100) * innerWidth;
+    const margin = viewWidth * 0.2; // 20% breathing room on each side
+    const visibleStart = scroller.scrollLeft + margin;
+    const visibleEnd = scroller.scrollLeft + viewWidth - margin;
+    if (playheadX < visibleStart || playheadX > visibleEnd) {
+      const target = Math.max(0, Math.min(innerWidth - viewWidth, playheadX - viewWidth / 2));
+      scroller.scrollTo({ left: target, behavior: playing ? 'auto' : 'smooth' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [zoom, playheadPct]);
+
   const aspectClass = aspect === '9:16' ? 'aspect-[9/16] h-full' : aspect === '16:9' ? 'aspect-video w-full max-w-3xl' : 'aspect-square h-full';
 
   const layoutHit = hitTest(layout, playhead);
@@ -1110,9 +1483,19 @@ export const ReelsStudio: React.FC = () => {
             )}
           </button>
           <button
-            onClick={() => setConfirmClearOpen(true)}
+            onClick={() => { setConfirmClearMode('new'); setConfirmClearOpen(true); }}
+            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-violet-500/20 hover:text-violet-200 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5"
+            title="Começar um novo projeto"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            <span>Novo</span>
+          </button>
+          <button
+            onClick={() => { setConfirmClearMode('clear'); setConfirmClearOpen(true); }}
             className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-300 text-xs font-medium text-zinc-400 transition-colors"
-            title="Limpar projeto e começar do zero"
+            title="Limpar tudo (destrutivo)"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
@@ -1152,8 +1535,19 @@ export const ReelsStudio: React.FC = () => {
                 >
                   <span className="w-7 h-7 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-300">🎞️</span>
                   <div className="flex-1">
-                    <div className="text-xs text-zinc-100 font-semibold">Para CapCut (.fcpxml)</div>
-                    <div className="text-[10px] text-zinc-500">Zip com timeline + mídias</div>
+                    <div className="text-xs text-zinc-100 font-semibold">Enviar pro CapCut</div>
+                    <div className="text-[10px] text-zinc-500">Aparece em "Recentes" · timeline montada</div>
+                  </div>
+                </button>
+                <button
+                  onClick={handleCapcutDownloadZip}
+                  disabled={audio.status !== 'ready'}
+                  className="w-full text-left px-3 py-2 hover:bg-white/5 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <span className="w-7 h-7 rounded-md bg-white/5 flex items-center justify-center text-zinc-400">📦</span>
+                  <div className="flex-1">
+                    <div className="text-xs text-zinc-300 font-medium">Baixar pacote (.zip)</div>
+                    <div className="text-[10px] text-zinc-500">FCPXML + mídias · pra outros editores</div>
                   </div>
                 </button>
               </div>
@@ -1653,14 +2047,24 @@ export const ReelsStudio: React.FC = () => {
                   onSelect: () => selectAndSeekBlock(b.id),
                   onJumpTo: () => selectAndSeekBlock(b.id),
                   onOpenMotion: () => {
-                    // Smart click: if no motion yet, auto-generate. If motion exists, open advanced editor.
-                    if (b.motion && b.motion.html) {
+                    // Smart click:
+                    // - no motion → auto-generate
+                    // - motion stale (asset added/removed/swapped) → regenerate, don't open editor
+                    // - motion fresh → open advanced editor
+                    const m = b.motion;
+                    const a = b.attachedAsset;
+                    const snap = m?.assetSnapshot;
+                    const isStale = !!m?.html && (
+                      (!snap && !!a) || (!!snap && !a) || (!!snap && !!a && snap.path !== a.path)
+                    );
+                    if (m && m.html && !isStale) {
                       setMotionPickerBlockId(b.id);
                     } else {
                       void handleAutoMotion(b.id);
                     }
                   },
                   onOpenMotionAdvanced: () => setMotionPickerBlockId(b.id),
+                  onOpenAssetPicker: () => setAssetPickerBlockId(b.id),
                   motionBusyMessage: motionBusyByBlock[b.id] ?? null,
                 });
 
@@ -1703,6 +2107,7 @@ export const ReelsStudio: React.FC = () => {
                     enabled={state.audio.silenceCut}
                     preset={state.audio.silencePreset}
                     detecting={state.audio.detectingSilence}
+                    applying={!!state.audio.applyingCuts}
                     detectedSilenceSec={state.audio.detectedSilenceSec}
                     effectiveDuration={audioEffectiveDuration}
                     rawDuration={state.audio.duration}
@@ -1848,15 +2253,58 @@ export const ReelsStudio: React.FC = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-3 text-[11px] text-zinc-500">
-            <button onClick={() => setZoom(z => Math.max(0.5, z - 0.25))} className="p-1 hover:text-zinc-200 transition-colors">−</button>
-            <div className="flex gap-0.5">{[1,2,3,4,5].map(i => <div key={i} className={`w-1 h-3 rounded-sm ${i <= zoom * 2 ? 'bg-violet-400' : 'bg-white/10'}`}></div>)}</div>
-            <button onClick={() => setZoom(z => Math.min(3, z + 0.25))} className="p-1 hover:text-zinc-200 transition-colors">+</button>
+          <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+            <button
+              onClick={() => setZoom(z => Math.max(1, +(z - 0.5).toFixed(2)))}
+              disabled={zoom <= 1}
+              title="Diminuir zoom"
+              className="p-1 hover:text-zinc-200 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors"
+            >−</button>
+            <button
+              onClick={() => setZoom(1)}
+              title="Resetar zoom"
+              className="font-mono text-[10px] tabular-nums w-10 text-center hover:text-zinc-200 transition-colors"
+            >{zoom.toFixed(1)}x</button>
+            <button
+              onClick={() => setZoom(z => Math.min(8, +(z + 0.5).toFixed(2)))}
+              disabled={zoom >= 8}
+              title="Aumentar zoom"
+              className="p-1 hover:text-zinc-200 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors"
+            >+</button>
           </div>
         </div>
 
+        {/* Scrollable zoom container — régua + tracks compartilham o mesmo width escalado */}
+        <div
+          ref={timelineScrollRef}
+          onWheel={(e) => {
+            // Cmd/Ctrl + scroll = zoom anchored at the cursor's source-time position.
+            if (!(e.metaKey || e.ctrlKey)) return;
+            e.preventDefault();
+            const scroller = timelineScrollRef.current;
+            if (!scroller) return;
+            const inner = scroller.firstElementChild as HTMLElement | null;
+            if (!inner) return;
+            const rect = scroller.getBoundingClientRect();
+            const cursorX = e.clientX - rect.left + scroller.scrollLeft;
+            const ratioInContent = cursorX / inner.scrollWidth;
+            const next = Math.max(1, Math.min(8, +(zoom * (e.deltaY < 0 ? 1.15 : 1 / 1.15)).toFixed(2)));
+            if (next === zoom) return;
+            setZoom(next);
+            // After zoom changes, restore the scrollLeft so the same source-time
+            // stays under the cursor. Defer to next frame so the new width is laid out.
+            requestAnimationFrame(() => {
+              const newInner = scroller.firstElementChild as HTMLElement | null;
+              if (!newInner) return;
+              const newCursorX = ratioInContent * newInner.scrollWidth;
+              scroller.scrollLeft = Math.max(0, newCursorX - (e.clientX - rect.left));
+            });
+          }}
+          className="flex-1 flex flex-col overflow-x-auto overflow-y-hidden [&::-webkit-scrollbar]:h-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-white/15 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-white/25"
+        >
+          <div className="flex flex-col flex-1" style={{ width: `${zoom * 100}%`, minWidth: '100%' }}>
         {/* Time ruler */}
-        <div className="relative h-6 border-b border-white/5 px-2">
+        <div className="relative h-6 border-b border-white/5 px-2 shrink-0">
           <div className="relative h-full">
             {Array.from({ length: Math.ceil(viewDuration) + 1 }).map((_, i) => {
               const isMajor = i % 5 === 0;
@@ -1879,13 +2327,30 @@ export const ReelsStudio: React.FC = () => {
             <div className="absolute inset-0 flex items-center px-2 pl-12">
               {audio.peaks.length > 0 ? (
                 cutOn ? (
-                  <div className="flex items-center gap-px h-full w-full">
+                  // Cut ON: each kept peak is positioned by its true source time mapped to
+                  // the compressed (effective) timeline via sourceToEffective. This keeps
+                  // the waveform aligned with the ruler and playhead — silent regions
+                  // collapse together instead of being silently re-flowed by flexbox.
+                  <div className="relative h-full w-full">
                     {audio.peaks.map((p, i) => {
                       const peakSec = (i / audio.peaks.length) * audio.duration;
                       const inKeep = cutSegments.some(k => peakSec >= k.start && peakSec < k.end);
                       if (!inKeep) return null;
+                      const effSec = sourceToEffective(peakSec);
+                      const leftPct = (effSec / Math.max(audioEffectiveDuration, 0.0001)) * 100;
+                      const widthPct = (1 / audio.peaks.length) * (audio.duration / Math.max(audioEffectiveDuration, 0.0001)) * 100;
+                      const heightPct = Math.max(8, p * 90);
                       return (
-                        <div key={i} className="flex-1 bg-gradient-to-t from-cyan-500/40 to-cyan-300/80 rounded-sm" style={{ height: `${Math.max(8, p * 90)}%` }}></div>
+                        <div
+                          key={i}
+                          className="absolute bg-gradient-to-t from-cyan-500/40 to-cyan-300/80 rounded-sm"
+                          style={{
+                            left: `${leftPct}%`,
+                            width: `${widthPct}%`,
+                            height: `${heightPct}%`,
+                            top: `${(100 - heightPct) / 2}%`,
+                          }}
+                        ></div>
                       );
                     })}
                   </div>
@@ -2328,6 +2793,8 @@ export const ReelsStudio: React.FC = () => {
             );
           })()}
         </div>
+          </div>
+        </div>
       </div>
 
       {/* ─── CONFIRM MODAL ───────────────────────────────────────────── */}
@@ -2388,6 +2855,22 @@ export const ReelsStudio: React.FC = () => {
             onSave={(motion) => {
               dispatch({ type: 'set-block-motion', id: block.id, motion });
               setMotionPickerBlockId(null);
+            }}
+          />
+        );
+      })()}
+
+      {assetPickerBlockId && (() => {
+        const block = blocks.find(b => b.id === assetPickerBlockId);
+        if (!block) return null;
+        return (
+          <AssetPickerModal
+            projectName={state.projectName}
+            current={block.attachedAsset}
+            onClose={() => setAssetPickerBlockId(null)}
+            onSelect={(asset) => {
+              dispatch({ type: 'set-block-asset', id: block.id, asset });
+              setAssetPickerBlockId(null);
             }}
           />
         );
@@ -2525,18 +3008,44 @@ export const ReelsStudio: React.FC = () => {
           <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-md w-full overflow-hidden">
             <div className="px-6 pt-6 pb-4">
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-full bg-red-500/15 border border-red-500/30 flex items-center justify-center">
-                  <svg className="w-5 h-5 text-red-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
-                  </svg>
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  confirmClearMode === 'new'
+                    ? 'bg-violet-500/15 border border-violet-500/30'
+                    : 'bg-red-500/15 border border-red-500/30'
+                }`}>
+                  {confirmClearMode === 'new' ? (
+                    <svg className="w-5 h-5 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                    </svg>
+                  ) : (
+                    <svg className="w-5 h-5 text-red-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
+                    </svg>
+                  )}
                 </div>
                 <div>
-                  <div className="text-base font-semibold text-zinc-100">Limpar projeto?</div>
-                  <div className="text-xs text-zinc-500">Essa ação não pode ser desfeita.</div>
+                  <div className="text-base font-semibold text-zinc-100">
+                    {confirmClearMode === 'new' ? 'Começar novo projeto?' : 'Limpar projeto?'}
+                  </div>
+                  <div className="text-xs text-zinc-500">
+                    {confirmClearMode === 'new'
+                      ? `O projeto atual ("${projectName}") será fechado.`
+                      : 'Essa ação não pode ser desfeita.'}
+                  </div>
                 </div>
               </div>
               <div className="text-[12.5px] text-zinc-400 leading-relaxed">
-                O roteiro, áudio gerado, clipes de avatar e takes serão removidos do app. Você vai começar do zero.
+                {confirmClearMode === 'new' ? (
+                  <>
+                    Tudo volta ao zero — roteiro, áudio, clipes de avatar e takes saem do app.
+                    <br />
+                    <span className="text-zinc-500">
+                      Os arquivos físicos do "{projectName}" (assets, motions renderizados) ficam salvos em <code className="text-zinc-400">~/Reels Studio/Projects/</code> caso queira reaproveitar depois.
+                    </span>
+                  </>
+                ) : (
+                  'O roteiro, áudio gerado, clipes de avatar e takes serão removidos do app. Você vai começar do zero.'
+                )}
               </div>
             </div>
             <div className="px-6 py-4 bg-black/30 border-t border-white/5 flex gap-2">
@@ -2561,9 +3070,15 @@ export const ReelsStudio: React.FC = () => {
                   }
                 }}
                 disabled={clearing}
-                className="flex-1 py-2.5 rounded-lg bg-red-500 hover:bg-red-400 text-xs font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className={`flex-1 py-2.5 rounded-lg text-xs font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                  confirmClearMode === 'new'
+                    ? 'bg-violet-500 hover:bg-violet-400'
+                    : 'bg-red-500 hover:bg-red-400'
+                }`}
               >
-                {clearing ? 'Limpando…' : 'Sim, limpar tudo'}
+                {clearing
+                  ? (confirmClearMode === 'new' ? 'Iniciando…' : 'Limpando…')
+                  : (confirmClearMode === 'new' ? 'Começar novo' : 'Sim, limpar tudo')}
               </button>
             </div>
           </div>
@@ -2629,6 +3144,7 @@ interface BlockCardProps {
   onJumpTo: () => void;
   onOpenMotion: () => void;
   onOpenMotionAdvanced: () => void;
+  onOpenAssetPicker: () => void;
   motionBusyMessage: string | null;
 }
 
@@ -2663,7 +3179,7 @@ const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({
   );
 };
 
-const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, motionBusyMessage }) => {
+const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, motionBusyMessage }) => {
   const isAvatar = b.kind === 'avatar';
   const duration = b.end - b.start;
   const visibleSec = b.avatarVisibleSec ?? duration;
@@ -2712,28 +3228,62 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         <div className="flex items-center gap-1">
           {(() => {
             const isBusy = !!motionBusyMessage;
-            const isReady = b.motion?.status === 'ready' && !!b.motion?.videoPath;
-            const isError = b.motion?.status === 'error';
-            const label = isBusy ? motionBusyMessage : isReady ? '🎨 Motion ✓' : isError ? '🎨 Motion ⚠' : '🎨 Motion';
+            const m = b.motion;
+            const a = b.attachedAsset;
+            // Stale = motion exists, but the attached asset changed since the
+            // motion's HTML was generated. We treat add/remove/swap as stale.
+            const snap = m?.assetSnapshot;
+            const isStale = !!m?.html && !isBusy && (
+              (!snap && !!a) ||                      // asset added after gen
+              (!!snap && !a) ||                      // asset removed after gen
+              (!!snap && !!a && snap.path !== a.path) // asset swapped
+            );
+            const isReady = m?.status === 'ready' && !!m?.videoPath && !isStale;
+            const isError = m?.status === 'error';
+
+            const label = isBusy
+              ? motionBusyMessage
+              : isStale
+                ? (!snap && a ? '🎨 Regenerar com asset'
+                  : snap && !a ? '🎨 Regenerar sem asset'
+                  : '🎨 Regenerar com novo asset')
+                : isReady
+                  ? '🎨 Motion ✓'
+                  : isError
+                    ? '🎨 Motion ⚠'
+                    : a ? '🎨 Gerar motion com asset' : '🎨 Motion';
+
             const cls = isBusy
               ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-200 cursor-progress'
-              : isReady
-                ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
-                : isError
-                  ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
-                  : 'bg-fuchsia-500/[0.06] border-fuchsia-400/20 text-fuchsia-300/80 hover:bg-fuchsia-500/15 hover:text-fuchsia-200 hover:border-fuchsia-400/40';
+              : isStale
+                ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
+                : isReady
+                  ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
+                  : isError
+                    ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
+                    : 'bg-fuchsia-500/[0.06] border-fuchsia-400/20 text-fuchsia-300/80 hover:bg-fuchsia-500/15 hover:text-fuchsia-200 hover:border-fuchsia-400/40';
+
+            const tooltip = isBusy
+              ? motionBusyMessage ?? 'Gerando…'
+              : isStale
+                ? (!snap && a ? `Asset "${a.name}" foi anexado depois. Clique pra regerar incluindo o asset.`
+                  : snap && !a ? `Motion foi gerado com "${snap.name}" mas o asset foi removido. Clique pra regerar sem asset.`
+                  : `Motion foi gerado com "${snap?.name ?? '?'}". Asset atual é "${a?.name ?? '?'}". Clique pra regerar.`)
+                : isReady
+                  ? `Editar motion · ${m?.intent ?? ''}`
+                  : isError
+                    ? `Erro: ${m?.errorMessage ?? ''}. Clique pra tentar de novo.`
+                    : a
+                      ? `Gerar motion com "${a.name}" como protagonista`
+                      : 'Gerar motion automaticamente (Gemini decide)';
+
             return (
               <>
                 <button
                   onClick={(e) => { e.stopPropagation(); if (!isBusy) onOpenMotion(); }}
                   disabled={isBusy}
                   className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors flex items-center gap-1 ${cls}`}
-                  title={
-                    isBusy ? motionBusyMessage ?? 'Gerando…'
-                    : isReady ? `Editar motion · ${b.motion?.intent ?? ''}`
-                    : isError ? `Erro: ${b.motion?.errorMessage ?? ''}. Clique pra tentar de novo.`
-                    : 'Gerar motion automaticamente (Gemini decide)'
-                  }
+                  title={tooltip}
                 >
                   {isBusy && (
                     <svg className="w-2.5 h-2.5 animate-spin" fill="none" viewBox="0 0 24 24">
@@ -2752,6 +3302,24 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                     ⚙
                   </button>
                 )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); onOpenAssetPicker(); }}
+                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors flex items-center gap-1 ${
+                    b.attachedAsset
+                      ? 'bg-violet-500/20 border-violet-400/50 text-violet-100 hover:bg-violet-500/30'
+                      : 'bg-violet-500/[0.06] border-violet-400/20 text-violet-300/80 hover:bg-violet-500/15 hover:text-violet-200 hover:border-violet-400/40'
+                  }`}
+                  title={
+                    b.attachedAsset
+                      ? `Asset anexado: ${b.attachedAsset.name} · clique pra trocar`
+                      : 'Anexar asset (imagem/vídeo) ao topo desse bloco'
+                  }
+                >
+                  <span>📎</span>
+                  <span className="max-w-[80px] truncate">
+                    {b.attachedAsset ? b.attachedAsset.name : 'Asset'}
+                  </span>
+                </button>
               </>
             );
           })()}

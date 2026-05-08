@@ -15,7 +15,7 @@
 const DB_NAME = 'reels_studio_v1';
 const DB_VERSION = 3;
 const STORE_PROJECT = 'project';
-const STORE_AUDIO = 'audio';
+const STORE_AUDIO = 'audio'; // ALWAYS the pristine Minimax output. Cuts live in memory only.
 const STORE_CLIPS = 'clips';
 const STORE_TAKES = 'takes';
 const STORE_EXPORTS = 'exports';
@@ -98,8 +98,34 @@ export interface PersistedProject {
 export const saveProject = async (state: ReelsState): Promise<void> => {
   const snapshot: PersistedProject = {
     projectName: state.projectName,
-    blocks: state.blocks,
-    audio: { ...state.audio, url: null },
+    // When cuts are applied, blocks are remapped to compressed timeline.
+    // We persist the ORIGINAL blocks so reloading the app brings the user back
+    // to a clean state (cut state is reconstructed in-memory only on demand).
+    blocks: state.audio.cutsApplied && state.audio.originalBlocks
+      ? state.audio.originalBlocks
+      : state.blocks,
+    audio: {
+      ...state.audio,
+      url: null,
+      // Drop transient flags + cut snapshots — these live only during a session.
+      applyingCuts: false,
+      cutsApplied: false,
+      originalBlocks: undefined,
+      originalWords: undefined,
+      originalDuration: undefined,
+      originalPeaks: undefined,
+      // If cuts were applied, the duration/peaks/words in state reflect the cut.
+      // Persist the ORIGINAL values so a reload starts clean.
+      duration: state.audio.cutsApplied && state.audio.originalDuration
+        ? state.audio.originalDuration
+        : state.audio.duration,
+      peaks: state.audio.cutsApplied && state.audio.originalPeaks
+        ? state.audio.originalPeaks
+        : state.audio.peaks,
+      words: state.audio.cutsApplied && state.audio.originalWords
+        ? state.audio.originalWords
+        : state.audio.words,
+    },
     selectedVoiceId: state.selectedVoiceId,
     aspect: state.aspect,
     avatarClips: state.avatarClips,

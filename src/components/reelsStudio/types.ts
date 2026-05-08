@@ -20,6 +20,21 @@ export type BlockLayout = 'avatar-only' | 'media-only' | 'avatar-top' | 'media-t
  */
 export type BlockTransition = 'cut' | 'fade' | 'dissolve';
 
+/**
+ * Asset attached by the user to a single block. Shown as overlay on the top
+ * half (50/50 split with avatar). When present, motion generation prioritises
+ * this asset as the visual centerpiece instead of choosing freely from the
+ * project's universal Assets folder.
+ */
+export interface AttachedAsset {
+  /** Filename, e.g. "logo.png" — used as label in the UI. */
+  name: string;
+  /** Absolute path on disk (Tauri `convertFileSrc` converts to asset://). */
+  path: string;
+  /** Drives whether the timeline plays it as <video> or shows as <img>. */
+  type: 'image' | 'video';
+}
+
 export interface ScriptBlock {
   id: string;
   kind: BlockKind;
@@ -58,6 +73,12 @@ export interface ScriptBlock {
    */
   motion?: MotionConfig;
   /**
+   * Optional user-attached asset (image or video) from the project's universal
+   * Assets folder. When set, the block auto-uses a 50/50 split layout with the
+   * asset on the top half, and motion generation builds around this asset.
+   */
+  attachedAsset?: AttachedAsset;
+  /**
    * Transition into the NEXT block. undefined = default fade (back-compat).
    * Last block's value is ignored (no next block).
    */
@@ -77,28 +98,47 @@ export type SilencePreset = 'natural' | 'fast' | 'super';
 
 export interface AudioState {
   status: AudioStatus;
-  /** Object URL pointing to the generated MP3 blob. */
+  /** Object URL pointing to the active MP3 blob (cut or original). */
   url: string | null;
-  /** Total duration in seconds (from decoded buffer). */
+  /** Total duration in seconds (of the current url). */
   duration: number;
   /** Per-sample peaks for waveform rendering, normalised 0..1, length = WAVEFORM_BUCKETS. */
   peaks: number[];
-  /** Word-level timestamps (estimated proportionally from text + duration). */
+  /** Word-level timestamps. When cuts are applied, these are remapped too. */
   words: WordTimestamp[];
   /** Voice id used for the most recent generation. */
   voiceId: string | null;
   /** Error message if status === 'error'. */
   error: string | null;
-  /** When true, playback + export skip silent regions in keepSegments. */
+  /** When true, playback + export use the cut audio. */
   silenceCut: boolean;
   /** Aggressiveness preset for silence detection. */
   silencePreset: SilencePreset;
-  /** Non-silent regions to keep, in seconds. Empty when not yet detected. */
+  /** Non-silent regions to keep, in seconds (in *source* time of the original audio). */
   keepSegments: { start: number; end: number }[];
   /** Total seconds detected as silence under the current preset. */
   detectedSilenceSec: number;
   /** True while running detection in background. */
   detectingSilence: boolean;
+  /** True while the worker is re-encoding the cut MP3. */
+  applyingCuts?: boolean;
+  /**
+   * When cuts are applied, this is true and the state's `url`, `duration`,
+   * `peaks`, `words` and `blocks` are all in compressed timeline; original
+   * data is restored from IndexedDB on revert.
+   */
+  cutsApplied?: boolean;
+  /**
+   * When cuts are applied, snapshot of the original block timings so we can
+   * revert without re-running word alignment.
+   */
+  originalBlocks?: ScriptBlock[];
+  /** When cuts are applied, snapshot of the original word timings. */
+  originalWords?: WordTimestamp[];
+  /** When cuts are applied, snapshot of original duration. */
+  originalDuration?: number;
+  /** When cuts are applied, snapshot of original peaks. */
+  originalPeaks?: number[];
 }
 
 export type ClipStatus = 'idle' | 'queued' | 'uploading' | 'submitting' | 'rendering' | 'ready' | 'error';
@@ -233,6 +273,7 @@ export type ReelsAction =
   | { type: 'set-avatar-zoom'; id: string; zoom: number }
   | { type: 'set-avatar-offset-y'; id: string; offsetY: number }
   | { type: 'set-block-motion'; id: string; motion: MotionConfig | undefined }
+  | { type: 'set-block-asset'; id: string; asset: AttachedAsset | undefined }
   | { type: 'split-block'; id: string; atSec: number }
   | { type: 'set-voice'; voiceId: string }
   | { type: 'set-emotion'; emotion: ReelEmotion }
@@ -246,6 +287,22 @@ export type ReelsAction =
   | { type: 'audio-silence-preset'; preset: SilencePreset }
   | { type: 'audio-silence-detect-start' }
   | { type: 'audio-silence-detect-done'; keepSegments: { start: number; end: number }[]; detectedSilenceSec: number }
+  | { type: 'audio-cuts-applying' }
+  | {
+      type: 'audio-cuts-apply-done';
+      url: string;
+      duration: number;
+      peaks: number[];
+      words: WordTimestamp[];
+      blocks: ScriptBlock[];
+      // Snapshots so revert doesn't need to re-run anything.
+      originalBlocks: ScriptBlock[];
+      originalWords: WordTimestamp[];
+      originalDuration: number;
+      originalPeaks: number[];
+    }
+  | { type: 'audio-cuts-revert'; url: string }
+  | { type: 'audio-cuts-cancel' }
   | { type: 'set-avatar-model'; model: HeyGenModelChoice }
   | { type: 'set-photo'; photoId: string }
   | { type: 'clip-update'; blockId: string; status: ClipStatus; message?: string; videoUrl?: string; error?: string }
