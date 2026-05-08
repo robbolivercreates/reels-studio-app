@@ -26,3 +26,10 @@ tokio = { version = "1", features = ["process", "io-util", "rt", "macros"] }
 dirs = "5"
 sha2 = "0.10"
 hex = "0.4"
+# Native file dialogs (Save As / Open) — avoids the silent <a download> path
+# that Tauri WebView struggles with on macOS.
+rfd = "0.15"
+# Base64 lets us stream large blobs through Tauri IPC without the 5x JSON
+# overhead of encoding Vec<u8> as a number array (which silently corrupts
+# transfers >50MB on macOS WebKit).
+base64 = "0.22"

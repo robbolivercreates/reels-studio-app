@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@breezystack/lamejs": "^1.2.7",
     "@fal-ai/client": "^1.10.0",
     "@google/genai": "^1.51.0",
     "@tauri-apps/api": "^2",
