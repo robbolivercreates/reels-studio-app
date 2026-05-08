@@ -5,6 +5,8 @@ interface Props {
   enabled: boolean;
   preset: SilencePreset;
   detecting: boolean;
+  /** True while the worker is re-encoding the cut MP3. */
+  applying?: boolean;
   detectedSilenceSec: number;
   effectiveDuration: number;
   rawDuration: number;
@@ -26,7 +28,7 @@ const formatSec = (s: number): string => {
 };
 
 export const SilenceCutControl: React.FC<Props> = ({
-  enabled, preset, detecting, detectedSilenceSec, effectiveDuration, rawDuration, onToggle, onPresetChange, disabled,
+  enabled, preset, detecting, applying, detectedSilenceSec, effectiveDuration, rawDuration, onToggle, onPresetChange, disabled,
 }) => {
   return (
     <div className={`rounded-xl border transition-all ${
@@ -47,12 +49,14 @@ export const SilenceCutControl: React.FC<Props> = ({
           <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
             ✂ Cortar silêncios
             {detecting && <span className="text-[9px] text-violet-300">analisando...</span>}
+            {applying && <span className="text-[9px] text-violet-300">aplicando cortes...</span>}
           </div>
           <div className="text-[10px] text-zinc-500 mt-0.5 leading-relaxed">
-            {!enabled && 'Pula pausas longas pra acelerar o ritmo.'}
+            {!enabled && 'Corta pausas pra deixar o ritmo dinâmico, estilo Recut.'}
             {enabled && detecting && 'Detectando pausas...'}
-            {enabled && !detecting && detectedSilenceSec < 0.1 && 'Sem pausas longas detectadas no áudio.'}
-            {enabled && !detecting && detectedSilenceSec >= 0.1 && (
+            {enabled && applying && 'Re-encodando o áudio com as palavras coladas...'}
+            {enabled && !detecting && !applying && detectedSilenceSec < 0.1 && 'Sem pausas longas detectadas no áudio.'}
+            {enabled && !detecting && !applying && detectedSilenceSec >= 0.1 && (
               <>
                 Cortando <span className="text-violet-300 font-mono font-semibold">−{detectedSilenceSec.toFixed(1)}s</span> de pausas.
                 Reel fica em <span className="text-emerald-300 font-mono font-semibold">{formatSec(effectiveDuration)}</span>{' '}
