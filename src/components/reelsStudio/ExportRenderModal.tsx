@@ -96,37 +96,70 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
     setErrorMsg(null);
 
     try {
-      // Priority: in-memory blob → IndexedDB → fetch URL (last resort, may fail on WebKit)
-      let audioBlob: Blob | null = audioBlobProp;
-      console.log('[export] audioBlobProp:', audioBlobProp?.size ?? 'null');
+      // Audio source priority differs based on whether cuts are applied:
+      //   - cutsApplied=true → use the IN-MEMORY cut blob (state.audio.url),
+      //     because IndexedDB still holds the pristine source. The blocks/duration
+      //     in state are already on the compressed timeline, so no skip mapping needed.
+      //   - cutsApplied=false → IndexedDB original, optionally with `silenceKeepSegments`
+      //     so renderMp4 skips silences during composition (legacy preview mode).
+      let audioBlob: Blob | null = null;
+      // Prefer the module-level cut session if present — it's the source of
+      // truth that survives HMR and reducer races. Fall back to state-based
+      // detection only when no cuts have been applied this session.
+      const { getCutSession } = await import('./cutSession');
+      const cutSession = getCutSession();
+      const cutsApplied = !!state.audio.cutsApplied || !!cutSession;
+
+      if (cutSession) {
+        console.log('[export] using cut session blob · size=', cutSession.audioBlob.size, '· duration=', cutSession.duration);
+        audioBlob = cutSession.audioBlob;
+      } else if (cutsApplied && state.audio.url) {
+        console.log('[export] cutsApplied=true → fetching cut audio from object URL');
+        try {
+          const resp = await fetch(state.audio.url);
+          audioBlob = await resp.blob();
+          console.log('[export] cut audio blob size:', audioBlob.size);
+        } catch (fetchErr) {
+          console.error('[export] failed to read cut audio, falling back to original:', fetchErr);
+        }
+      }
+
+      if (!audioBlob) {
+        audioBlob = audioBlobProp;
+        console.log('[export] audioBlobProp:', audioBlobProp?.size ?? 'null');
+      }
       if (!audioBlob) {
         console.log('[export] trying IndexedDB...');
         audioBlob = await loadAudioBlob();
         console.log('[export] IndexedDB blob:', audioBlob?.size ?? 'null');
       }
       if (!audioBlob && state.audio.url) {
-        console.log('[export] trying fetch url:', state.audio.url?.slice(0, 40));
         try {
           const resp = await fetch(state.audio.url);
-          console.log('[export] fetch status:', resp.status, resp.ok);
           audioBlob = await resp.blob();
-          console.log('[export] fetched blob size:', audioBlob?.size);
         } catch (fetchErr) {
           console.error('[export] fetch failed:', fetchErr);
         }
       }
       if (!audioBlob) throw new Error('Áudio não encontrado. Gere o áudio novamente (o blob expirou).');
 
+      // When using the cut session, also use its remapped blocks/duration
+      // — the React state may not have caught up yet.
+      const effectiveBlocks = cutSession ? cutSession.blocks : state.blocks;
+      const effectiveDuration = cutSession ? cutSession.duration : state.audio.duration;
       const handle = renderMp4(
         {
-          blocks: state.blocks,
+          blocks: effectiveBlocks,
           avatarClips: state.avatarClips,
           activeTake: state.takes.find(t => t.id === state.activeTakeId) ?? null,
           audioBlob,
-          duration: state.audio.duration,
+          duration: effectiveDuration,
           aspect: state.aspect,
           quality,
-          silenceKeepSegments: state.audio.silenceCut && state.audio.keepSegments.length > 0
+          // Only pass keepSegments in legacy preview mode (no cut session AND
+          // no state-based cuts applied). When cuts are physically applied,
+          // the audio + blocks are already on the compressed timeline.
+          silenceKeepSegments: !cutsApplied && state.audio.silenceCut && state.audio.keepSegments.length > 0
             ? state.audio.keepSegments
             : undefined,
         },
@@ -169,16 +202,69 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
     handleRef.current?.cancel();
   };
 
-  const downloadResult = () => {
-    if (!resultBlob || !resultUrl) return;
-    const a = document.createElement('a');
-    a.href = resultUrl;
-    a.download = `${state.projectName.replace(/[^\w-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.mp4`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    // Don't revoke — the URL stays valid until the blob changes or the modal
-    // closes (handled by the useEffect cleanup above).
+  const downloadResult = async () => {
+    if (!resultBlob) return;
+    const suggestedName = `${state.projectName.replace(/[^\w-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.mp4`;
+    try {
+      // Native Save As... dialog → pick path → stream chunks via Rust.
+      // Sending Vec<u8> directly through Tauri JSON IPC silently truncates
+      // payloads >50MB on macOS WebKit (which is why earlier attempts wrote
+      // 0-byte files). Streaming base64 chunks keeps each IPC call small.
+      const { invoke } = await import('@tauri-apps/api/core');
+      const result = await invoke<{ path: string | null }>('pick_save_path', {
+        suggestedName,
+        extension: 'mp4',
+      });
+      if (!result.path) return; // user canceled
+      const targetPath = result.path;
+      console.log('[export] saving to', targetPath, 'size=', resultBlob.size);
+
+      await invoke('truncate_file', { targetPath });
+
+      // 1MB chunks → ~1.4MB base64 → fits comfortably in IPC.
+      const CHUNK = 1024 * 1024;
+      const buffer = await resultBlob.arrayBuffer();
+      const view = new Uint8Array(buffer);
+      let totalWritten = 0;
+      for (let off = 0; off < view.length; off += CHUNK) {
+        const slice = view.subarray(off, Math.min(view.length, off + CHUNK));
+        const base64Chunk = arrayBufferToBase64(slice);
+        const written = await invoke<number>('append_chunk_to_file', {
+          targetPath,
+          base64Chunk,
+        });
+        totalWritten += written;
+      }
+      console.log('[export] wrote', totalWritten, 'bytes to disk');
+
+      // Reveal in Finder.
+      try {
+        await invoke('reveal_file_in_finder', { path: targetPath });
+      } catch (revealErr) {
+        console.warn('[export] reveal failed:', revealErr);
+      }
+    } catch (err) {
+      console.warn('[export] native save failed, falling back to download link:', err);
+      if (resultUrl) {
+        const a = document.createElement('a');
+        a.href = resultUrl;
+        a.download = suggestedName;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+    }
+  };
+
+  // Helper: encode a chunk of bytes to base64 without exceeding the call-stack
+  // limit of `String.fromCharCode(...)` for large inputs.
+  const arrayBufferToBase64 = (bytes: Uint8Array): string => {
+    let binary = '';
+    const sub = 0x8000;
+    for (let i = 0; i < bytes.length; i += sub) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + sub));
+    }
+    return btoa(binary);
   };
 
   const shareResult = async () => {

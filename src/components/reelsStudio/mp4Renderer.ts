@@ -293,8 +293,10 @@ const decodeAudioChannelData = async (blob: Blob): Promise<{ data: Float32Array;
     ((window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
   const ctx = new AC();
   try {
+    console.log('[render/audio] decoding blob · size=', blob.size, '· type=', blob.type);
     const arrayBuffer = await blob.arrayBuffer();
     const buffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+    console.log('[render/audio] decoded · sampleRate=', buffer.sampleRate, '· duration=', buffer.duration, '· channels=', buffer.numberOfChannels);
     // Mix down to mono.
     if (buffer.numberOfChannels === 1) {
       return { data: buffer.getChannelData(0).slice(), sampleRate: buffer.sampleRate, numberOfChannels: 1 };
@@ -391,14 +393,25 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
 
     const audioEncoder = new AudioEncoder({
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-      error: (e) => { throw e; },
+      error: (e) => { console.error('[render/audio] encoder error:', e); throw e; },
     });
-    audioEncoder.configure({
+    const audioConfig: AudioEncoderConfig = {
       codec: 'mp4a.40.2',
       sampleRate: 48000,
       numberOfChannels: 1,
       bitrate: 128_000,
-    });
+    };
+    // Probe support — WebKit silently substitutes sample rate / channel count
+    // and produces broken AAC headers if the config it likes differs from
+    // what we asked for. Logging the supported config tells us if WebKit is
+    // about to munge our parameters.
+    try {
+      const support = await AudioEncoder.isConfigSupported(audioConfig);
+      console.log('[render/audio] AAC config supported?', support.supported, 'effective:', support.config);
+    } catch (probeErr) {
+      console.warn('[render/audio] config probe threw:', probeErr);
+    }
+    audioEncoder.configure(audioConfig);
 
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -616,6 +629,7 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     }
 
     const totalLen = pieces.reduce((s, x) => s + x.length, 0);
+    console.log('[render/audio] composed PCM · pieces=', pieces.length, '· totalSamples=', totalLen, '· seconds=', (totalLen / targetRate).toFixed(2));
     const pcm = new Float32Array(totalLen);
     {
       let off = 0;
@@ -654,12 +668,14 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
 
     await videoEncoder.flush();
     await audioEncoder.flush();
+    console.log('[render/audio] flushed both encoders');
     videoEncoder.close();
     audioEncoder.close();
     muxer.finalize();
 
     const target = muxer.target as ArrayBufferTarget;
     const blob = new Blob([target.buffer], { type: 'video/mp4' });
+    console.log('[render/finalize] MP4 blob ready · size=', blob.size, 'bytes');
 
     // Clean up source videos.
     for (const v of videoMap.values()) {
