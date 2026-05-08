@@ -95,6 +95,62 @@ pub fn save_motion_html(motion_id: String, html: String) -> Result<String, Strin
     Ok(dir.join("index.html").to_string_lossy().into_owned())
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CopiedAsset {
+    /// Filename written under <motion-dir>/assets/, e.g. "logo.png".
+    pub filename: String,
+    /// Path relative to the motion dir (used as <img src> / <video src>).
+    pub relative_path: String,
+    /// Absolute on-disk path of the copy.
+    pub absolute_path: String,
+}
+
+/// Copy an asset from anywhere on disk into the motion's `assets/` subfolder.
+///
+/// HyperFrames runs the composition in headless Chromium OUTSIDE the Tauri
+/// runtime, so it cannot resolve `asset://localhost/...` URLs — those return
+/// `ERR_UNKNOWN_URL_SCHEME` during frame capture, which is why pinned-asset
+/// motions silently render the first frame as a static image (or time out).
+///
+/// The fix is to keep the asset alongside the composition: copy it once into
+/// `~/Reels Studio/Motions/<motion-id>/assets/<filename>` and reference it
+/// with a project-relative path (`assets/<filename>`) in the HTML.
+#[tauri::command]
+pub fn copy_asset_to_motion(motion_id: String, source_path: String) -> Result<CopiedAsset, String> {
+    let src = std::path::Path::new(&source_path);
+    if !src.is_file() {
+        return Err(format!("Arquivo de origem não encontrado: {source_path}"));
+    }
+    let filename = src
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| "Nome de arquivo inválido.".to_string())?
+        .to_string();
+
+    let dir = ensure_motion_dir(&motion_id)?;
+    let assets_dir = dir.join("assets");
+    std::fs::create_dir_all(&assets_dir)
+        .map_err(|e| format!("Falha ao criar pasta assets/: {e}"))?;
+
+    let dest = assets_dir.join(&filename);
+    // Copy only if size or mtime changed — avoids re-copying a 200MB video on
+    // every regeneration when the user hasn't swapped the asset.
+    let needs_copy = match (std::fs::metadata(&dest), std::fs::metadata(src)) {
+        (Ok(d), Ok(s)) => d.len() != s.len() || d.modified().ok() != s.modified().ok(),
+        _ => true,
+    };
+    if needs_copy {
+        std::fs::copy(src, &dest)
+            .map_err(|e| format!("Falha ao copiar asset: {e}"))?;
+    }
+
+    Ok(CopiedAsset {
+        filename: filename.clone(),
+        relative_path: format!("assets/{filename}"),
+        absolute_path: dest.to_string_lossy().into_owned(),
+    })
+}
+
 #[tauri::command]
 pub fn read_motion_html(motion_id: String) -> Result<Option<String>, String> {
     let path = motion_dir(&motion_id)?.join("index.html");
@@ -141,6 +197,94 @@ pub async fn render_motion(app: AppHandle, motion_id: String) -> Result<MotionRe
 
     let mp4_path = dir.join("output.mp4");
 
+    // Tauri does not inherit the shell PATH, so resolve npx explicitly.
+    let npx_path = ["npx", "/usr/local/bin/npx", "/usr/bin/npx", "/opt/homebrew/bin/npx"]
+        .iter()
+        .find(|&&p| std::path::Path::new(p).exists() || p == "npx")
+        .copied()
+        .unwrap_or("npx");
+
+    // ─── Step 1: Lint pass ────────────────────────────────────────────
+    // The official HyperFrames helper kit insists on running `lint` before
+    // every render. Catches forbidden patterns (rAF, repeat:-1, animating
+    // .clip directly, pseudo-elements, track collisions) BEFORE we burn
+    // ~90s of render time on output that's already broken.
+    let _ = app.emit("motion://render-progress", MotionRenderProgress {
+        motion_id: motion_id.clone(),
+        stage: "linting".into(),
+        message: "Validando composição (lint)…".into(),
+        percent: None,
+    });
+    {
+        // Use --json so we can distinguish errors from warnings cleanly.
+        // Lint exit code is non-zero whenever there's >=1 error; warnings alone
+        // do NOT block the render.
+        let lint_output = Command::new(npx_path)
+            .current_dir(&dir)
+            .env("PATH", "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin")
+            .arg("--yes")
+            .arg("hyperframes@0.5.0")
+            .arg("lint")
+            .arg("--json")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+        if let Ok(out) = lint_output {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            // Parse the JSON envelope. If parsing fails (older CLI that doesn't
+            // support --json, or unexpected output), fall through to render —
+            // we don't want lint plumbing to block legitimate work.
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+                let error_count = json.get("errorCount").and_then(|v| v.as_u64()).unwrap_or(0);
+                if error_count > 0 {
+                    // Collect human-readable messages for the user.
+                    let mut error_messages: Vec<String> = vec![];
+                    if let Some(findings) = json.get("findings").and_then(|v| v.as_array()) {
+                        for f in findings {
+                            let severity = f.get("severity").and_then(|v| v.as_str()).unwrap_or("");
+                            if severity == "error" {
+                                let code = f.get("code").and_then(|v| v.as_str()).unwrap_or("?");
+                                let msg = f.get("message").and_then(|v| v.as_str()).unwrap_or("");
+                                let hint = f.get("fixHint").and_then(|v| v.as_str()).unwrap_or("");
+                                error_messages.push(format!("• [{code}] {msg}\n  ↳ {hint}"));
+                            }
+                        }
+                    }
+                    let detail = if error_messages.is_empty() {
+                        format!("{error_count} erro(s) reportado(s).")
+                    } else {
+                        error_messages.join("\n\n")
+                    };
+                    let _ = app.emit("motion://render-progress", MotionRenderProgress {
+                        motion_id: motion_id.clone(),
+                        stage: "error".into(),
+                        message: format!("lint reprovou: {error_count} erro(s)"),
+                        percent: None,
+                    });
+                    return Err(format!("Lint do HyperFrames reprovou ({error_count} erro(s)):\n\n{detail}"));
+                }
+                // errorCount == 0 but warnings may exist — log silently and continue.
+            } else if !out.status.success() {
+                // CLI returned non-zero but we couldn't parse JSON. Fall back to
+                // showing whatever stderr/stdout said, but be conservative —
+                // only block if stderr is non-empty (indicates real failure,
+                // not just an unsupported `--json` flag).
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                if !stderr.is_empty() {
+                    let _ = app.emit("motion://render-progress", MotionRenderProgress {
+                        motion_id: motion_id.clone(),
+                        stage: "error".into(),
+                        message: format!("lint falhou: {}", stderr.lines().take(2).collect::<Vec<_>>().join(" · ")),
+                        percent: None,
+                    });
+                    return Err(format!("Lint do HyperFrames falhou:\n{stderr}"));
+                }
+            }
+        }
+    }
+
+    // ─── Step 2: Render ───────────────────────────────────────────────
     let _ = app.emit("motion://render-progress", MotionRenderProgress {
         motion_id: motion_id.clone(),
         stage: "preparing".into(),
@@ -148,14 +292,9 @@ pub async fn render_motion(app: AppHandle, motion_id: String) -> Result<MotionRe
         percent: None,
     });
 
-    // Use `npx --yes hyperframes@0.5.0 render -o output.mp4`. Pin the version so
-    // upgrades don't surprise us in the middle of a session.
-    // Tauri does not inherit the shell PATH, so resolve npx explicitly.
-    let npx_path = ["npx", "/usr/local/bin/npx", "/usr/bin/npx", "/opt/homebrew/bin/npx"]
-        .iter()
-        .find(|&&p| std::path::Path::new(p).exists() || p == "npx")
-        .copied()
-        .unwrap_or("npx");
+    // Render with explicit quality flags so text edges and gradients stay
+    // crisp: `--quality high --crf 16 --gpu --fps 30`. Pin the CLI version
+    // so upgrades don't surprise us in the middle of a session.
     let mut cmd = Command::new(npx_path);
     cmd.current_dir(&dir)
         .env("PATH", "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin")
@@ -164,6 +303,10 @@ pub async fn render_motion(app: AppHandle, motion_id: String) -> Result<MotionRe
         .arg("render")
         .arg("-o")
         .arg("output.mp4")
+        .arg("--quality").arg("high")
+        .arg("--crf").arg("16")
+        .arg("--fps").arg("30")
+        .arg("--gpu")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 

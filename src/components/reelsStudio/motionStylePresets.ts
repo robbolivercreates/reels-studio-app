@@ -261,8 +261,10 @@ ANIMATION PATTERNS the AI may use freely (GSAP):
 5. SHAPE BURST — particles fly out (use Array.from + many divs)
    for each particle: gsap.fromTo(particle, { x:0, y:0, opacity:1 }, { x: dx, y: dy, opacity: 0, duration: 0.8, ease: "power2.out" })
 
-6. CONTINUOUS FLOAT — background element drifts
-   gsap.to(".bg-shape", { y: 20, duration: 3, repeat: -1, yoyo: true, ease: "sine.inOut" })
+6. CONTINUOUS FLOAT — background element drifts (FINITE REPEAT REQUIRED)
+   const cycle = 3;
+   gsap.to(".bg-shape", { y: 20, duration: cycle, repeat: Math.floor(DURATION_SEC / cycle) - 1, yoyo: true, ease: "sine.inOut" })
+   // NEVER repeat: -1 — HyperFrames is deterministic, infinite loops freeze the render.
 
 7. STROKE DRAW — SVG path animates as it's drawn
    gsap.from("path", { strokeDashoffset: pathLength, duration: 1.2, ease: "power2.out" })
@@ -285,8 +287,20 @@ FORBIDDEN — your output MUST NOT contain:
 - setTimeout, setInterval — use GSAP timelines only
 - requestAnimationFrame — let GSAP drive it
 - external image URLs from the internet (http://, https://) — EXCEPTION: asset:// URLs provided in PROJECT ASSETS are allowed
-- external font URLs (use system fonts: Inter, system-ui, sans-serif)
-- video or audio tags — motion is visual only
+- adding NEW external font URLs in the HTML body. The host page already preloads Inter, Anton, and Space Grotesk via <link> tags in <head>. Use ONLY those three families (and "system-ui"/"sans-serif" as last-resort fallbacks). Do not add @import of fonts.googleapis.com — they will fail at render time and the text will fall back to a generic sans.
+- video or audio tags — motion is visual only · EXCEPTION: when PINNED ASSET is a video, ONE <video muted autoplay loop playsinline> tag is allowed (the asset itself).
 - any feature that depends on user interaction (click, hover, scroll)
 - console.log, alert, debugger
+- GSAP-targeting ::before / ::after pseudo-elements — GSAP CANNOT animate them. If a sheen/border/glow effect would normally use ::before, create a real <div class="sheen"></div> child instead and animate that.
+- gsap.to/from on a .clip element directly — the .clip is a TIMING SHELL that HyperFrames controls. Always wrap your animatable content in an INNER <div> inside the .clip, and animate the inner div. Pattern:
+    <div id="hero-shell" class="clip" data-start="0" data-duration="3" data-track-index="3">
+      <div id="hero-anim">…content…</div>
+    </div>
+    gsap.from("#hero-anim", { … })  // ← CORRECT (target by id)
+    gsap.from(".clip",      { … })  // ← FORBIDDEN
+- two clips on the SAME data-track-index that overlap in time, even by 0.001s. If a track gets crowded, split onto a separate track-index. Tracks 0..9 are cheap — use them.
+- a .clip without an id="…" attribute. Every timeline-visible element (every <div class="clip">, <video src=…>, <img src=…>, <canvas data-start=…>) MUST carry a stable, human-readable id like id="hero-title", id="bg-mesh", id="scene-card-1". Lint code: studio_missing_editable_id.
+- ANY element with data-start (or any timing attribute) that LACKS class="clip". Lint code: timed_element_missing_clip_class. Fix: every timed element has class="clip" — including <canvas data-start=…>, not just <div>.
+- NESTED timed elements. Two elements that both carry data-start cannot be parent-and-child. The OUTER one must drop its timing (be a static <div>) or the INNER must drop its timing. Wrapping a <video data-start> inside a <div class="clip" data-start> is FORBIDDEN — lint code: video_nested_in_timed_element. Same applies to canvas/img inside a timed shell. Rule of thumb: if the inner element needs its own timeline (video, canvas with data-start), then the outer wrapper is a plain non-timed <div> with NO class="clip" and NO data-start.
+- two clips on the SAME data-track-index that overlap in time at all (lint code: overlapping_clips_same_track). Background layer (vignette, mesh, gradient, bg-shell) and any other element on track 0 ALWAYS collide — keep ONLY ONE element on track 0 (the background), and put everything else on tracks 1+. If you need both a brand-chrome layer AND a bg gradient, put bg on track 0 and chrome on track 1.
 `.trim();

@@ -84,11 +84,60 @@ Text is allowed and welcomed. But it must MOVE and CARRY WEIGHT. Static text dro
 
 Rules of thumb:
 - 1 to 5 words per shot — one phrase, never a paragraph
-- 120-280px font-size, weight 700-900 (Inter, system-ui)
+- 120-280px font-size, weight 700-900
 - Tight letter-spacing on display: -2 to -5
 - Treat each word as a clip you can animate independently (wrap in <span class="word">)
 - Reveal techniques: clip-path wipe (left-to-right), word-by-word stagger from y:40, scale-punch on the keyword (0.7 → 1.06 → 1.0), mask reveal that pushes ink onto the canvas
 - One word can be HIGHLIGHTED — different weight, accent color, or a thick underline that draws itself across it
+
+═══════════════════════════════════════════════════════════
+ TYPOGRAPHY STACK — three fonts, three roles (DON'T MIX RANDOMLY)
+═══════════════════════════════════════════════════════════
+The render-time HTML pre-loads 3 fonts. PICK INTENTIONALLY based on the role:
+
+  ┌────────────────────────────────────────────────────────────────┐
+  │ ROLE          │ FONT             │ CSS CLASS    │ USE FOR     │
+  ├────────────────────────────────────────────────────────────────┤
+  │ Display HERO  │ Anton (cond.)    │ .font-display│ giant       │
+  │               │ single weight    │              │ headlines,  │
+  │               │ caps natural     │              │ caption-    │
+  │               │                  │              │ style "REEL │
+  │               │                  │              │ TYPOGRAPHY" │
+  ├────────────────────────────────────────────────────────────────┤
+  │ Tech/Number   │ Space Grotesk    │ .font-tech   │ stats,      │
+  │               │ 400-700          │              │ counters,   │
+  │               │ geometric tight  │              │ quotes,     │
+  │               │                  │              │ techy vibe  │
+  ├────────────────────────────────────────────────────────────────┤
+  │ Body/UI       │ Inter            │ .font-body   │ subtitles,  │
+  │               │ 400-900          │              │ captions,   │
+  │               │ neutral          │              │ explainers  │
+  └────────────────────────────────────────────────────────────────┘
+
+CONTRAST RULE — every motion should pair AT LEAST TWO of these for visual hierarchy:
+- "ANTON HERO" (display, 200px, uppercase) above "small inter caption" (24px) = pro look
+- "Space Grotesk 88" (counter big) + "Inter caption" (16px label below) = data slide
+- AVOID single-font motions — they read as "Bootstrap default" instead of "produced reel"
+
+EXAMPLES:
+
+  HERO HEADLINE (Anton, Reel-style caption energy):
+  <h1 class="font-display" style="font-size:240px; line-height:0.92; letter-spacing:-3px; color:#fff;">
+    <span class="word">MUDOU</span> <span class="word">O</span> <span class="word highlight">JOGO</span>
+  </h1>
+
+  STAT BLOCK (Space Grotesk for numbers, Inter for label):
+  <div class="font-tech" style="font-size:200px; font-weight:700; letter-spacing:-6px;">3.2x</div>
+  <div class="font-body" style="font-size:28px; font-weight:500; letter-spacing:6px; text-transform:uppercase; opacity:0.7;">faster than before</div>
+
+  EDITORIAL QUOTE (Space Grotesk italic-feel):
+  <p class="font-tech" style="font-size:54px; font-weight:500; line-height:1.15; max-width:880px;">"a melhor IA é a que você não precisa pensar como usar"</p>
+
+DON'T:
+- Mix Anton with Anton at different sizes — boring
+- Use Anton for body text — too condensed to read at small sizes
+- Use Inter for hero — looks like a Notion page
+- Forget letter-spacing on Anton (-1 to -3px tightens it for that "TIKTOK CAPTION" feel)
 - Avoid: subtitle-style sentences. Avoid: stacking 3+ separate text blocks. Avoid: tiny text (<60px).
 
 If you put text on screen, it must EARN its frame — through size, motion, or contrast. Default to fewer words sized HUGE rather than more words sized small.
@@ -274,7 +323,42 @@ K) MULTI-BEAT TYPOGRAPHY — phrase reveals one chunk at a time across the block
    tl.from('.w4', { scale: 0.7, opacity: 0, duration: 0.5, ease: 'back.out(2)' }, 5.2)
    tl.to('.line, .line2, .line3', { opacity: 0, y: -20, duration: 0.4, ease: 'expo.in' }, DURATION - 0.4)
 
-L) ICON SWAP CHAIN — same slot, different icons appear/swap over time
+L) CANVAS-DRIVEN ATMOSPHERE — particles, hex mesh, flow fields, audio-spectra style backgrounds
+   Use a <canvas> for any rich procedural background that would be too costly with DOM elements
+   (1000+ particles, generative noise, fluid sims, polygon meshes). HOOK INTO THE TIMELINE — never
+   requestAnimationFrame. Pattern:
+
+   <canvas id="atmosphere-canvas" class="clip" data-start="0" data-duration="DURATION" data-track-index="0"
+           width="1080" height="1920" style="position:absolute; inset:0;"></canvas>
+   // ⚠ track 0 is reserved for ONE bg/atmosphere layer only — don't put a vignette
+   //   AND a particle canvas both on track 0. Pick one for track 0; if you need
+   //   another, use track 1.
+
+   const c = document.querySelector('canvas')
+   const ctx = c.getContext('2d')
+   // Pre-build deterministic data — NO Math.random, use a seeded counter:
+   const N = 80
+   const dots = Array.from({length:N}, (_,i) => ({ x: ((i*271)%1080), y: ((i*577)%1920), phase: (i*0.21) }))
+
+   const draw = (t) => {
+     ctx.clearRect(0, 0, 1080, 1920)
+     for (const d of dots) {
+       const yy = d.y + Math.sin(t*1.2 + d.phase) * 14
+       ctx.fillStyle = 'rgba(255,255,255,' + (0.3 + 0.2*Math.sin(t + d.phase)) + ')'
+       ctx.beginPath(); ctx.arc(d.x, yy, 2, 0, Math.PI*2); ctx.fill()
+     }
+   }
+
+   // Drive the canvas from the master timeline — fires every frame the renderer captures:
+   tl.eventCallback('onUpdate', () => draw(tl.time()))
+   // Optional: tween a scalar so you have animated control:
+   tl.to({k:0}, { k:1, duration: DURATION, ease:'none', onUpdate: function(){ /* use this.targets()[0].k */ } }, 0)
+
+   ⚠ ABSOLUTELY NEVER use requestAnimationFrame or setInterval for canvas redraw — both are forbidden
+   and will produce a frozen canvas in the rendered MP4. The renderer captures frames synchronously
+   from GSAP's master timeline, so canvas MUST redraw on tl.eventCallback('onUpdate', …).
+
+M) ICON SWAP CHAIN — same slot, different icons appear/swap over time
    Best for "vários tipos de coisa" / "transformações" — tells a story across the block.
    3-5 SVG icons stacked at the same position, only one visible at a time.
    tl.set(['.icon2', '.icon3', '.icon4'], { opacity: 0 })
@@ -285,8 +369,8 @@ L) ICON SWAP CHAIN — same slot, different icons appear/swap over time
    tl.fromTo('.icon3', { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: 'back.out(1.4)' }, 4.1)
    Optionally pulse the last icon as climax: tl.to('.icon3', { scale: 1.08, duration: 0.4, yoyo: true, repeat: 1 }, 5.5)
 
-Combine: pick ONE of the multi-beat structures (K or L) for blocks > 4s, then
-combine with (J background drift) and (I particles) for atmosphere. For blocks
+Combine: pick ONE of the multi-beat structures (K or M) for blocks > 4s, then
+combine with (J background drift) and (I particles or L canvas) for atmosphere. For blocks
 ≤ 3s, a simpler arc (A entrance + F punch + exit) is fine.
 
 ═══════════════════════════════════════════════════════════
@@ -306,7 +390,7 @@ combine with (J background drift) and (I particles) for atmosphere. For blocks
 ═══════════════════════════════════════════════════════════
  TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════
-1. Each element: class="clip", data-start, data-duration, data-track-index (0=back, higher=front)
+1. Each element: class="clip", data-start, data-duration, data-track-index (0=back, higher=front), id="kebab-case-name" (REQUIRED — lint fails without an id on every timeline element). Media tags (<video src=…>, <img src=…>) ALSO need data-start + data-duration on the tag itself, in addition to being inside a .clip shell — without that the lint reports 'media_missing_data_start' and the render aborts.
 2. ONE <script> at the end:
    window.__timelines = window.__timelines || {}
    const tl = gsap.timeline({ paused: true })
@@ -314,7 +398,11 @@ combine with (J background drift) and (I particles) for atmosphere. For blocks
    ({COMPOSITION_ID} is a literal placeholder — write it exactly)
 3. All tweens fit within each element's data-start to data-start+data-duration window
 4. Canvas: 1080×1920px. Absolute positioning. Sizes in px.
-5. Fonts: Inter, system-ui, sans-serif (already loaded)
+5. Fonts already loaded (use ONLY these — no other Google Fonts links):
+   - "Inter" wght 400-900   → body/UI (use class="font-body" or font-family:"Inter")
+   - "Anton"                → display headlines (use class="font-display") — single weight, condensed, uppercase-feel
+   - "Space Grotesk" 400-700 → tech/numbers/quotes (use class="font-tech")
+   Combine at least TWO families per motion for proper hierarchy. See TYPOGRAPHY STACK section.
 6. GSAP 3.14 already loaded. No external URLs. No images.
 7. FORBIDDEN: Date.now(), Math.random(), fetch(), setTimeout(), setInterval(), requestAnimationFrame()
 8. SVG icons must be inline, self-contained, under 400 chars each
@@ -333,6 +421,8 @@ If the user provided a manual intent or text override, use those values verbatim
 export interface ProjectAsset {
   name: string;   // filename, e.g. "screenshot-dashboard.png"
   path: string;   // absolute local path — converted to asset:// URL for HTML
+  /** Optional — present when the asset comes from `list_project_assets`. */
+  kind?: 'image' | 'video';
 }
 
 export interface GenerateMotionInput {
@@ -350,6 +440,23 @@ export interface GenerateMotionInput {
   compositionId: string;
   /** Project screenshots/images the user dropped in the Assets folder. */
   projectAssets?: ProjectAsset[];
+  /**
+   * When the user explicitly attached ONE asset to this block, it becomes the
+   * visual centerpiece. Gemini must build the motion around this asset (animate
+   * it, frame it, add effects on top) instead of generating a replacement.
+   * If set, `projectAssets` is ignored — only this asset is referenced.
+   */
+  pinnedAsset?: ProjectAsset & {
+    type?: 'image' | 'video';
+    /**
+     * If the caller already copied the asset into the motion's `assets/`
+     * folder, this is the project-relative URL to use in the HTML
+     * (e.g. "assets/foo.mp4"). HyperFrames cannot resolve `asset://` URLs
+     * because it runs in headless Chromium outside Tauri — relative paths
+     * are required for video/image assets to actually decode at render time.
+     */
+    relativeUrl?: string;
+  };
   /** Full reel script context — helps Gemini understand where this block sits. */
   reelContext?: {
     projectName?: string;
@@ -357,6 +464,15 @@ export interface GenerateMotionInput {
     blockIndex?: number;
     prevBlockText?: string;
     nextBlockText?: string;
+    /**
+     * Visual intent of the immediately preceding motion (one-liner, pt-BR or en).
+     * Helps Gemini avoid generating two visually identical motions in a row.
+     * Example: "número grande 3.0x escalando com partículas" → next motion should
+     * AVOID number-as-hero and pick a different focal grammar.
+     */
+    prevMotionIntent?: string;
+    /** Visual intent of the motion two blocks back, used to vary the rhythm further. */
+    prevPrevMotionIntent?: string;
   };
   /** Motion layer mode — affects canvas dimensions and composition design. */
   motionLayer?: 'overlay' | 'replace' | 'split-bottom' | 'split-top';
@@ -556,6 +672,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     : researchBrand(ai, input.blockText, input.reelContext);
 
   const ctx = input.reelContext;
+  const recentIntents = [ctx?.prevPrevMotionIntent, ctx?.prevMotionIntent].filter(Boolean) as string[];
   const reelContextSection = ctx ? [
     `--- REEL CONTEXT ---`,
     ctx.projectName ? `Project: ${ctx.projectName}` : '',
@@ -565,6 +682,20 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ctx.blockIndex !== undefined ? `This is block ${ctx.blockIndex + 1} of ${ctx.allBlocks?.length ?? '?'}` : '',
     ctx.prevBlockText ? `Previous block: "${ctx.prevBlockText}"` : '',
     ctx.nextBlockText ? `Next block: "${ctx.nextBlockText}"` : '',
+    recentIntents.length > 0 ? [
+      ``,
+      `╔══════════════════════════════════════════════════════╗`,
+      `  🎬 STORYBOARD CONTINUITY — vary the visual rhythm`,
+      `╚══════════════════════════════════════════════════════╝`,
+      `Recent motions in this reel (most recent last):`,
+      ...recentIntents.map((intent, i) => `  ${i === recentIntents.length - 1 ? '↪ just before this' : '↪ two blocks back'}: "${intent}"`),
+      ``,
+      `RULE: do NOT repeat the same focal grammar. If the previous motion's hero was a giant number,`,
+      `pick a different hero this time (icon swap, kinetic type, SVG path draw, glass card with chart, etc).`,
+      `Variety in the focal element across consecutive blocks is what makes the reel feel produced, not generic.`,
+      `KEEP CONSTANT: brand colors, typography weights, ease curves — the reel must feel like one piece.`,
+      `VARY: hero element, composition layout, primary animation verb.`,
+    ].join('\n') : '',
     '',
   ].filter(Boolean).join('\n') : '';
 
@@ -613,9 +744,139 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
   ].join('\n');
 
-  // Build assets section — give Gemini the asset:// URLs it can use directly in <img> tags
+  // ─── Brand chrome (persistent visual identity layer) ──────────────────
+  // After the FIRST motion of a reel, every subsequent motion gets a small
+  // section instructing Gemini to include a faint always-on chrome layer on
+  // track 0: a subtle hex mesh, a vignette, a 1-2px brand-coloured frame.
+  // This makes the reel feel cohesive instead of every block reinventing its
+  // own background. We only inject this when `isReusedBrand` is true so the
+  // first motion stays clean (it sets the visual tone for the rest).
+  const brandChromeSection = isReusedBrand && brand ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  🎨 PERSISTENT BRAND CHROME — track 9 (top, non-blocking)`,
+    `╚══════════════════════════════════════════════════════╝`,
+    `Every motion in this reel MUST include ONE subtle, always-on chrome layer at data-track-index="9"`,
+    `(rendered ON TOP of all content), running for the full duration. pointer-events:none so it never blocks.`,
+    `This is what makes consecutive blocks feel like the same piece. Track 9 is reserved for chrome —`,
+    `do NOT put any other element there. Track 0 is reserved for ONE bg/atmosphere layer only.`,
+    ``,
+    `Pick ONE of these patterns (do NOT combine; one chrome only):`,
+    ``,
+    `Option A — VIGNETTE FRAME:`,
+    `  <div id="brand-chrome-vignette" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="9"`,
+    `       style="position:absolute; inset:0; pointer-events:none;`,
+    `              box-shadow:inset 0 0 200px rgba(0,0,0,0.55), inset 0 0 0 1px ${brand.brandPrimaryColor}33;"></div>`,
+    ``,
+    `Option B — FAINT HEX MESH (canvas, deterministic):`,
+    `  <canvas id="brand-chrome-mesh" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="9"`,
+    `          width="1080" height="1920" style="position:absolute; inset:0; opacity:0.06;"></canvas>`,
+    `  // draw hex grid at low opacity in brandPrimaryColor — see GSAP TECHNIQUE L for the canvas pattern`,
+    ``,
+    `Option C — TOP+BOTTOM BRAND BARS:`,
+    `  <div id="brand-chrome-bars" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="9"`,
+    `       style="position:absolute; inset:0; pointer-events:none;`,
+    `              background: linear-gradient(180deg, ${brand.brandPrimaryColor}22 0%, transparent 8%, transparent 92%, ${brand.brandPrimaryColor}22 100%);"></div>`,
+    ``,
+    `RULES:`,
+    `• Chrome must be SUBTLE (opacity ≤ 0.12, or alpha-tinted brand color). It is not the focal element.`,
+    `• Chrome must use brand colors only — never decorative palettes.`,
+    `• Chrome can have a slow drift animation (e.g. canvas redraw via tl.eventCallback) but must not steal attention.`,
+    `• Pick the SAME chrome option you would expect a previous motion in this reel to have used — consistency over creativity here.`,
+    ``,
+  ].join('\n') : '';
+
+  // Build assets section — give Gemini the asset:// URLs it can use directly in <img> tags.
+  // PRIORITY: if a `pinnedAsset` is set (user explicitly attached one), it wins —
+  // the motion is built AROUND that single asset and projectAssets are ignored.
   const { convertFileSrc } = await import('@tauri-apps/api/core');
-  const assetsSection = input.projectAssets && input.projectAssets.length > 0 ? [
+  const assetsSection = input.pinnedAsset ? (() => {
+    const a = input.pinnedAsset!;
+    // Prefer the pre-copied relative URL (assets/foo.mp4) — HyperFrames cannot
+    // resolve asset:// URLs at render time. Only fall back to asset:// when
+    // the caller hasn't copied the file (used by the live preview path).
+    const url = a.relativeUrl ?? convertFileSrc(a.path);
+    const isVideo = a.type === 'video';
+    // CRITICAL: video and image have DIFFERENT shell rules.
+    // - <img>: needs to be inside a .clip shell. The shell handles timing.
+    // - <video>: IS its own .clip (with data-start on the tag itself). DO NOT
+    //   wrap it in another timed shell — HyperFrames lint reports
+    //   `video_nested_in_timed_element` and the render freezes the video.
+    // Layout-aware positioning — the asset's safe center depends on the slot:
+    //   - split-top   (slot 1080×960, asset slot = top half) → center at y=480
+    //   - split-bottom (asset slot = bottom half)            → center at y=480 (slot is offset by HyperFrames)
+    //   - replace      (full frame 1080×1920)                → center at y=960
+    //   - overlay                                            → use CSS centering
+    // For all of these the canvas root maps the slot's own coords, so y=50%
+    // maps to the slot's true center. Using percent + translate is the only
+    // way to GUARANTEE the asset stays centered no matter what width/height
+    // it actually decodes to. Pixel coords drift because Gemini guesses heights.
+    const layer = input.motionLayer ?? 'overlay';
+    const safeWidth = layer === 'split-bottom' || layer === 'split-top' ? 760 : 880;
+    const safeMaxHeight = layer === 'split-bottom' || layer === 'split-top' ? 700 : 1400;
+    const mediaBlock = isVideo
+      ? [
+          `   <video id="pinned-asset-video" class="clip" src="${url}"`,
+          `          data-start="0" data-duration="${input.durationSec}" data-track-index="3"`,
+          `          autoplay muted loop playsinline preload="auto"`,
+          `          style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:${safeWidth}px; max-height:${safeMaxHeight}px; object-fit:contain; border-radius:24px; box-shadow:0 32px 80px rgba(0,0,0,0.6);"></video>`,
+        ].join('\n')
+      : [
+          `   <div id="pinned-asset-shell" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="3"`,
+          `        style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);">`,
+          `     <img id="pinned-asset-image" class="asset-anim" src="${url}" loading="eager"`,
+          `          style="width:${safeWidth}px; max-height:${safeMaxHeight}px; object-fit:contain; border-radius:24px; box-shadow:0 32px 80px rgba(0,0,0,0.6);" />`,
+          `   </div>`,
+        ].join('\n');
+    return [
+      `╔══════════════════════════════════════════════════════╗`,
+      `  📌 PINNED ASSET — user attached this to the block`,
+      `  THIS ASSET IS THE VISUAL PROTAGONIST. NON-NEGOTIABLE.`,
+      `╚══════════════════════════════════════════════════════╝`,
+      `Filename: "${a.name}" (${a.kind ?? (isVideo ? 'video' : 'image')})`,
+      `URL: ${url}`,
+      ``,
+      `HARD RULES — failure to follow these = wrong output:`,
+      `1. The asset MUST be the centerpiece of this composition. Do NOT generate a replacement, do NOT hide it, do NOT make it secondary.`,
+      `2. Build motion AROUND the asset: entrance animation, idle micro-motion (subtle drift, glow pulse), supporting elements (text labels, arrows, particles, frames) that point to or complement it.`,
+      `3. The asset takes ~60-80% of the slot's visual area. Position it as the focal point.`,
+      `4. Use the EXACT URL above. Do not invent paths.`,
+      ``,
+      `🎯 POSITIONING — COPY THE TEMPLATE BELOW VERBATIM. DO NOT REWRITE THE STYLE ATTRIBUTE.`,
+      ``,
+      `   The asset's positioning uses CSS centering (left:50%; top:50%; translate(-50%,-50%))`,
+      `   because it is the only way to GUARANTEE the asset stays centered in the slot regardless`,
+      `   of the asset's intrinsic dimensions. If you replace this with absolute pixel coordinates`,
+      `   (left:160px, top:260px, etc.), the asset WILL drift off-center because video and image`,
+      `   intrinsic sizes are unknown at prompt time. THIS IS A REPEAT BUG — do not introduce it again.`,
+      ``,
+      `   Required style attribute (copy verbatim — only change box-shadow/border-radius if needed):`,
+      `     position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:${safeWidth}px; max-height:${safeMaxHeight}px; object-fit:contain;`,
+      ``,
+      `   You MAY add: border-radius, box-shadow, border, filter (e.g. drop-shadow). You MAY NOT change`,
+      `   left/top/transform/width/max-height/object-fit. If you want the asset offset (e.g. for a label`,
+      `   below it), wrap supporting elements around the centered asset, do not move the asset itself.`,
+      ``,
+      isVideo
+        ? `5. VIDEO ASSET TEMPLATE — the <video> tag IS its own .clip. Do NOT wrap it in another .clip shell (lint rule: video_nested_in_timed_element). Animate it directly:`
+        : `5. IMAGE ASSET TEMPLATE — wrap the <img> in a .clip shell and animate the inner <img>:`,
+      mediaBlock,
+      isVideo ? `   ⚠ ALWAYS keep the muted attribute. Asset audio would clash with the narration track.` : ``,
+      `6. Only ONE copy of the asset. Don't duplicate, mirror, or grid it.`,
+      isVideo
+        ? `7. GSAP target: '#pinned-asset-video'. You CAN gsap.from/to the <video> itself for entrance/exit because it IS the timed element here. Do NOT animate transform-origin/scale on the video without preserving its width — keep the asset readable.`
+        : `7. NEVER GSAP-target the .clip itself — animate '#pinned-asset-image' or supporting children only.`,
+      ``,
+      `RECOMMENDED ANIMATION GRAMMAR (target .asset-anim, never .clip):`,
+      `• Entrance: tl.from('.asset-anim', { scale:0.85, opacity:0, y:40, duration:0.6, ease:'back.out(1.6)' })`,
+      `• Idle drift: const cycle = 2; tl.to('.asset-anim', { y:'+=8', duration:cycle, repeat: Math.floor((${input.durationSec}-1) / cycle), yoyo:true, ease:'sine.inOut' }, '>-0.1')`,
+      `• Glow pulse via real child <div class="glow-ring"> (NOT ::before) animated with box-shadow tween`,
+      `• Supporting text: brand-coloured headline next to or below the asset, animated in after it lands`,
+      `• Arrows / annotations pointing TO the asset, drawn with SVG path stroke animation`,
+      ``,
+      `CONTEXT: the user said "${input.blockText.slice(0, 120)}${input.blockText.length > 120 ? '…' : ''}" while this asset is on screen — frame the composition so the asset visually answers what's being said.`,
+      ``,
+    ].filter(Boolean).join('\n');
+  })() : input.projectAssets && input.projectAssets.length > 0 ? [
     `╔══════════════════════════════════════════════════════╗`,
     `  PROJECT ASSETS — real screenshots from the user`,
     `  PREFER these over AI-generated mockups whenever relevant to the block.`,
@@ -625,11 +886,13 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       return `• "${a.name}" → use as: <img src="${url}" style="..." />`;
     }),
     ``,
-    `HOW TO USE ASSETS IN HTML:`,
-    `  <img src="ASSET_URL" class="clip" data-start="0" data-duration="${input.durationSec}"`,
-    `       data-track-index="2" style="position:absolute; width:600px; border-radius:16px;`,
-    `       box-shadow:0 24px 64px rgba(0,0,0,0.6);" />`,
-    `GSAP: tl.from(img, { scale:0.9, opacity:0, duration:0.5, ease:'back.out(1.4)' })`,
+    `HOW TO USE ASSETS IN HTML — CLIP-SHELL PATTERN (REQUIRED):`,
+    `  <div id="screenshot-shell" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="2"`,
+    `       style="position:absolute; left:240px; top:600px;">`,
+    `    <img id="screenshot-img" class="asset-anim" src="ASSET_URL" data-start="0" data-duration="${input.durationSec}"`,
+    `         style="width:600px; border-radius:16px; box-shadow:0 24px 64px rgba(0,0,0,0.6);" />`,
+    `  </div>`,
+    `GSAP (target by id, never the .clip): tl.from('#screenshot-img', { scale:0.9, opacity:0, duration:0.5, ease:'back.out(1.4)' })`,
     `For TUTORIAL_STEP blocks: place the screenshot inside the phone/browser frame SVG.`,
     `For HOW_IT_WORKS blocks: use screenshots as the "result" box content.`,
     ``,
@@ -657,6 +920,12 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         `• Visual edge: add a subtle top/bottom border or glow (2-4px, brandPrimaryColor) to frame the slot cleanly`,
         `• The split seam between avatar and motion will have a gradient — design the edge of your slot with this in mind`,
         `• DO NOT design for 1920px height — anything below 960px will be clipped`,
+        ``,
+        `📐 SAFE AREA (split slot, 1080×960):`,
+        `  Place all primary content inside x:60–1020, y:80–820.`,
+        `  • Top 80px and bottom 140px are SOFT BLEED zones — gradients, atmospheric particles only, no headlines or hero icons.`,
+        `  • The bottom 140px is reserved for the seam gradient + caption rail bleed-through; keep it visually quiet.`,
+        `  • Hero/focal element vertical center should sit around y=420-480 (true middle of the slot).`,
       ].join('\n');
     }
     if (layer === 'replace') {
@@ -666,6 +935,12 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         `╚══════════════════════════════════════════════════════╝`,
         `This composition fills the ENTIRE screen (1080×1920px). No avatar underneath.`,
         `Design for maximum visual impact — this IS the entire video frame for this block.`,
+        ``,
+        `📐 SAFE AREA (full frame, 1080×1920):`,
+        `  Place all primary content inside x:80–1000, y:220–1540.`,
+        `  • Top 220px reserved for status-bar-style chrome / hook badge.`,
+        `  • Bottom 380px reserved for caption rail (~y:1540–1820) + handle/CTA zone (y:1820–1920).`,
+        `  • Hero/focal element vertical center: aim for y≈900-960 (true middle of the safe box).`,
       ].join('\n');
     }
     // overlay
@@ -681,6 +956,11 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       `• Decorative shapes: bright, colored, at 60-80% opacity — avoid white which washes out`,
       `• NO background fills over 15% brightness — they will wash out the avatar face`,
       `• Think: floating text and glowing elements that appear to hover over the person`,
+      ``,
+      `📐 SAFE AREA (overlay, 1080×1920):`,
+      `  Avatar face typically lives in y:480–1240. KEEP THAT ZONE CLEAR of large opaque graphics.`,
+      `  Place text/badges in y:200–460 (above face) or y:1280–1540 (below face).`,
+      `  Decorative particles can drift across the face zone but must stay sparse and never opaque.`,
     ].join('\n');
   })();
 
@@ -689,6 +969,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
     reelContextSection,
     brandSection,
+    brandChromeSection,
     assetsSection,
     `--- THIS BLOCK (illustrate this) ---`,
     input.blockText.trim(),
@@ -768,6 +1049,14 @@ export const buildFullHtmlDoc = (motion: MotionConfig): string => {
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=1080, height=${canvasH}" />
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <!-- Motion typography stack:
+         - Inter (UI/body/captions) — neutral, legible, default
+         - Anton (display headlines, single-weight 400) — condensed heavy, "reel caption" energy
+         - Space Grotesk (tech/quotes/numbers) — geometric, modern, monospace-ish
+         HyperFrames injects deterministic @font-face for these so renders are reproducible. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Anton&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
@@ -776,6 +1065,10 @@ export const buildFullHtmlDoc = (motion: MotionConfig): string => {
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
       }
       .clip { will-change: opacity, transform; }
+      /* Convenience classes the prompt encourages Gemini to use. */
+      .font-display { font-family: "Anton", "Inter", system-ui, sans-serif; letter-spacing: -0.01em; text-transform: uppercase; }
+      .font-tech    { font-family: "Space Grotesk", "Inter", system-ui, sans-serif; letter-spacing: -0.02em; }
+      .font-body    { font-family: "Inter", system-ui, sans-serif; }
     </style>
   </head>
   <body>

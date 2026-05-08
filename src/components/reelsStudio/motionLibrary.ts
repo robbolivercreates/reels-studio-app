@@ -51,6 +51,16 @@ export interface MotionConfig {
   generatedAt?: number;
   /** When the MP4 was last rendered. */
   renderedAt?: number;
+  /**
+   * Snapshot of the user-attached asset at the moment this motion's HTML was
+   * generated. Compared at render-time to `block.attachedAsset` to detect a
+   * stale state ("user changed/removed/added the asset after generating").
+   * undefined = motion was generated without a pinned asset.
+   */
+  assetSnapshot?: {
+    path: string;
+    name: string;
+  };
 }
 
 export const newMotionId = (): string =>
