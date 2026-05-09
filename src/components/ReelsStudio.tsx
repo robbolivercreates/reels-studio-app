@@ -20,7 +20,8 @@ import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
 import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
 import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
-import { createMotionFromBlock, type MotionConfig } from './reelsStudio/motionLibrary';
+import { createMotionFromBlock, isMotionAssetsStale, type MotionConfig } from './reelsStudio/motionLibrary';
+import { STYLE_PRESETS, type StylePresetId, findStylePreset } from './reelsStudio/motionStylePresets';
 import { generateMotionHtml, buildFullHtmlDoc } from '../services/motionService';
 import { invoke } from '@tauri-apps/api/core';
 import { GenerateAvatarsModal } from './reelsStudio/GenerateAvatarsModal';
@@ -640,7 +641,12 @@ export const ReelsStudio: React.FC = () => {
       if (msg === null) delete next[blockId]; else next[blockId] = msg;
       return next;
     });
-    const seed = createMotionFromBlock(block);
+    const seedBase = createMotionFromBlock(block);
+    // Per-block style preset override: if the user picked a vibe in the
+    // inline chip on the card, use it. Otherwise stick with the seed default.
+    const seed = block.stylePresetOverride
+      ? { ...seedBase, presetId: block.stylePresetOverride }
+      : seedBase;
     const blockIndex = blocks.indexOf(block);
     try {
       setBusy('Pensando…');
@@ -664,44 +670,53 @@ export const ReelsStudio: React.FC = () => {
       // sandboxed headless Chromium that does NOT resolve asset:// URLs — using
       // them produces ERR_UNKNOWN_URL_SCHEME and the render dies in frame
       // capture (with a 45s timeout per asset). Relative paths fix this.
-      let pinnedAsset: {
-        name: string; path: string; kind: 'image' | 'video' | undefined;
-        type: 'image' | 'video' | undefined; relativeUrl?: string;
-      } | undefined;
-      if (block.attachedAsset) {
-        pinnedAsset = {
-          name: block.attachedAsset.name,
-          path: block.attachedAsset.path,
-          kind: block.attachedAsset.type,
-          type: block.attachedAsset.type,
+      // Multi-asset carousel: copy each attached asset into the motion folder
+      // and build a parallel pinnedAssets array. Each entry carries its own
+      // relativeUrl so the prompt can reference them by project-relative path.
+      type PinnedAssetIn = {
+        name: string;
+        path: string;
+        kind: 'image' | 'video' | undefined;
+        type: 'image' | 'video' | undefined;
+        relativeUrl?: string;
+      };
+      const attachedAssets = block.attachedAssets ?? [];
+      const pinnedAssets: PinnedAssetIn[] = [];
+      for (const a of attachedAssets) {
+        const entry: PinnedAssetIn = {
+          name: a.name,
+          path: a.path,
+          kind: a.type,
+          type: a.type,
         };
-        console.log('[motion] copying asset into motion folder · motion=', seed.id, '· src=', block.attachedAsset.path);
+        console.log('[motion] copying asset into motion folder · motion=', seed.id, '· src=', a.path);
         try {
           const copied = await invoke<{ relative_path: string; absolute_path: string }>('copy_asset_to_motion', {
             motionId: seed.id,
-            sourcePath: block.attachedAsset.path,
+            sourcePath: a.path,
           });
-          pinnedAsset.relativeUrl = copied.relative_path; // e.g. "assets/foo.mp4"
-          console.log('[motion] asset copied OK · relativeUrl=', copied.relative_path, '· at=', copied.absolute_path);
+          entry.relativeUrl = copied.relative_path; // e.g. "assets/foo.mp4"
+          console.log('[motion] asset copied OK · relativeUrl=', copied.relative_path);
         } catch (e) {
-          console.error('[motion] FAILED to copy asset into motion folder · falling back to asset://', e);
-          // Fall through — generation will use asset:// (live preview will work,
-          // but the render will show a frozen first frame for video assets).
+          console.error('[motion] FAILED to copy asset · falling back to asset://', e);
+          // Fall through — preview works via asset://, render may freeze for video.
         }
+        pinnedAssets.push(entry);
       }
-      // Layer choice when an asset is attached:
-      //   - Avatar block: split-top (asset on the top half, avatar fills bottom)
-      //   - B-roll block: replace (no avatar exists, so the motion + asset
-      //     should fill the entire 1080×1920 frame; otherwise the bottom half
-      //     would just be black).
-      const effectiveLayer = pinnedAsset
+      const hasPinnedAssets = pinnedAssets.length > 0;
+
+      // Layer choice when assets are attached:
+      //   - Avatar block: split-top (assets on the top half, avatar fills bottom)
+      //   - B-roll block: replace (no avatar exists, so motion + assets fill
+      //     the entire 1080×1920 frame; otherwise the bottom half would be black).
+      const effectiveLayer = hasPinnedAssets
         ? (block.kind === 'broll' ? 'replace' : 'split-top')
         : seed.layer;
 
       // Universal asset list: only forward it to Gemini if NO block in the reel
-      // has an explicit pinned asset. Otherwise the model may "borrow" assets
+      // has explicit pinned assets. Otherwise the model may "borrow" assets
       // intended for other blocks. Pinned-only mode keeps the user in control.
-      const reelHasPinnedAssets = blocks.some(b => !!b.attachedAsset);
+      const reelHasPinnedAssets = blocks.some(b => (b.attachedAssets?.length ?? 0) > 0);
       const universalAssetsToSend = reelHasPinnedAssets ? undefined : projectAssets;
 
       const result = await generateMotionHtml({
@@ -710,8 +725,8 @@ export const ReelsStudio: React.FC = () => {
         durationSec: seed.durationSec,
         compositionId: seed.id,
         motionLayer: effectiveLayer,
-        projectAssets: pinnedAsset ? undefined : universalAssetsToSend,
-        pinnedAsset,
+        projectAssets: hasPinnedAssets ? undefined : universalAssetsToSend,
+        pinnedAssets: hasPinnedAssets ? pinnedAssets : undefined,
         reelContext: {
           projectName: state.projectName,
           allBlocks: blocks.map(b => b.text),
@@ -743,10 +758,10 @@ export const ReelsStudio: React.FC = () => {
         html: sanitizedHtml,
         status: 'rendering',
         generatedAt: Date.now(),
-        // Snapshot the pinned asset (if any) so we can later detect when the
-        // user swaps/removes the attached asset and the motion goes stale.
-        assetSnapshot: pinnedAsset
-          ? { path: pinnedAsset.path, name: pinnedAsset.name }
+        // Snapshot the carousel at generation time — used later to detect
+        // staleness (user added/removed/reordered/swapped an asset).
+        assetSnapshots: hasPinnedAssets
+          ? pinnedAssets.map(a => ({ path: a.path, name: a.name }))
           : undefined,
       };
       dispatch({ type: 'set-block-motion', id: blockId, motion: generated });
@@ -2052,11 +2067,7 @@ export const ReelsStudio: React.FC = () => {
                     // - motion stale (asset added/removed/swapped) → regenerate, don't open editor
                     // - motion fresh → open advanced editor
                     const m = b.motion;
-                    const a = b.attachedAsset;
-                    const snap = m?.assetSnapshot;
-                    const isStale = !!m?.html && (
-                      (!snap && !!a) || (!!snap && !a) || (!!snap && !!a && snap.path !== a.path)
-                    );
+                    const isStale = isMotionAssetsStale(m, b.attachedAssets);
                     if (m && m.html && !isStale) {
                       setMotionPickerBlockId(b.id);
                     } else {
@@ -2065,6 +2076,8 @@ export const ReelsStudio: React.FC = () => {
                   },
                   onOpenMotionAdvanced: () => setMotionPickerBlockId(b.id),
                   onOpenAssetPicker: () => setAssetPickerBlockId(b.id),
+                  onSetStylePreset: (preset: StylePresetId | undefined) => dispatch({ type: 'set-block-style-preset', id: b.id, preset }),
+                  onDuplicate: () => dispatch({ type: 'duplicate-block', id: b.id }),
                   motionBusyMessage: motionBusyByBlock[b.id] ?? null,
                 });
 
@@ -2866,12 +2879,11 @@ export const ReelsStudio: React.FC = () => {
         return (
           <AssetPickerModal
             projectName={state.projectName}
-            current={block.attachedAsset}
+            currentAssets={block.attachedAssets ?? []}
             onClose={() => setAssetPickerBlockId(null)}
-            onSelect={(asset) => {
-              dispatch({ type: 'set-block-asset', id: block.id, asset });
-              setAssetPickerBlockId(null);
-            }}
+            onAdd={(asset) => dispatch({ type: 'add-block-asset', id: block.id, asset })}
+            onRemove={(index) => dispatch({ type: 'remove-block-asset', id: block.id, index })}
+            onReorder={(fromIndex, toIndex) => dispatch({ type: 'reorder-block-assets', id: block.id, fromIndex, toIndex })}
           />
         );
       })()}
@@ -3145,6 +3157,8 @@ interface BlockCardProps {
   onOpenMotion: () => void;
   onOpenMotionAdvanced: () => void;
   onOpenAssetPicker: () => void;
+  onSetStylePreset: (preset: StylePresetId | undefined) => void;
+  onDuplicate: () => void;
   motionBusyMessage: string | null;
 }
 
@@ -3179,7 +3193,11 @@ const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({
   );
 };
 
-const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, motionBusyMessage }) => {
+const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage }) => {
+  const [styleMenuOpen, setStyleMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  // Resolve current preset (override or seed default 'glass-tech').
+  const activePreset = findStylePreset(b.stylePresetOverride ?? 'glass-tech');
   const isAvatar = b.kind === 'avatar';
   const duration = b.end - b.start;
   const visibleSec = b.avatarVisibleSec ?? duration;
@@ -3219,126 +3237,177 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
       } ${
         isAvatar ? 'bg-amber-500/[0.04] border-amber-500/20 hover:border-amber-500/40' : 'bg-emerald-500/[0.04] border-emerald-500/20 hover:border-emerald-500/40'
       }`}>
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
-        <button onClick={onToggleKind} className={`flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 transition-colors ${
-          isAvatar ? 'text-amber-300 bg-amber-500/10 hover:bg-amber-500/20' : 'text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
-        }`}>
-          {isAvatar ? '👤 Avatar' : '🖥️ B-roll'}
-        </button>
-        <div className="flex items-center gap-1">
-          {(() => {
-            const isBusy = !!motionBusyMessage;
-            const m = b.motion;
-            const a = b.attachedAsset;
-            // Stale = motion exists, but the attached asset changed since the
-            // motion's HTML was generated. We treat add/remove/swap as stale.
-            const snap = m?.assetSnapshot;
-            const isStale = !!m?.html && !isBusy && (
-              (!snap && !!a) ||                      // asset added after gen
-              (!!snap && !a) ||                      // asset removed after gen
-              (!!snap && !!a && snap.path !== a.path) // asset swapped
-            );
-            const isReady = m?.status === 'ready' && !!m?.videoPath && !isStale;
-            const isError = m?.status === 'error';
+      {(() => {
+        // Compute motion state once for use across header + inspector strip.
+        const isBusy = !!motionBusyMessage;
+        const m = b.motion;
+        const currentAssets = b.attachedAssets ?? [];
+        const snapCount = m?.assetSnapshots?.length ?? (m?.assetSnapshot ? 1 : 0);
+        const isStale = !isBusy && isMotionAssetsStale(m, currentAssets);
+        const isReady = m?.status === 'ready' && !!m?.videoPath && !isStale;
+        const isError = m?.status === 'error';
 
-            const label = isBusy
-              ? motionBusyMessage
-              : isStale
-                ? (!snap && a ? '🎨 Regenerar com asset'
-                  : snap && !a ? '🎨 Regenerar sem asset'
-                  : '🎨 Regenerar com novo asset')
-                : isReady
-                  ? '🎨 Motion ✓'
-                  : isError
-                    ? '🎨 Motion ⚠'
-                    : a ? '🎨 Gerar motion com asset' : '🎨 Motion';
+        const noun = (n: number) => n === 0 ? 'asset' : n === 1 ? 'asset' : 'carrossel';
+        const motionLabel = isBusy
+          ? motionBusyMessage
+          : isStale
+            ? (snapCount === 0 && currentAssets.length > 0
+                ? `Regenerar com ${noun(currentAssets.length)}`
+                : snapCount > 0 && currentAssets.length === 0
+                  ? 'Regenerar sem asset'
+                  : 'Regenerar')
+            : isReady
+              ? 'Motion ✓'
+              : isError
+                ? 'Motion ⚠'
+                : currentAssets.length > 0
+                  ? `Gerar com ${noun(currentAssets.length)}`
+                  : 'Gerar motion';
 
-            const cls = isBusy
-              ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-200 cursor-progress'
-              : isStale
-                ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
-                : isReady
-                  ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
-                  : isError
-                    ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
-                    : 'bg-fuchsia-500/[0.06] border-fuchsia-400/20 text-fuchsia-300/80 hover:bg-fuchsia-500/15 hover:text-fuchsia-200 hover:border-fuchsia-400/40';
+        const motionCls = isBusy
+          ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-200 cursor-progress'
+          : isStale
+            ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
+            : isReady
+              ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
+              : isError
+                ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
+                : 'bg-fuchsia-500/[0.08] border-fuchsia-400/30 text-fuchsia-200 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/50';
 
-            const tooltip = isBusy
-              ? motionBusyMessage ?? 'Gerando…'
-              : isStale
-                ? (!snap && a ? `Asset "${a.name}" foi anexado depois. Clique pra regerar incluindo o asset.`
-                  : snap && !a ? `Motion foi gerado com "${snap.name}" mas o asset foi removido. Clique pra regerar sem asset.`
-                  : `Motion foi gerado com "${snap?.name ?? '?'}". Asset atual é "${a?.name ?? '?'}". Clique pra regerar.`)
-                : isReady
-                  ? `Editar motion · ${m?.intent ?? ''}`
-                  : isError
-                    ? `Erro: ${m?.errorMessage ?? ''}. Clique pra tentar de novo.`
-                    : a
-                      ? `Gerar motion com "${a.name}" como protagonista`
-                      : 'Gerar motion automaticamente (Gemini decide)';
+        const describeList = (items: { name: string }[]): string =>
+          items.length === 0 ? '(nenhum)' : items.map(x => `"${x.name}"`).join(' → ');
+        const snapItems = m?.assetSnapshots ?? (m?.assetSnapshot ? [m.assetSnapshot] : []);
+        const motionTooltip = isBusy
+          ? motionBusyMessage ?? 'Gerando…'
+          : isStale
+            ? `Motion foi gerado com ${describeList(snapItems)}. Atual: ${describeList(currentAssets)}. Clique pra regerar.`
+            : isReady
+              ? `Editar motion · ${m?.intent ?? ''}`
+              : isError
+                ? `Erro: ${m?.errorMessage ?? ''}. Clique pra tentar de novo.`
+                : currentAssets.length > 0
+                  ? `Gerar motion com ${currentAssets.length} ${currentAssets.length === 1 ? 'asset' : 'slides em sequência'}`
+                  : 'Gerar motion automaticamente (Gemini decide)';
 
-            return (
-              <>
+        const assetCount = currentAssets.length;
+        const assetLabel = assetCount === 0
+          ? 'Asset'
+          : assetCount === 1
+            ? currentAssets[0].name
+            : `${assetCount} slides`;
+        const assetTooltip = assetCount === 0
+          ? 'Anexar asset (imagem/vídeo) ao bloco'
+          : assetCount === 1
+            ? `Asset: ${currentAssets[0].name}`
+            : `${assetCount} slides em sequência: ${currentAssets.map(a => a.name).join(' → ')}`;
+
+        return (
+          <>
+            {/* ── Primary header: kind toggle · motion · ⋯ ───────────────── */}
+            <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/5">
+              <button
+                onClick={(e) => { e.stopPropagation(); onToggleKind(); }}
+                className={`flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 transition-colors shrink-0 ${
+                  isAvatar ? 'text-amber-300 bg-amber-500/10 hover:bg-amber-500/20' : 'text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
+                }`}
+                title={`Tipo: ${isAvatar ? 'avatar' : 'b-roll'} · clique pra alternar`}
+              >
+                {isAvatar ? '👤 Avatar' : '🖥️ B-roll'}
+              </button>
+
+              <div className="flex items-center gap-1 flex-1 min-w-0 justify-end">
                 <button
                   onClick={(e) => { e.stopPropagation(); if (!isBusy) onOpenMotion(); }}
                   disabled={isBusy}
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors flex items-center gap-1 ${cls}`}
-                  title={tooltip}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors flex items-center gap-1.5 min-w-0 ${motionCls}`}
+                  title={motionTooltip}
                 >
                   {isBusy && (
-                    <svg className="w-2.5 h-2.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <svg className="w-3 h-3 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
                       <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
                       <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
                   )}
-                  <span>{label}</span>
+                  {!isBusy && <span className="text-[12px] leading-none">🎨</span>}
+                  <span className="truncate">{motionLabel}</span>
                 </button>
                 {b.motion?.html && !isBusy && (
                   <button
                     onClick={(e) => { e.stopPropagation(); onOpenMotionAdvanced(); }}
-                    className="px-1.5 py-0.5 rounded-md text-[10px] text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+                    className="p-1 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors shrink-0"
                     title="Ajustar motion (avançado)"
                   >
-                    ⚙
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
                   </button>
                 )}
-                <button
-                  onClick={(e) => { e.stopPropagation(); onOpenAssetPicker(); }}
-                  className={`px-2 py-0.5 rounded-md text-[10px] font-medium border transition-colors flex items-center gap-1 ${
-                    b.attachedAsset
-                      ? 'bg-violet-500/20 border-violet-400/50 text-violet-100 hover:bg-violet-500/30'
-                      : 'bg-violet-500/[0.06] border-violet-400/20 text-violet-300/80 hover:bg-violet-500/15 hover:text-violet-200 hover:border-violet-400/40'
-                  }`}
-                  title={
-                    b.attachedAsset
-                      ? `Asset anexado: ${b.attachedAsset.name} · clique pra trocar`
-                      : 'Anexar asset (imagem/vídeo) ao topo desse bloco'
-                  }
-                >
-                  <span>📎</span>
-                  <span className="max-w-[80px] truncate">
-                    {b.attachedAsset ? b.attachedAsset.name : 'Asset'}
-                  </span>
-                </button>
-              </>
-            );
-          })()}
-        </div>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <button onClick={onMoveUp} disabled={index === 0} className="p-1 text-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors" title="Mover acima">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" /></svg>
-          </button>
-          <button onClick={onMoveDown} disabled={index === total - 1} className="p-1 text-zinc-500 hover:text-zinc-200 disabled:opacity-30 disabled:hover:text-zinc-500 transition-colors" title="Mover abaixo">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
-          </button>
-          <button onClick={onJumpTo} className="p-1 text-zinc-500 hover:text-violet-300 transition-colors" title="Pular pra este bloco">
-            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-          </button>
-          <button onClick={onRemove} className="p-1 text-zinc-500 hover:text-red-400 transition-colors" title="Remover (Del)">
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-          </button>
-        </div>
-      </div>
+                {/* ⋯ menu (move/jump/duplicate/delete) */}
+                <div className="relative shrink-0">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setMoreMenuOpen(o => !o); }}
+                    className="p-1 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+                    title="Mais ações"
+                  >
+                    <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                      <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
+                    </svg>
+                  </button>
+                  {moreMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setMoreMenuOpen(false); }} />
+                      <div
+                        className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-white/10 bg-[#141416] shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden py-1"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          onClick={() => { setMoreMenuOpen(false); onJumpTo(); }}
+                          className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
+                        >
+                          <svg className="w-3.5 h-3.5 text-violet-300" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                          Pular pra este bloco
+                        </button>
+                        <button
+                          onClick={() => { setMoreMenuOpen(false); onMoveUp(); }}
+                          disabled={index === 0}
+                          className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-2"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" /></svg>
+                          Mover acima
+                        </button>
+                        <button
+                          onClick={() => { setMoreMenuOpen(false); onMoveDown(); }}
+                          disabled={index === total - 1}
+                          className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-2"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                          Mover abaixo
+                        </button>
+                        <button
+                          onClick={() => { setMoreMenuOpen(false); onDuplicate(); }}
+                          className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                          Duplicar bloco
+                        </button>
+                        <div className="border-t border-white/5 my-1" />
+                        <button
+                          onClick={() => { setMoreMenuOpen(false); onRemove(); }}
+                          className="w-full text-left px-3 py-2 text-[12px] text-red-300 hover:bg-red-500/10 flex items-center gap-2"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" /></svg>
+                          Remover bloco
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </>
+        );
+      })()}
       <textarea
         value={b.text}
         onChange={e => onUpdateText(e.target.value)}
@@ -3346,6 +3415,98 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         className="w-full bg-transparent px-3 py-2.5 text-[13px] text-zinc-200 placeholder-zinc-600 outline-none resize-none leading-relaxed"
         rows={3}
       />
+
+      {/* ── Inspector strip: secondary controls (asset · style) ─────────── */}
+      {(() => {
+        const currentAssets = b.attachedAssets ?? [];
+        const assetCount = currentAssets.length;
+        const assetLabel = assetCount === 0
+          ? 'Asset'
+          : assetCount === 1
+            ? currentAssets[0].name
+            : `${assetCount} slides`;
+        const assetTooltip = assetCount === 0
+          ? 'Anexar asset (imagem/vídeo) ao bloco'
+          : assetCount === 1
+            ? `Asset: ${currentAssets[0].name}`
+            : `${assetCount} slides em sequência: ${currentAssets.map(a => a.name).join(' → ')}`;
+        return (
+          <div className="px-3 py-2 border-t border-white/5 flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={(e) => { e.stopPropagation(); onOpenAssetPicker(); }}
+              className={`px-2 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1 min-w-0 ${
+                assetCount > 0
+                  ? 'bg-violet-500/20 border-violet-400/50 text-violet-100 hover:bg-violet-500/30'
+                  : 'bg-violet-500/[0.06] border-violet-400/20 text-violet-300/80 hover:bg-violet-500/15 hover:text-violet-200 hover:border-violet-400/40'
+              }`}
+              title={assetTooltip}
+            >
+              <span>📎</span>
+              <span className="max-w-[140px] truncate">{assetLabel}</span>
+              {assetCount > 1 && (
+                <span className="ml-0.5 px-1 rounded bg-violet-300/20 text-[9px] font-bold text-violet-50">{assetCount}</span>
+              )}
+            </button>
+
+            <div className="relative">
+              <button
+                onClick={(e) => { e.stopPropagation(); setStyleMenuOpen(o => !o); }}
+                className={`px-2 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1 ${
+                  b.stylePresetOverride
+                    ? 'bg-amber-500/15 border-amber-400/40 text-amber-100 hover:bg-amber-500/25'
+                    : 'bg-zinc-500/[0.06] border-zinc-400/20 text-zinc-300/80 hover:bg-zinc-500/15 hover:text-zinc-100 hover:border-zinc-400/40'
+                }`}
+                title={`Estilo: ${activePreset.label}${b.stylePresetOverride ? ' (override)' : ' (default)'} — clique pra trocar`}
+              >
+                <span>{activePreset.emoji}</span>
+                <span className="max-w-[100px] truncate">{activePreset.label}</span>
+                <svg className="w-2.5 h-2.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {styleMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setStyleMenuOpen(false); }} />
+                  <div
+                    className="absolute left-0 top-full mt-1 z-50 w-72 rounded-lg border border-white/10 bg-[#141416] shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="px-3 py-2 border-b border-white/5 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                      Estilo do motion
+                    </div>
+                    <div className="max-h-[320px] overflow-y-auto">
+                      {STYLE_PRESETS.map(p => {
+                        const isActive = (b.stylePresetOverride ?? 'glass-tech') === p.id;
+                        return (
+                          <button
+                            key={p.id}
+                            onClick={() => {
+                              onSetStylePreset(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId));
+                              setStyleMenuOpen(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 flex items-start gap-2 transition-colors ${
+                              isActive ? 'bg-amber-500/10' : 'hover:bg-white/5'
+                            }`}
+                          >
+                            <span className="text-base shrink-0 mt-0.5">{p.emoji}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className={`text-[11.5px] font-medium ${isActive ? 'text-amber-200' : 'text-zinc-100'}`}>
+                                {p.label}
+                                {isActive && <span className="ml-1.5 text-[9px] text-amber-300">●</span>}
+                              </div>
+                              <div className="text-[10px] text-zinc-500 leading-snug line-clamp-2">{p.bestFor}</div>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {isAvatar && (
         <div className="px-3 py-2 border-t border-white/5">

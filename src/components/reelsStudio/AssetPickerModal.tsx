@@ -12,10 +12,19 @@ interface ProjectAsset {
 
 interface Props {
   projectName: string;
-  current: AttachedAsset | undefined;
+  /** Ordered list of assets currently attached to the block (carousel order). */
+  currentAssets: AttachedAsset[];
   onClose: () => void;
-  onSelect: (asset: AttachedAsset | undefined) => void;
+  /** Append an asset to the carousel. The reducer dedupes by path. */
+  onAdd: (asset: AttachedAsset) => void;
+  /** Remove the asset at the given carousel index. */
+  onRemove: (index: number) => void;
+  /** Reorder the carousel by moving fromIndex → toIndex. */
+  onReorder: (fromIndex: number, toIndex: number) => void;
 }
+
+/** Soft cap on carousel size. The prompt + render budget gets unwieldy past this. */
+const MAX_CAROUSEL_SIZE = 6;
 
 const SUPPORTED_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'mov', 'webm'];
 
@@ -36,13 +45,20 @@ const arrayBufferToBase64 = (buf: ArrayBuffer): string => {
   return btoa(binary);
 };
 
-export const AssetPickerModal: React.FC<Props> = ({ projectName, current, onClose, onSelect }) => {
+export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, onClose, onAdd, onRemove, onReorder }) => {
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [importing, setImporting] = useState<{ name: string; pct: number } | null>(null);
+  // Index of the carousel item being dragged for reorder. -1 = no drag.
+  const [reorderingIndex, setReorderingIndex] = useState<number>(-1);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Build a path → carousel-index lookup so the grid can show a numbered
+  // badge ("1", "2", "3"…) on already-attached assets.
+  const carouselIndexByPath = new Map(currentAssets.map((a, i) => [a.path, i]));
+  const atCap = currentAssets.length >= MAX_CAROUSEL_SIZE;
 
   const reload = async () => {
     setLoading(true);
@@ -249,18 +265,29 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, current, onClos
           {!loading && !error && assets.length > 0 && (
             <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
               {assets.map(a => {
-                const isCurrent = current?.path === a.path;
+                const carouselIdx = carouselIndexByPath.get(a.path);
+                const isAttached = carouselIdx !== undefined;
                 const url = convertFileSrc(a.path);
+                const handleClick = () => {
+                  if (isAttached) {
+                    onRemove(carouselIdx!);
+                  } else if (!atCap) {
+                    onAdd({ name: a.name, path: a.path, type: a.kind });
+                  }
+                };
                 return (
                   <button
                     key={a.path}
-                    onClick={() => onSelect({ name: a.name, path: a.path, type: a.kind })}
+                    onClick={handleClick}
+                    disabled={!isAttached && atCap}
                     className={`group relative rounded-lg overflow-hidden border transition-all ${
-                      isCurrent
+                      isAttached
                         ? 'border-violet-400 ring-2 ring-violet-400/40 shadow-[0_0_16px_rgba(167,139,250,0.35)]'
-                        : 'border-white/10 hover:border-white/30'
+                        : atCap
+                          ? 'border-white/5 opacity-40 cursor-not-allowed'
+                          : 'border-white/10 hover:border-white/30'
                     }`}
-                    title={a.name}
+                    title={isAttached ? `Slot ${carouselIdx! + 1} · clique pra remover` : atCap ? `Limite de ${MAX_CAROUSEL_SIZE} slides atingido` : `Adicionar como slot ${currentAssets.length + 1}`}
                   >
                     <div className="aspect-square bg-black/40 flex items-center justify-center">
                       {a.kind === 'image' ? (
@@ -278,9 +305,9 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, current, onClos
                       <div className="text-[10.5px] text-zinc-200 truncate">{a.name}</div>
                       <div className="text-[9px] text-zinc-500 uppercase">{a.kind} · {a.ext}</div>
                     </div>
-                    {isCurrent && (
-                      <div className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded bg-violet-500 text-white text-[9px] font-semibold">
-                        anexado
+                    {isAttached && (
+                      <div className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-violet-500 text-white text-[11px] font-bold flex items-center justify-center shadow-lg">
+                        {carouselIdx! + 1}
                       </div>
                     )}
                   </button>
@@ -290,26 +317,81 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, current, onClos
           )}
         </div>
 
+        {/* Carousel order strip — visible whenever there's at least 1 attached. */}
+        {currentAssets.length > 0 && (
+          <div className="px-5 py-3 border-t border-white/5 bg-black/30">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                Slides do bloco · {currentAssets.length} {currentAssets.length === 1 ? 'item' : 'itens'}
+              </div>
+              {currentAssets.length > 1 && (
+                <div className="text-[10px] text-zinc-500">
+                  Arraste pra reordenar · cada slide ~{(100 / currentAssets.length).toFixed(0)}% do bloco
+                </div>
+              )}
+            </div>
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              {currentAssets.map((asset, idx) => {
+                const url = convertFileSrc(asset.path);
+                const isDragging = reorderingIndex === idx;
+                return (
+                  <div
+                    key={`${asset.path}-${idx}`}
+                    draggable
+                    onDragStart={() => setReorderingIndex(idx)}
+                    onDragEnd={() => setReorderingIndex(-1)}
+                    onDragOver={(e) => { e.preventDefault(); }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (reorderingIndex >= 0 && reorderingIndex !== idx) {
+                        onReorder(reorderingIndex, idx);
+                      }
+                      setReorderingIndex(-1);
+                    }}
+                    className={`shrink-0 relative w-20 rounded-md border bg-zinc-900 overflow-hidden cursor-move transition-all ${
+                      isDragging ? 'opacity-40 scale-95' : 'border-violet-400/40 hover:border-violet-300'
+                    }`}
+                    title={`Slot ${idx + 1}: ${asset.name}`}
+                  >
+                    <div className="aspect-square">
+                      {asset.type === 'image' ? (
+                        <img src={url} alt={asset.name} className="w-full h-full object-cover" />
+                      ) : (
+                        <video src={url} className="w-full h-full object-cover" muted playsInline preload="metadata" />
+                      )}
+                    </div>
+                    <div className="absolute top-1 left-1 w-5 h-5 rounded-full bg-violet-500 text-white text-[10px] font-bold flex items-center justify-center">
+                      {idx + 1}
+                    </div>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onRemove(idx); }}
+                      className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/70 hover:bg-red-500/80 text-white text-xs flex items-center justify-center transition-colors"
+                      title="Remover"
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="px-5 py-3 border-t border-white/5 flex items-center justify-between">
           <div className="text-[11px] text-zinc-500">
-            {current ? `Anexado: ${current.name}` : 'Nenhum asset anexado'}
+            {currentAssets.length === 0
+              ? 'Nenhum slide anexado · clique numa thumb pra começar'
+              : currentAssets.length === 1
+                ? `1 slide: ${currentAssets[0].name}`
+                : `${currentAssets.length} slides em sequência`}
+            {atCap && <span className="ml-2 text-amber-300/80">· limite atingido ({MAX_CAROUSEL_SIZE})</span>}
           </div>
-          <div className="flex items-center gap-2">
-            {current && (
-              <button
-                onClick={() => onSelect(undefined)}
-                className="px-3 py-1.5 text-[11px] rounded-md bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-300 transition-colors"
-              >
-                Desanexar
-              </button>
-            )}
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 text-[11px] rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-zinc-300 transition-colors"
-            >
-              Cancelar
-            </button>
-          </div>
+          <button
+            onClick={onClose}
+            className="px-3 py-1.5 text-[11px] rounded-md bg-violet-500 hover:bg-violet-400 text-white font-semibold transition-colors"
+          >
+            Concluído
+          </button>
         </div>
       </div>
     </div>

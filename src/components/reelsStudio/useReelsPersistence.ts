@@ -112,9 +112,32 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
             } satisfies ScreenTake;
           });
 
+        // Migrate legacy single-asset blocks (and motion snapshots) into the
+        // new array-based shape. Older projects had `attachedAsset` (single)
+        // and `motion.assetSnapshot` (single) — convert to 1-element arrays.
+        const migratedBlocks = persisted.blocks.map(b => {
+          const next: typeof b = { ...b };
+          // Block-level: attachedAsset → attachedAssets
+          const legacyAsset = (b as { attachedAsset?: { name: string; path: string; type: 'image' | 'video' } }).attachedAsset;
+          if (legacyAsset && (!next.attachedAssets || next.attachedAssets.length === 0)) {
+            next.attachedAssets = [legacyAsset];
+          }
+          // Strip the legacy field so it doesn't leak forward.
+          delete (next as { attachedAsset?: unknown }).attachedAsset;
+          // Motion-level: assetSnapshot → assetSnapshots
+          if (next.motion) {
+            const legacySnap = (next.motion as { assetSnapshot?: { path: string; name: string } }).assetSnapshot;
+            if (legacySnap && (!next.motion.assetSnapshots || next.motion.assetSnapshots.length === 0)) {
+              next.motion = { ...next.motion, assetSnapshots: [legacySnap] };
+            }
+            delete (next.motion as { assetSnapshot?: unknown }).assetSnapshot;
+          }
+          return next;
+        });
+
         const restoredState: ReelsState = {
           projectName: persisted.projectName,
-          blocks: persisted.blocks,
+          blocks: migratedBlocks,
           audio: {
             ...persisted.audio,
             silenceCut: persisted.audio.silenceCut ?? false,

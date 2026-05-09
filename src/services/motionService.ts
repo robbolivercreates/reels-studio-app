@@ -176,6 +176,56 @@ Every shot has these layers, top to bottom:
 KEEP IT TIGHT: most great compositions use only layers 1, 3, and one of {2, 4, 5}. If you have all 5 active simultaneously, you're probably overdesigning. Subtract until each remaining element earns its place.
 
 ═══════════════════════════════════════════════════════════
+ PRINCIPLE 4.5 — CINEMATIC ATMOSPHERE & DEPTH
+═══════════════════════════════════════════════════════════
+The host page already enables 3D (perspective: 1200px on body, transform-style:
+preserve-3d on #root). Use this. Flat motions look like Powerpoint.
+
+ATMOSPHERE BAKE — every motion MUST have a track-0 background built from the
+ACTIVE PRESET's atmosphere palette. The exact CSS template is provided to you
+in the user brief under "ATMOSPHERE — copy this snippet". Do not invent your
+own palette here, do not pick from a generic A/B/C list. The preset already
+chose the colours; your job is to make the rest of the composition harmonise
+with them.
+
+ALWAYS finish the atmosphere with a vignette pass — add a sibling div with
+class="atmos-vignette" right after your background. The host CSS provides the
+inset box-shadow that darkens edges (NO need to redeclare it). It anchors the
+viewer's eye to the centre and is the single biggest "this looks expensive" signal.
+
+3D DEPTH — use it on hero objects (don't overuse on text):
+- A card / phone-frame / asset wrapper can have transform: perspective(1400px)
+  rotateY(-8deg) rotateX(4deg) — small angles. ANY rotateY > 15° starts looking gimmicky.
+- Animate Y depth: gsap.from('#card', { z: -200, rotationY: -25, opacity: 0,
+  duration: 0.9, ease: 'expo.out' }). The 'z: -200' makes it pop OUT of depth,
+  not just slide in flat.
+- Multiple cards in a fan / grid: stagger rotationY across them (-12, -6, 0, 6, 12)
+  to create a curved "carousel" feel.
+
+ORBIT RINGS (advanced, optional — for showreel / launch / "explosion" moments):
+A faint elliptical ring at low opacity, slowly rotating, behind the hero.
+   <svg id="orbit" class="clip" data-start="0" data-duration="DURATION" data-track-index="1"
+        style="position:absolute; inset:0; opacity:0.18;" viewBox="0 0 1080 1920">
+     <ellipse cx="540" cy="960" rx="620" ry="200" fill="none" stroke="brandPrimaryColor" stroke-width="1"/>
+   </svg>
+   GSAP: tl.to('#orbit', { rotation: 360, duration: DURATION, ease: 'none', transformOrigin:'540px 960px' }, 0)
+
+PROGRESS BAR (optional, signals "produced" feel):
+A 2-3px bar at the very bottom that sweeps left → right over the full duration.
+   <div id="progress-bar" class="clip" data-start="0" data-duration="DURATION" data-track-index="9"
+        style="position:absolute; bottom:0; left:0; width:0%; height:3px; background:brandPrimaryColor; opacity:0.7;"></div>
+   tl.to('#progress-bar', { width: '100%', duration: DURATION, ease: 'none' }, 0)
+
+EASE LANGUAGE — match the verb:
+- Camera/scene reveals       → 'expo.out' (rapid then slow, feels cinematic)
+- Spring pops (folder, badge)→ 'back.out(2.5)' or 'elastic.out(1, 0.4)'
+- Idle drifts                → 'sine.inOut'
+- Snappy text reveals        → 'power4.out'
+- Hold-then-fade transitions → 'expo.in' on the exit
+DO NOT use 'back.out' on every entrance — that's the "tutorial template" smell.
+Mix at least 2 different eases per shot for life.
+
+═══════════════════════════════════════════════════════════
  PRINCIPLE 5 — PACING: STRUCTURE THE MOTION AS A SEQUENCE
 ═══════════════════════════════════════════════════════════
 This is the most common mistake amateur motion designers make: ONE big animation
@@ -441,22 +491,22 @@ export interface GenerateMotionInput {
   /** Project screenshots/images the user dropped in the Assets folder. */
   projectAssets?: ProjectAsset[];
   /**
-   * When the user explicitly attached ONE asset to this block, it becomes the
-   * visual centerpiece. Gemini must build the motion around this asset (animate
-   * it, frame it, add effects on top) instead of generating a replacement.
-   * If set, `projectAssets` is ignored — only this asset is referenced.
+   * Ordered list of assets explicitly attached to this block. Replaces the
+   * legacy single `pinnedAsset`. When the list has at least one entry,
+   * `projectAssets` is ignored — only these are referenced.
+   *   - 1 entry  → behaves like the old single-asset protagonist
+   *   - 2+ entries → carousel: each gets `durationSec/N` seconds with fade
+   *     transitions between consecutive slots
+   *
+   * Each entry may carry `relativeUrl` (e.g. "assets/foo.mp4") if the caller
+   * pre-copied the file into the motion's folder. HyperFrames cannot resolve
+   * `asset://` URLs at render time, so relative paths are required for the
+   * video/image to actually decode.
    */
-  pinnedAsset?: ProjectAsset & {
+  pinnedAssets?: Array<ProjectAsset & {
     type?: 'image' | 'video';
-    /**
-     * If the caller already copied the asset into the motion's `assets/`
-     * folder, this is the project-relative URL to use in the HTML
-     * (e.g. "assets/foo.mp4"). HyperFrames cannot resolve `asset://` URLs
-     * because it runs in headless Chromium outside Tauri — relative paths
-     * are required for video/image assets to actually decode at render time.
-     */
     relativeUrl?: string;
-  };
+  }>;
   /** Full reel script context — helps Gemini understand where this block sits. */
   reelContext?: {
     projectName?: string;
@@ -726,23 +776,62 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     `Visual style: ${brand.visualStyle}`,
     `⚠️  FAILURE TO USE THESE EXACT COLORS = WRONG OUTPUT. No blue. No purple. Use ${brand.topic}'s actual colors.`,
     '',
-  ].filter(Boolean).join('\n') : [
-    `╔══════════════════════════════════════════════════════╗`,
-    `  NO BRAND IDENTIFIED — STRICT BLACK & WHITE PALETTE`,
-    `╚══════════════════════════════════════════════════════╝`,
-    `brandBackgroundColor: #000000   ← pure black`,
-    `brandTextColor: #ffffff         ← pure white`,
-    `brandPrimaryColor: #ffffff      ← white (used for icons, borders, accents)`,
-    `brandSecondaryColor: #a3a3a3    ← neutral grey (60% white)`,
-    `brandAccentColor: #ffffff       ← white (single hot-spot — emphasize via scale/glow not colour)`,
-    ``,
-    `THIS IS BLACK & WHITE MODE. NO COLORS AT ALL.`,
-    `STRICTLY FORBIDDEN: any purple, violet, indigo, magenta, fuchsia, pink, blue, red, orange, yellow, green, cyan, teal, amber.`,
-    `If the style preset suggests a gradient, use #000000 → #1a1a1a (subtle dark grey).`,
-    `If the style preset suggests "vibrant" or "energy", express it through SCALE / MOTION / CONTRAST / TYPOGRAPHY WEIGHT, NEVER colour.`,
-    `Highlights: use a thin white border, a white glow (rgba(255,255,255,0.5)), or pure white text against #000.`,
-    '',
-  ].join('\n');
+  ].filter(Boolean).join('\n') : (() => {
+    // No-brand fallback — but the choice depends on the preset's bgType, NOT
+    // a one-size-fits-all "strict black & white". Light/warm presets must not
+    // be forced into B&W just because brand research came back empty.
+    if (preset.bgType === 'warm') {
+      return [
+        `╔══════════════════════════════════════════════════════╗`,
+        `  NO BRAND IDENTIFIED — WARM PAPER FALLBACK (preset-aware)`,
+        `╚══════════════════════════════════════════════════════╝`,
+        `Preset "${preset.label}" is a warm/cream preset, so the fallback is NOT pure B&W.`,
+        `brandBackgroundColor: ${preset.atmosphere.baseBg}   ← warm cream paper (the preset's atmosphere)`,
+        `brandTextColor: #2d2d2d         ← deep warm brown (NEVER pure black on cream)`,
+        `brandPrimaryColor: #d4714d      ← terracotta accent`,
+        `brandSecondaryColor: #c9a563    ← warm gold`,
+        `brandAccentColor: #d4714d       ← terracotta highlight`,
+        ``,
+        `Use the preset's atmosphere. All shadows must be tinted warm (rgba(120,80,40,0.18) family).`,
+        `Avoid: cyan, electric blue, magenta, pure black. Stay in the warm earth-tone family.`,
+        '',
+      ].join('\n');
+    }
+    if (preset.bgType === 'light') {
+      return [
+        `╔══════════════════════════════════════════════════════╗`,
+        `  NO BRAND IDENTIFIED — LIGHT NEUTRAL FALLBACK (preset-aware)`,
+        `╚══════════════════════════════════════════════════════╝`,
+        `Preset "${preset.label}" is a light preset, so the fallback is NOT pure B&W.`,
+        `brandBackgroundColor: ${preset.atmosphere.baseBg}   ← light neutral (the preset's atmosphere)`,
+        `brandTextColor: #1d1d1f         ← near-black ink (high contrast on light)`,
+        `brandPrimaryColor: #1d1d1f      ← black for primary accents (typographic emphasis)`,
+        `brandSecondaryColor: #6e6e73    ← warm grey (60% black)`,
+        `brandAccentColor: #1d1d1f       ← black highlight (NOT a colour — emphasis via contrast)`,
+        ``,
+        `Stay restrained. No bright accents unless the preset itself prescribes them.`,
+        '',
+      ].join('\n');
+    }
+    // Dark preset → original strict B&W fallback
+    return [
+      `╔══════════════════════════════════════════════════════╗`,
+      `  NO BRAND IDENTIFIED — STRICT BLACK & WHITE PALETTE`,
+      `╚══════════════════════════════════════════════════════╝`,
+      `brandBackgroundColor: ${preset.atmosphere.baseBg}   ← preset atmosphere base`,
+      `brandTextColor: #ffffff         ← pure white`,
+      `brandPrimaryColor: #ffffff      ← white (used for icons, borders, accents)`,
+      `brandSecondaryColor: #a3a3a3    ← neutral grey (60% white)`,
+      `brandAccentColor: #ffffff       ← white (single hot-spot — emphasize via scale/glow not colour)`,
+      ``,
+      `THIS IS BLACK & WHITE MODE. NO COLORS AT ALL.`,
+      `STRICTLY FORBIDDEN: any purple, violet, indigo, magenta, fuchsia, pink, blue, red, orange, yellow, green, cyan, teal, amber.`,
+      `If the style preset suggests a gradient, use #000000 → #1a1a1a (subtle dark grey).`,
+      `If the style preset suggests "vibrant" or "energy", express it through SCALE / MOTION / CONTRAST / TYPOGRAPHY WEIGHT, NEVER colour.`,
+      `Highlights: use a thin white border, a white glow (rgba(255,255,255,0.5)), or pure white text against #000.`,
+      '',
+    ].join('\n');
+  })();
 
   // ─── Brand chrome (persistent visual identity layer) ──────────────────
   // After the FIRST motion of a reel, every subsequent motion gets a small
@@ -786,11 +875,89 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   ].join('\n') : '';
 
   // Build assets section — give Gemini the asset:// URLs it can use directly in <img> tags.
-  // PRIORITY: if a `pinnedAsset` is set (user explicitly attached one), it wins —
-  // the motion is built AROUND that single asset and projectAssets are ignored.
+  // PRIORITY: if `pinnedAssets` has entries (user explicitly attached one or more),
+  // they win — the motion is built AROUND them and projectAssets are ignored.
+  // 1 entry → single-asset protagonist. 2+ entries → sequential carousel.
   const { convertFileSrc } = await import('@tauri-apps/api/core');
-  const assetsSection = input.pinnedAsset ? (() => {
-    const a = input.pinnedAsset!;
+  const pinned = input.pinnedAssets ?? [];
+  const isCarousel = pinned.length > 1;
+  const assetsSection = pinned.length > 0 ? (() => {
+    // ─── CAROUSEL PATH (2+ pinned assets) ──────────────────────────────────
+    // Each slide gets `durationSec / N` seconds. Slides share the same slot
+    // (centered, percent-based positioning) — only one is visible at a time.
+    if (isCarousel) {
+      const slideLayer = input.motionLayer ?? 'overlay';
+      const slideSafeW = slideLayer === 'split-bottom' || slideLayer === 'split-top' ? 760 : 880;
+      const slideSafeH = slideLayer === 'split-bottom' || slideLayer === 'split-top' ? 700 : 1400;
+      const slotDur = input.durationSec / pinned.length;
+      const fadeDur = Math.min(0.25, slotDur / 5); // overlap window
+      const slideBlocks = pinned.map((p, i) => {
+        const u = p.relativeUrl ?? convertFileSrc(p.path);
+        const isVid = p.type === 'video';
+        const start = i * slotDur;
+        const id = isVid ? `carousel-video-${i + 1}` : `carousel-image-${i + 1}`;
+        if (isVid) {
+          return [
+            `   <video id="${id}" class="clip" src="${u}"`,
+            `          data-start="${start.toFixed(3)}" data-duration="${slotDur.toFixed(3)}" data-track-index="3"`,
+            `          autoplay muted loop playsinline preload="auto"`,
+            `          style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); width:${slideSafeW}px; max-height:${slideSafeH}px; object-fit:contain; border-radius:24px; box-shadow:0 32px 80px rgba(0,0,0,0.6);"></video>`,
+          ].join('\n');
+        }
+        return [
+          `   <div id="${id}-shell" class="clip" data-start="${start.toFixed(3)}" data-duration="${slotDur.toFixed(3)}" data-track-index="3"`,
+          `        style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);">`,
+          `     <img id="${id}" class="asset-anim" src="${u}" loading="eager"`,
+          `          style="width:${slideSafeW}px; max-height:${slideSafeH}px; object-fit:contain; border-radius:24px; box-shadow:0 32px 80px rgba(0,0,0,0.6);" />`,
+          `   </div>`,
+        ].join('\n');
+      }).join('\n\n');
+      const slideListing = pinned
+        .map((p, i) => `  ${i + 1}. "${p.name}" (${p.type ?? 'image'}) — slot ${(i * slotDur).toFixed(2)}s → ${((i + 1) * slotDur).toFixed(2)}s`)
+        .join('\n');
+      return [
+        `╔══════════════════════════════════════════════════════╗`,
+        `  📌 PINNED CAROUSEL — ${pinned.length} slides em sequência`,
+        `  THE ASSETS ARE THE PROTAGONISTS. NON-NEGOTIABLE.`,
+        `╚══════════════════════════════════════════════════════╝`,
+        `Block duration: ${input.durationSec}s · per-slide duration: ${slotDur.toFixed(2)}s`,
+        ``,
+        `Slides (in order):`,
+        slideListing,
+        ``,
+        `🎯 LAYOUT — copy the carousel block VERBATIM. Each slide already has its own`,
+        `data-start / data-duration on track 3, so the runtime shows exactly one slide`,
+        `at a time. They share the same centered slot — DO NOT shift positions per slide.`,
+        ``,
+        slideBlocks,
+        ``,
+        `HARD RULES:`,
+        `1. Slides ARE the visual content. Build supporting elements (headline, sublabel,`,
+        `   progress dots, slide number) AROUND the carousel, never on top of it.`,
+        `2. Each slide must occupy its full ${slotDur.toFixed(2)}s slot. Do NOT add fade-in/out`,
+        `   inside the slide — the runtime handles slide visibility via class="clip".`,
+        `3. You MAY add a subtle entry on each slide via gsap (target the id), kept short`,
+        `   (≤${(fadeDur * 0.6).toFixed(2)}s) so it doesn't eat the slot. Example:`,
+        `     tl.from('#carousel-image-1', { scale:0.96, opacity:0, duration:${(fadeDur * 0.6).toFixed(2)}, ease:'power3.out' }, 0)`,
+        `     tl.from('#carousel-image-2', { scale:0.96, opacity:0, duration:${(fadeDur * 0.6).toFixed(2)}, ease:'power3.out' }, ${slotDur.toFixed(2)})`,
+        `     ... one per slide, anchored at i * ${slotDur.toFixed(2)}.`,
+        `4. Add a slide-number indicator (e.g. "1 / ${pinned.length}") in a corner, animated`,
+        `   in sync with each slot. Use class="font-tech" (Space Grotesk) and keep it small.`,
+        `5. Optionally: a row of dots at the bottom showing carousel progress (active dot`,
+        `   uses brandPrimaryColor at 100%, inactive at 30%). Animate the active dot per slot.`,
+        `6. NEVER place a sixth/seventh slide if the user only attached ${pinned.length}.`,
+        `   The carousel has exactly ${pinned.length} slots — match.`,
+        ``,
+        `📖 TEXT-OVER-CAROUSEL: same legibility rules as single-asset (plate, blur, halo,`,
+        `or dead zone). Headlines that span the whole block are FINE — they sit on track 4+,`,
+        `above the carousel layer.`,
+        ``,
+        `CONTEXT: the user said "${input.blockText.slice(0, 120)}${input.blockText.length > 120 ? '…' : ''}" while this carousel plays — make the supporting elements answer what's being said. Treat the slides as evidence/illustration of the narration.`,
+        ``,
+      ].join('\n');
+    }
+    // ─── SINGLE-ASSET PATH (legacy behaviour, untouched) ──────────────────
+    const a = pinned[0];
     // Prefer the pre-copied relative URL (assets/foo.mp4) — HyperFrames cannot
     // resolve asset:// URLs at render time. Only fall back to asset:// when
     // the caller hasn't copied the file (used by the live preview path).
@@ -872,6 +1039,44 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       `• Glow pulse via real child <div class="glow-ring"> (NOT ::before) animated with box-shadow tween`,
       `• Supporting text: brand-coloured headline next to or below the asset, animated in after it lands`,
       `• Arrows / annotations pointing TO the asset, drawn with SVG path stroke animation`,
+      ``,
+      `╔══════════════════════════════════════════════════════╗`,
+      `  📖 TEXT-OVER-ASSET LEGIBILITY — REQUIRED`,
+      `╚══════════════════════════════════════════════════════╝`,
+      `Asset frames are unpredictable: a video may shift between bright and dark, a screenshot may`,
+      `have light text areas. Plain coloured text dropped on top WILL disappear in some frames.`,
+      `Pick AT LEAST ONE of these four techniques for every text element you place over (or near) the asset:`,
+      ``,
+      `① TEXT PLATE (safest — use when in doubt)`,
+      `   Wrap the text in a container with an opaque or semi-opaque background pill.`,
+      `   <div style="display:inline-block; padding:14px 28px; border-radius:14px; background:#000000; color:#ffffff;">TEXT</div>`,
+      `   Or with brand-colour bg:  background:${brand?.brandPrimaryColor ?? '#000'}; color:${brand?.brandTextColor ?? '#fff'};`,
+      ``,
+      `② BACKDROP BLUR (modern, "iOS Now Playing")`,
+      `   <div style="background:rgba(0,0,0,0.55); backdrop-filter:blur(18px) saturate(140%); -webkit-backdrop-filter:blur(18px) saturate(140%); border:1px solid rgba(255,255,255,0.12); border-radius:16px; padding:16px 24px; color:#fff;">TEXT</div>`,
+      `   Works ONLY on text containers, not on the asset itself.`,
+      ``,
+      `③ HEAVY TEXT-SHADOW HALO (invisible, no plate needed)`,
+      `   color:#ffffff; text-shadow: 0 0 16px rgba(0,0,0,0.95), 0 4px 18px rgba(0,0,0,0.85), 0 0 4px rgba(0,0,0,1);`,
+      `   Stack 3 shadows like above — single shadow doesn't survive bright frames. Pair with weight 800+.`,
+      ``,
+      `④ DEAD ZONE — place text where the asset is NOT (preferred for hero headlines)`,
+      `   The asset is centered at left:50% top:50% with the box widths above. The DEAD ZONES are:`,
+      layer === 'split-bottom' || layer === 'split-top'
+        ? `     • Top strip:   y: 30–110  (above the asset, ~80px tall)
+     • Bottom strip: y: 850–940 (below the asset, ~90px tall) — but watch for caption rail bleed
+     • Left band:    x: 0–${Math.round(540 - safeWidth/2 - 40)}    (anything left of the asset)
+     • Right band:   x: ${Math.round(540 + safeWidth/2 + 40)}–1080 (anything right of the asset)`
+        : `     • Top strip:   y: 220–460  (above the asset, hook/title zone)
+     • Bottom strip: y: 1280–1540 (below the asset, caption/CTA zone)
+     • Side bands:   x: 0–60 and x: 1020–1080 (margins, only for narrow accents)`,
+      `   Centering text BELOW or ABOVE the asset (rather than over it) is almost always cleaner.`,
+      ``,
+      `MANDATORY checks before finalising:`,
+      `• If text is INSIDE the asset's bounding box → MUST have ① plate, ② blur, or ③ heavy shadow.`,
+      `• If text uses brand colour over a brand-coloured plate → invert: use brandTextColor ON brandPrimaryColor, not on the raw asset.`,
+      `• Headline weight ≥ 700 always when over an asset (medium weights wash out).`,
+      `• Avoid pure single-shadow (text-shadow: 0 2px 8px rgba(0,0,0,0.5)) — it dies on bright frames.`,
       ``,
       `CONTEXT: the user said "${input.blockText.slice(0, 120)}${input.blockText.length > 120 ? '…' : ''}" while this asset is on screen — frame the composition so the asset visually answers what's being said.`,
       ``,
@@ -964,12 +1169,53 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ].join('\n');
   })();
 
+  // Atmosphere snippet derived from the active preset's atmospherePalette.
+  // Replaces the previous A/B/C list in the SYSTEM_PROMPT — Gemini gets one
+  // explicit, copy-paste-ready CSS block tied to the preset's mood.
+  const atm = preset.atmosphere;
+  const rgba = (hex: string, alpha: number): string => {
+    const m = hex.replace('#', '');
+    const r = parseInt(m.length === 3 ? m[0] + m[0] : m.slice(0, 2), 16);
+    const g = parseInt(m.length === 3 ? m[1] + m[1] : m.slice(2, 4), 16);
+    const b = parseInt(m.length === 3 ? m[2] + m[2] : m.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  };
+  const atmosphereSection = [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  🎨 ATMOSPHERE — copy this snippet for track 0`,
+    `╚══════════════════════════════════════════════════════╝`,
+    `Preset "${preset.label}" declares this atmosphere palette. Use it AS-IS for the`,
+    `track-0 background — do not invent another colour scheme. Then add the vignette`,
+    `pass below as a sibling (track 1, full duration).`,
+    ``,
+    `Track 0 — atmosphere base:`,
+    `  <div id="atmos-bg" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="0"`,
+    `       style="position:absolute; inset:0; background:${atm.baseBg};`,
+    `              background-image:`,
+    `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atm.warmGlow.alpha)} 0%, transparent 60%),`,
+    `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atm.coolGlow.alpha)} 0%, transparent 65%);"></div>`,
+    ``,
+    atm.vignetteIntensity > 0
+      ? [
+          `Track 1 — vignette pass (anchors the eye, looks expensive):`,
+          `  <div id="atmos-vignette" class="clip atmos-vignette" data-start="0" data-duration="${input.durationSec}" data-track-index="1"`,
+          `       style="opacity:${atm.vignetteIntensity};"></div>`,
+          ``,
+        ].join('\n')
+      : '',
+    `The base bg color "${atm.baseBg}" is the canvas. ALL other elements should harmonise`,
+    `with it: text colours that contrast 7:1+ against it, accents that sit warmly on it,`,
+    `shadows tinted to its hue (warm bg → warm shadows, NEVER black shadows on cream).`,
+    ``,
+  ].filter(Boolean).join('\n');
+
   const userBrief = [
     slotSection,
     '',
     reelContextSection,
     brandSection,
     brandChromeSection,
+    atmosphereSection,
     assetsSection,
     `--- THIS BLOCK (illustrate this) ---`,
     input.blockText.trim(),
@@ -1063,12 +1309,28 @@ export const buildFullHtmlDoc = (motion: MotionConfig): string => {
         width: 1080px; height: ${canvasH}px; overflow: hidden;
         background: #000;
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+        /* Enables 3D transforms (rotateY, perspective depth) on any descendant
+           without each element needing to declare its own perspective. Use
+           transform: rotateY(8deg) translateZ(40px) on cards for depth. */
+        perspective: 1200px;
+        transform-style: preserve-3d;
+      }
+      #root {
+        position: relative;
+        transform-style: preserve-3d;
       }
       .clip { will-change: opacity, transform; }
       /* Convenience classes the prompt encourages Gemini to use. */
       .font-display { font-family: "Anton", "Inter", system-ui, sans-serif; letter-spacing: -0.01em; text-transform: uppercase; }
       .font-tech    { font-family: "Space Grotesk", "Inter", system-ui, sans-serif; letter-spacing: -0.02em; }
       .font-body    { font-family: "Inter", system-ui, sans-serif; }
+      /* Cinematic atmosphere helper — see ATMOSPHERE section in prompt. */
+      .atmos-vignette {
+        position: absolute; inset: 0; pointer-events: none;
+        box-shadow:
+          inset 0 0 240px rgba(0, 0, 0, 0.65),
+          inset 0 0 80px rgba(0, 0, 0, 0.45);
+      }
     </style>
   </head>
   <body>

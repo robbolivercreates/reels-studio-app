@@ -52,11 +52,17 @@ export interface MotionConfig {
   /** When the MP4 was last rendered. */
   renderedAt?: number;
   /**
-   * Snapshot of the user-attached asset at the moment this motion's HTML was
-   * generated. Compared at render-time to `block.attachedAsset` to detect a
-   * stale state ("user changed/removed/added the asset after generating").
-   * undefined = motion was generated without a pinned asset.
+   * Ordered snapshot of the user-attached assets at the moment this motion's
+   * HTML was generated. Compared at regeneration time against
+   * `block.attachedAssets` to detect a stale state — different length OR any
+   * different path at the same index marks the motion as stale.
+   * undefined = motion was generated without any pinned assets.
    */
+  assetSnapshots?: Array<{
+    path: string;
+    name: string;
+  }>;
+  /** @deprecated legacy single-asset snapshot. Hydration migrates it into assetSnapshots. */
   assetSnapshot?: {
     path: string;
     name: string;
@@ -68,6 +74,30 @@ export const newMotionId = (): string =>
 
 export const motionNeedsRender = (m: MotionConfig): boolean =>
   m.status === 'draft' || (!!m.html && !m.videoPath) || (!!m.generatedAt && !!m.renderedAt && m.generatedAt > m.renderedAt);
+
+/**
+ * Compare a motion's snapshot of attached assets (taken at generation time)
+ * against the block's current carousel. Returns true when the motion's HTML
+ * no longer reflects what the user wants — different length, different order,
+ * or a swapped path.
+ *
+ * Accepts the legacy single-asset shape (motion.assetSnapshot, block has
+ * attachedAsset) so old motions still flag correctly until regenerated.
+ */
+export const isMotionAssetsStale = (
+  motion: { assetSnapshots?: Array<{ path: string }>; assetSnapshot?: { path: string }; html?: string } | undefined,
+  currentAssets: Array<{ path: string }> | undefined,
+): boolean => {
+  if (!motion?.html) return false; // never generated → not stale
+  // Read from the new field, falling back to legacy.
+  const snaps = motion.assetSnapshots ?? (motion.assetSnapshot ? [motion.assetSnapshot] : []);
+  const current = currentAssets ?? [];
+  if (snaps.length !== current.length) return true;
+  for (let i = 0; i < snaps.length; i++) {
+    if (snaps[i].path !== current[i].path) return true;
+  }
+  return false;
+};
 
 /** Derive a short headline from the block text (used as the motion's primary text). */
 const deriveHeadline = (text: string): string => {

@@ -15,7 +15,34 @@ export type StylePresetId =
   | 'glass-tech'
   | 'kinetic-bold'
   | 'soft-pastel'
-  | 'cinematic-dark';
+  | 'cinematic-dark'
+  | 'apple-system'
+  | 'warm-editorial';
+
+/**
+ * Whether the preset's intrinsic mood is dark, light, or warm cream/paper.
+ * Used to drive the no-brand fallback in motionService — a preset like
+ * `warm-editorial` should never fall back to pure #000000 + #ffffff just
+ * because Gemini didn't find brand colours.
+ */
+export type PresetBgType = 'dark' | 'light' | 'warm';
+
+/**
+ * Atmosphere palette baked into each preset. Replaces the previous global
+ * "ATMOSPHERE BAKE A/B/C" picker that competed with the preset's own
+ * colour story. Each motion's track-0 background is rendered from this
+ * palette so atmosphere stays coherent with the chosen style.
+ */
+export interface AtmospherePalette {
+  /** CSS background colour for the base layer (no gradient — flat). */
+  baseBg: string;
+  /** First radial glow (top-leftish corner) — `[colour, alphaPct]`. */
+  warmGlow: { color: string; alpha: number; pos: string };
+  /** Second radial glow (opposite corner). */
+  coolGlow: { color: string; alpha: number; pos: string };
+  /** Vignette opacity 0–1 (multiplier on the host CSS box-shadow). */
+  vignetteIntensity: number;
+}
 
 export interface StylePreset {
   id: StylePresetId;
@@ -27,6 +54,10 @@ export interface StylePreset {
   emoji: string;
   /** When this preset shines (a sentence to help the user choose). */
   bestFor: string;
+  /** Intrinsic mood for fallback decisions. */
+  bgType: PresetBgType;
+  /** Atmosphere baked into the preset (replaces generic ATMOSPHERE BAKE). */
+  atmosphere: AtmospherePalette;
   /** Detailed style brief sent to Gemini. Written in English (LLMs respond better). */
   geminiBrief: string;
 }
@@ -38,6 +69,13 @@ export const STYLE_PRESETS: StylePreset[] = [
     description: 'Tipografia grande, fundo neutro, motion sutil.',
     emoji: '📰',
     bestFor: 'Conteúdo informativo, didático, profissional.',
+    bgType: 'light',
+    atmosphere: {
+      baseBg: '#fafafa',
+      warmGlow: { color: '#000000', alpha: 0.04, pos: '20% 30%' },
+      coolGlow: { color: '#000000', alpha: 0.03, pos: '80% 70%' },
+      vignetteIntensity: 0.3,
+    },
     geminiBrief: `
 PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
   bg: brandBackgroundColor
@@ -70,6 +108,13 @@ MOTION:
     description: 'Cores vibrantes, transições rápidas, energia alta.',
     emoji: '🔥',
     bestFor: 'Vídeos virais, hooks emocionais, conteúdo de venda.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: '#0a0a0f',
+      warmGlow: { color: '#ff5a3c', alpha: 0.18, pos: '20% 25%' },
+      coolGlow: { color: '#7b3cff', alpha: 0.16, pos: '80% 75%' },
+      vignetteIntensity: 0.7,
+    },
     geminiBrief: `
 PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
   bg: linear-gradient(135deg, brandBackgroundColor 0%, [a 15% lighter shade of brandBackgroundColor] 100%) — keep it dark, the gradient should be subtle, derived from the brand bg color
@@ -104,6 +149,13 @@ MOTION:
     description: 'Frosted glass, gradiente cyan, vibe tecnológica.',
     emoji: '💎',
     bestFor: 'Conteúdo sobre tecnologia, IA, software, ferramentas.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: '#08080f',
+      warmGlow: { color: '#7850c8', alpha: 0.18, pos: '20% 30%' },
+      coolGlow: { color: '#ff8c3c', alpha: 0.14, pos: '80% 70%' },
+      vignetteIntensity: 0.7,
+    },
     geminiBrief: `
 PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
   bg: radial-gradient(ellipse at top, brandBackgroundColor 0%, #000 80%)
@@ -138,6 +190,13 @@ MOTION:
     description: 'Tipografia como protagonista, palavras explodindo.',
     emoji: '🎯',
     bestFor: 'Frases de impacto, manchetes, declarações.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: '#000000',
+      warmGlow: { color: '#ffffff', alpha: 0.05, pos: '50% 40%' },
+      coolGlow: { color: '#ffffff', alpha: 0.03, pos: '50% 80%' },
+      vignetteIntensity: 0.5,
+    },
     geminiBrief: `
 PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
   bg: brandBackgroundColor (or pure #000 if bg is dark)
@@ -172,6 +231,13 @@ MOTION:
     description: 'Tons claros, animações orgânicas, lifestyle.',
     emoji: '🌸',
     bestFor: 'Conteúdo lifestyle, feminino, beleza, bem-estar.',
+    bgType: 'light',
+    atmosphere: {
+      baseBg: '#fdf2f8',
+      warmGlow: { color: '#ec4899', alpha: 0.20, pos: '25% 25%' },
+      coolGlow: { color: '#c026d3', alpha: 0.15, pos: '75% 75%' },
+      vignetteIntensity: 0.25,
+    },
     geminiBrief: `
 PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE if they fit a soft/pastel mood.
   Otherwise default to the soft-pastel palette below.
@@ -207,6 +273,13 @@ MOTION:
     description: 'Filmico, vinheta, baixo contraste, dramático.',
     emoji: '🎬',
     bestFor: 'Storytelling, momentos emocionais, drama.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: '#08080a',
+      warmGlow: { color: '#3a2a1a', alpha: 0.25, pos: '30% 25%' },
+      coolGlow: { color: '#1a2030', alpha: 0.20, pos: '70% 75%' },
+      vignetteIntensity: 0.85,
+    },
     geminiBrief: `
 PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
   bg: brandBackgroundColor → slightly lighter shade (radial)
@@ -235,6 +308,111 @@ MOTION:
   almost no movement on text — just opacity
   background may have very slow zoom (1.0 → 1.05 over 5s)
   film burn / light leak transitions`.trim(),
+  },
+  {
+    id: 'apple-system',
+    label: 'Sistema Apple',
+    description: 'Precisão de OS, glass frosted, easing suave.',
+    emoji: '🍎',
+    bestFor: 'Demos de app, walkthroughs técnicos, tutoriais de produto.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: '#1a1a1a',
+      warmGlow: { color: '#ffffff', alpha: 0.04, pos: '20% 25%' },
+      coolGlow: { color: '#0084ff', alpha: 0.10, pos: '80% 75%' },
+      vignetteIntensity: 0.55,
+    },
+    geminiBrief: `
+PALETTE: Apple OS aesthetic — restrained, system-grade.
+  bg: brandBackgroundColor if it is dark (#0a0a0a–#1a1a1a) OR pure '#1a1a1a'
+      For "tutorial" / "configuração" / "como" content, you MAY swap to a light
+      variant: '#f5f5f7' bg with '#1d1d1f' text and '#0084ff' accent. Pick light
+      OR dark, never mix.
+  text: brandTextColor (or '#ffffff' on dark / '#1d1d1f' on light)
+  accent: '#0084ff' (Apple system blue) — overrides brandPrimaryColor for highlights
+  glass-bg: rgba(255,255,255,0.08) on dark / rgba(0,0,0,0.04) on light
+  glass-border: rgba(255,255,255,0.18) on dark / rgba(0,0,0,0.10) on light
+  separator: rgba(255,255,255,0.12) on dark / rgba(0,0,0,0.10) on light
+
+TYPOGRAPHY:
+  primary: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif (use class="font-tech")
+  weights: 500 (body), 600 (headings) — NEVER 800-900, that's not Apple
+  display sizes: 64-128px (more restrained than other presets)
+  letter-spacing: -0.02em on display, -0.01em on body
+  line-height: 1.1 on display, 1.4 on body
+
+LAYOUT:
+  snap-to-grid 12px (every position should be a multiple of 12)
+  generous breathing room — minimum 48px gutters
+  glass-frosted cards with backdrop-filter: blur(20px) saturate(180%)
+  rounded corners: 14px (cards), 18px (windows), 9px (buttons)
+  thin 1px borders using glass-border colour
+  optional macOS window chrome: three traffic-light dots (red #ff5f57, amber #febc2e, green #28c840) at top-left, 12px each, 8px gaps
+  optional REC badge or filename pill in corner
+  selected items get a 2px '#0084ff' border or '#0084ff' fill at 0.18 alpha
+
+MOTION:
+  ease: power3.out, power3.inOut (cubic — NEVER back.out, NEVER elastic)
+  durations: 0.4-0.8s (snappy but smooth, not bouncy)
+  prefer fade + small translate (≤40px), short scale 0.95→1
+  no rotation accidents, no overshoot
+  staggers: 0.04-0.06s
+  selection highlight pulses subtly (opacity 1.0 ↔ 0.85 over 1.2s)
+  visual signature: a card "snaps" into a slot — quick scale punch from 0.92→1 with a 1px border highlight that fades at 0.4s
+
+VOICE:
+  Quiet, precise, OS-like. The motion should feel like macOS itself, not
+  like a flashy reel. Less is more. If a frame can be calmer without losing
+  meaning, calm it.`.trim(),
+  },
+  {
+    id: 'warm-editorial',
+    label: 'Editorial aquecido',
+    description: 'Cream paper, terracotta, motion contemplativo.',
+    emoji: '🍂',
+    bestFor: 'Lifestyle, viagem, beleza, story humano.',
+    bgType: 'warm',
+    atmosphere: {
+      baseBg: '#f5ede0',
+      warmGlow: { color: '#d4714d', alpha: 0.22, pos: '25% 25%' },
+      coolGlow: { color: '#c9a563', alpha: 0.18, pos: '78% 78%' },
+      vignetteIntensity: 0.20,
+    },
+    geminiBrief: `
+PALETTE: Warm editorial — cream paper, deep brown ink, terracotta accent.
+  bg: '#f5ede0' (warm cream paper) — DO NOT make it pure white, DO NOT make it dark
+  text: '#2d2d2d' (deep warm brown — NEVER pure black '#000000')
+  accent: '#d4714d' (terracotta) — overrides brandPrimaryColor unless brand is already a warm earth tone
+  secondary: '#c9a563' (warm gold)
+  muted: '#8b7355' (warm taupe)
+  shadows: ALL shadows must be warm — '0 8px 30px rgba(120, 80, 40, 0.18)' style. NEVER black shadows.
+
+TYPOGRAPHY:
+  primary display: "Anton", "Inter", sans-serif (class="font-display") — for impact words
+  body / pull-quote: "Inter", sans-serif italic where it fits (for storytelling lines)
+  weights: 400 (body), 500 (italic body), 700 (display when bold needed)
+  display sizes: 88-180px
+  letter-spacing: -0.01em on display, normal on body
+  line-height: 1.05 on display, 1.5 on body
+
+LAYOUT:
+  generous whitespace — composition feels "magazine spread", not packed
+  off-center alignments OK, even encouraged for emotional weight
+  organic blob shapes (low-opacity radial gradients in warmGlow / coolGlow)
+  thin hairline rules in '#8b7355' at 30% alpha as section dividers
+  framed photo treatment when assets are present: 12-16px border using '#f5ede0' brightened
+
+MOTION:
+  ease: sine.inOut, power1.inOut (gentle, contemplative)
+  durations: 1.2-2.0s (slower — we breathe, not jump)
+  scale 0.96→1 + fade for entries; no rotation
+  background blobs drift slowly (yoyo, 4-5s cycle)
+  no clip-path snap reveals, no elastic, no overshoot
+  pull-quote text fades in word-by-word with 0.10s stagger (slow)
+
+VOICE:
+  Warm, human, unhurried. Think the opening of a travel documentary or a
+  perfume ad — the motion supports a feeling, doesn't shout for attention.`.trim(),
   },
 ];
 

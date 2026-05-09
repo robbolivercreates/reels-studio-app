@@ -82,6 +82,28 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       };
     }
 
+    case 'duplicate-block': {
+      // Duplicate text + layout/style/asset metadata, but DROP per-block
+      // generated artifacts (motion HTML/video, avatar clip) — those are tied
+      // to the source block and would just be confusing on a clone.
+      const idx = state.blocks.findIndex(b => b.id === action.id);
+      if (idx < 0) return state;
+      const source = state.blocks[idx];
+      const { motion: _m, dirty: _d, ...rest } = source;
+      const clone: ScriptBlock = {
+        ...rest,
+        id: uid(),
+        // Reset timings to zero — they get rewritten by audio-success/reorder.
+        start: 0,
+        end: 0,
+        // Audio is no longer in sync with the cloned block until regenerated.
+        dirty: state.audio.status === 'ready' ? true : undefined,
+      };
+      const nextBlocks = [...state.blocks];
+      nextBlocks.splice(idx + 1, 0, clone);
+      return { ...state, blocks: nextBlocks };
+    }
+
     case 'update-block-text':
       return markBlockDirty(
         { ...state, blocks: state.blocks.map(b => b.id === action.id ? { ...b, text: action.text } : b) },
@@ -94,12 +116,11 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
         blocks: state.blocks.map(b => {
           if (b.id !== action.id) return b;
           const newKind = b.kind === 'avatar' ? 'broll' : 'avatar';
-          // If the block has an attached asset, re-derive the layout from the
-          // new kind. avatar+asset = media-top (split). broll+asset = media-only
-          // (full frame, no avatar half). Without this, switching kind leaves
-          // the old layout on, which produces the "asset floating above empty
-          // bottom half" bug for broll.
-          if (!b.attachedAsset) return { ...b, kind: newKind };
+          // If the block has any attached assets, re-derive the layout from
+          // the new kind. avatar+assets = media-top (split). broll+assets =
+          // media-only (full frame, no avatar half).
+          const hasAssets = (b.attachedAssets?.length ?? 0) > 0;
+          if (!hasAssets) return { ...b, kind: newKind };
           const layout = newKind === 'broll' ? 'media-only' : 'media-top';
           return { ...b, kind: newKind, layout };
         }),
@@ -238,21 +259,89 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       };
     }
 
-    case 'set-block-asset': {
+    case 'set-block-style-preset': {
       return {
         ...state,
         blocks: state.blocks.map(b => {
           if (b.id !== action.id) return b;
-          if (action.asset === undefined) {
-            // Detach: drop the asset and the auto-applied layout.
-            const { attachedAsset: _a, layout: _l, ...rest } = b;
+          if (action.preset === undefined) {
+            const { stylePresetOverride: _s, ...rest } = b;
             return rest;
           }
-          // Attach: store asset + force the right layout for the block kind:
-          //   - avatar block → media-top (asset on top half, avatar on bottom)
-          //   - broll block  → media-only (no avatar exists; full frame is media)
+          return { ...b, stylePresetOverride: action.preset };
+        }),
+      };
+    }
+
+    // Multi-asset handlers — replace the legacy single-asset action.
+    // Layout derivation rule (shared): empty list → strip auto-layout,
+    // non-empty → media-top (avatar) or media-only (broll).
+    case 'set-block-assets': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          const next = action.assets;
+          if (!next || next.length === 0) {
+            const { attachedAssets: _a, attachedAsset: _legacy, layout: _l, ...rest } = b;
+            return rest;
+          }
           const layout = b.kind === 'broll' ? 'media-only' : 'media-top';
-          return { ...b, attachedAsset: action.asset, layout };
+          // Drop legacy single-asset field on every write.
+          const { attachedAsset: _legacy, ...rest } = b;
+          return { ...rest, attachedAssets: next, layout };
+        }),
+      };
+    }
+
+    case 'add-block-asset': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          const current = b.attachedAssets ?? [];
+          // Prevent dup paths in the carousel — adding the same file twice
+          // doesn't make sense visually.
+          if (current.some(a => a.path === action.asset.path)) return b;
+          const next = [...current, action.asset];
+          const layout = b.kind === 'broll' ? 'media-only' : 'media-top';
+          const { attachedAsset: _legacy, ...rest } = b;
+          return { ...rest, attachedAssets: next, layout };
+        }),
+      };
+    }
+
+    case 'remove-block-asset': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          const current = b.attachedAssets ?? [];
+          if (action.index < 0 || action.index >= current.length) return b;
+          const next = current.filter((_, i) => i !== action.index);
+          if (next.length === 0) {
+            const { attachedAssets: _a, attachedAsset: _legacy, layout: _l, ...rest } = b;
+            return rest;
+          }
+          return { ...b, attachedAssets: next };
+        }),
+      };
+    }
+
+    case 'reorder-block-assets': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          const current = b.attachedAssets ?? [];
+          const { fromIndex, toIndex } = action;
+          if (fromIndex === toIndex) return b;
+          if (fromIndex < 0 || fromIndex >= current.length) return b;
+          if (toIndex < 0 || toIndex >= current.length) return b;
+          const next = [...current];
+          const [moved] = next.splice(fromIndex, 1);
+          next.splice(toIndex, 0, moved);
+          return { ...b, attachedAssets: next };
         }),
       };
     }

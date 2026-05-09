@@ -1,6 +1,7 @@
 export type BlockKind = 'avatar' | 'broll';
 
 import type { MotionConfig } from './motionLibrary';
+import type { StylePresetId } from './motionStylePresets';
 
 /**
  * Visual layouts for avatar blocks. Determines how avatar + B-roll share the screen.
@@ -73,10 +74,24 @@ export interface ScriptBlock {
    */
   motion?: MotionConfig;
   /**
-   * Optional user-attached asset (image or video) from the project's universal
-   * Assets folder. When set, the block auto-uses a 50/50 split layout with the
-   * asset on the top half, and motion generation builds around this asset.
+   * Optional per-block style preset override. When set, motion generation
+   * uses this preset instead of the seed default ('glass-tech'). Lets the
+   * user pick a vibe per block without entering the advanced motion editor.
    */
+  stylePresetOverride?: StylePresetId;
+  /**
+   * Optional ordered list of user-attached assets (images/videos) from the
+   * project's universal Assets folder. When the list has at least one item,
+   * the block auto-uses a media layout (split for avatar, full for broll) and
+   * motion generation builds a sequential carousel:
+   *   - 1 asset:    asset is the protagonist for the full block duration
+   *   - N assets:   each gets `block_duration / N` seconds, fade transitions
+   *
+   * Legacy field `attachedAsset` (single) is migrated to a 1-element array on
+   * hydration. New code reads/writes `attachedAssets` exclusively.
+   */
+  attachedAssets?: AttachedAsset[];
+  /** @deprecated kept on the type only so the hydrator can still see it. Migrated to attachedAssets. */
   attachedAsset?: AttachedAsset;
   /**
    * Transition into the NEXT block. undefined = default fade (back-compat).
@@ -259,6 +274,7 @@ export interface ReelsState {
 export type ReelsAction =
   | { type: 'set-name'; name: string }
   | { type: 'add-block'; afterId?: string }
+  | { type: 'duplicate-block'; id: string }
   | { type: 'remove-block'; id: string }
   | { type: 'update-block-text'; id: string; text: string }
   | { type: 'toggle-block-kind'; id: string }
@@ -273,7 +289,11 @@ export type ReelsAction =
   | { type: 'set-avatar-zoom'; id: string; zoom: number }
   | { type: 'set-avatar-offset-y'; id: string; offsetY: number }
   | { type: 'set-block-motion'; id: string; motion: MotionConfig | undefined }
-  | { type: 'set-block-asset'; id: string; asset: AttachedAsset | undefined }
+  | { type: 'set-block-assets'; id: string; assets: AttachedAsset[] | undefined }
+  | { type: 'add-block-asset'; id: string; asset: AttachedAsset }
+  | { type: 'remove-block-asset'; id: string; index: number }
+  | { type: 'reorder-block-assets'; id: string; fromIndex: number; toIndex: number }
+  | { type: 'set-block-style-preset'; id: string; preset: StylePresetId | undefined }
   | { type: 'split-block'; id: string; atSec: number }
   | { type: 'set-voice'; voiceId: string }
   | { type: 'set-emotion'; emotion: ReelEmotion }
