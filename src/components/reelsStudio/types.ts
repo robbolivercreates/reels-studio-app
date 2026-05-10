@@ -22,6 +22,23 @@ export type BlockLayout = 'avatar-only' | 'media-only' | 'avatar-top' | 'media-t
 export type BlockTransition = 'cut' | 'fade' | 'dissolve';
 
 /**
+ * Tone override applied when regenerating a script in the preview panel.
+ * `current` = no override (keep voiceProfile defaults).
+ */
+export type ToneOption = 'current' | 'more-direct' | 'more-casual' | 'more-didactic';
+
+/**
+ * Optional regeneration context passed to script-generation services.
+ * Used by the preview panel to ask Gemini to diverge from a previous
+ * attempt and apply user feedback / tone tweaks.
+ */
+export interface RegenerateContext {
+  extraInstructions?: string;
+  previousAttempt?: { kind: BlockKind; text: string }[];
+  toneOverride?: ToneOption;
+}
+
+/**
  * Asset attached by the user to a single block. Shown as overlay on the top
  * half (50/50 split with avatar). When present, motion generation prioritises
  * this asset as the visual centerpiece instead of choosing freely from the
@@ -294,6 +311,7 @@ export type ReelsAction =
   | { type: 'remove-block-asset'; id: string; index: number }
   | { type: 'reorder-block-assets'; id: string; fromIndex: number; toIndex: number }
   | { type: 'set-block-style-preset'; id: string; preset: StylePresetId | undefined }
+  | { type: 'set-block-style-preset-cascade'; id: string; preset: StylePresetId | undefined }
   | { type: 'split-block'; id: string; atSec: number }
   | { type: 'set-voice'; voiceId: string }
   | { type: 'set-emotion'; emotion: ReelEmotion }

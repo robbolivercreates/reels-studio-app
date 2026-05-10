@@ -88,6 +88,7 @@ export const ReelsStudio: React.FC = () => {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [videoRefModalOpen, setVideoRefModalOpen] = useState(false);
   const [referencesModalOpen, setReferencesModalOpen] = useState(false);
+  const [reanalyzeMeta, setReanalyzeMeta] = useState<import('./reelsStudio/referenceVideoStore').ReferenceMeta | null>(null);
   const [planAnalysis, setPlanAnalysis] = useState<PersistedAnalysis | null>(null);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [motionPickerBlockId, setMotionPickerBlockId] = useState<string | null>(null);
@@ -103,6 +104,7 @@ export const ReelsStudio: React.FC = () => {
   const [capcutExportStatus, setCapcutExportStatus] = useState<string | null>(null);
   const capcutLastFolderRef = useRef<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<'api-keys' | 'voice'>('api-keys');
 
   // Drag-to-reorder timeline blocks (by id). dragOverIndex = where to drop in
   // the avatar+broll combined sequence. Both null when not dragging.
@@ -457,8 +459,12 @@ export const ReelsStudio: React.FC = () => {
     state.audio.status,
     state.audio.silenceCut,
     state.audio.cutsApplied,
-    state.audio.keepSegments,
-    state.audio.applyingCuts,
+    // Use a stable serialised key for keepSegments so the effect only re-fires
+    // when the segments actually change in value, not just in reference identity.
+    // Removing applyingCuts from deps prevents the self-triggering loop where
+    // dispatching audio-cuts-applying (inside the effect) immediately re-runs it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    JSON.stringify(state.audio.keepSegments),
     state.audio.detectingSilence,
   ]);
 
@@ -1614,6 +1620,10 @@ export const ReelsStudio: React.FC = () => {
                     ...avatarBoxStyle,
                     objectFit: 'cover',
                     backgroundColor: 'black',
+                    // Split layouts: avatar and motion are in different halves — no overlap,
+                    // z-index only matters for overlay mode where motion blends over avatar.
+                    // overlay → avatar below motion (z-index 20, motion is z-index 30)
+                    // all other modes → avatar and motion don't overlap, keep at z-index 20
                     zIndex: 20,
                     transform: `scale(${currentBlock?.kind === 'avatar' ? (currentBlock.avatarZoom ?? defaultAvatarZoom(state.aspect, currentBlock.layout)) : 1})`,
                     transformOrigin: 'center center',
@@ -1699,20 +1709,32 @@ export const ReelsStudio: React.FC = () => {
               </div>
             )}
 
-            {/* Motion overlay — split-bottom/split-top show in their half; replace
-                fills the whole frame. Overlay (screen blend over avatar) is excluded
-                here to keep the avatar preview clean.
-                Motion plays once and freezes on its last frame for the rest of the
-                block (no looping — that looks amateurish). */}
+            {/* Motion overlay — position derived from current block layout, not
+                from motion.layer (which reflects the Gemini prompt canvas, not
+                the live preview layout). This keeps motion and avatar in sync
+                when the user changes layout after generating the motion. */}
             {currentBlock?.motion && (() => {
               const motion = currentBlock.motion;
-              if (motion.layer === 'overlay') return null;
+              // Derive display layer from current block layout so the preview
+              // always matches the compositor output regardless of when the
+              // motion was generated.
+              const displayLayer = ((): typeof motion.layer => {
+                if (currentBlock.kind === 'broll') return motion.layer;
+                switch (currentBlock.layout) {
+                  case 'avatar-only': return 'overlay';   // motion blends over full avatar
+                  case 'avatar-top':  return 'split-bottom'; // avatar top, motion bottom
+                  case 'media-top':   return 'split-top';    // media top, motion fills top (avatar bottom)
+                  case 'media-only':  return 'replace';   // no avatar, motion fills frame
+                  default:            return 'overlay';
+                }
+              })();
+              if (displayLayer === 'overlay') return null;
               return (
                 <MotionLayerOverlay
                   key={`motion-${motion.id}-${motion.renderedAt ?? 0}`}
                   motion={motion}
                   playing={playing}
-                  layer={motion.layer}
+                  layer={displayLayer}
                 />
               );
             })()}
@@ -1790,7 +1812,7 @@ export const ReelsStudio: React.FC = () => {
 
         {/* ─── SCRIPT EDITOR ────────────────────────────────────────────── */}
         {scriptOpen && (
-          <div className="w-[420px] border-l border-white/5 bg-[#0E0E10] flex flex-col shrink-0">
+          <div className="min-w-[320px] w-[min(420px,40vw)] border-l border-white/5 bg-[#0E0E10] flex flex-col shrink-0">
             <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
               <div>
                 <div className="text-sm font-semibold text-zinc-100">Script</div>
@@ -1856,92 +1878,7 @@ export const ReelsStudio: React.FC = () => {
               </div>
             </div>
 
-            {/* Voice picker */}
-            <div className="px-5 py-3 border-b border-white/5">
-              <button onClick={() => setVoicePickerOpen(o => !o)} className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] hover:bg-white/5 border border-white/10 transition-colors">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-violet-400 to-violet-600 ring-2 ring-violet-300/40' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
-                    {selectedVoiceLabel.label.slice(0, 1).toUpperCase()}
-                  </div>
-                  <div className="text-left">
-                    <div className="text-xs font-medium text-zinc-200 flex items-center gap-1.5">
-                      {selectedVoiceLabel.label}
-                      {selectedVoiceLabel.isCustom && <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 uppercase tracking-wider">Sua</span>}
-                    </div>
-                    <div className="text-[10px] text-zinc-500">{selectedVoiceLabel.hint}</div>
-                  </div>
-                </div>
-                <svg className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${voicePickerOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
-              </button>
-              {voicePickerOpen && (
-                <div className="mt-2 max-h-[340px] overflow-y-auto rounded-lg bg-[#0A0A0B] border border-white/10">
-                  {/* MINHAS VOZES */}
-                  <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider text-violet-300/60 font-semibold">Minhas vozes</div>
-                  {clonedVoices.length === 0 ? (
-                    <div className="px-3 pb-2 text-[10px] text-zinc-600 italic">Nenhuma voz salva ainda.</div>
-                  ) : (
-                    clonedVoices.map(v => {
-                      const daysLeft = Math.max(0, Math.floor((v.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));
-                      const isSelected = selectedVoiceId === v.voiceId;
-                      return (
-                        <div key={v.id} className={`group flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors ${isSelected ? 'bg-violet-500/10' : ''}`}>
-                          <button onClick={() => { dispatch({ type: 'set-voice', voiceId: v.voiceId }); setVoicePickerOpen(false); }} className="flex items-center gap-2.5 flex-1 text-left">
-                            <div className="w-6 h-6 rounded-full bg-gradient-to-br from-violet-400 to-violet-600 flex items-center justify-center text-[9px] font-bold text-white ring-2 ring-violet-300/30">
-                              {v.name.slice(0, 1).toUpperCase()}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="text-[11px] font-medium text-zinc-200 truncate">{v.name}</div>
-                              <div className="text-[9px] text-zinc-500 truncate">
-                                {daysLeft > 1 ? `Expira em ${daysLeft} dias` : daysLeft === 1 ? 'Expira amanhã' : 'Expira hoje'} · {v.model}
-                              </div>
-                            </div>
-                            {isSelected && <svg className="w-3.5 h-3.5 text-violet-400 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); if (confirm(`Remover a voz "${v.name}"?`)) { deleteClonedVoice(v.id); refreshClonedVoices(); } }}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400 transition-all"
-                            title="Remover"
-                          >
-                            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                          </button>
-                        </div>
-                      );
-                    })
-                  )}
-
-                  {/* Action: salvar voice_id */}
-                  <button
-                    onClick={() => { setSaveVoiceModalOpen(true); setVoicePickerOpen(false); }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-violet-500/10 transition-colors text-left border-y border-white/5 mt-1"
-                  >
-                    <div className="w-6 h-6 rounded-full bg-violet-500/20 border border-dashed border-violet-400/40 flex items-center justify-center text-violet-300">
-                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
-                    </div>
-                    <div className="flex-1">
-                      <div className="text-[11px] font-medium text-violet-200">Salvar voice_id do Minimax</div>
-                      <div className="text-[9px] text-zinc-500">Cole o ID que você já tem</div>
-                    </div>
-                  </button>
-
-                  {/* VOZES PADRÃO */}
-                  <div className="px-3 pt-3 pb-1 text-[9px] uppercase tracking-wider text-zinc-500 font-semibold">Vozes padrão</div>
-                  {VOICE_OPTIONS.map(v => (
-                    <button key={v.id} onClick={() => { dispatch({ type: 'set-voice', voiceId: v.id }); setVoicePickerOpen(false); }} className={`w-full flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors text-left ${v.id === selectedVoiceId ? 'bg-violet-500/10' : ''}`}>
-                      <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${v.gender === 'female' ? 'bg-gradient-to-br from-pink-400 to-rose-600' : 'bg-gradient-to-br from-cyan-400 to-blue-600'}`}>
-                        {v.label.slice(0, 1)}
-                      </div>
-                      <div className="flex-1">
-                        <div className="text-[11px] font-medium text-zinc-200">{v.label}</div>
-                        <div className="text-[9px] text-zinc-500">{v.hint}</div>
-                      </div>
-                      {v.id === selectedVoiceId && <svg className="w-3.5 h-3.5 text-violet-400" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Emotion + speed — collapsible once audio exists */}
+            {/* Voice + Vibe — unified collapsed row */}
             {(() => {
               const VIBE_OPTS = [
                 { id: 'neutral',   emoji: '😐', label: 'Neutro' },
@@ -1953,35 +1890,131 @@ export const ReelsStudio: React.FC = () => {
               ] as const;
               const currentVibe = VIBE_OPTS.find(v => v.id === emotion) ?? VIBE_OPTS[0];
               const ready = audio.status === 'ready';
-              const isOpen = !ready || vibeExpanded;
+              const isOpen = voicePickerOpen || vibeExpanded || !ready;
               return (
-                <div className="px-5 py-3 border-b border-white/5">
-                  {ready ? (
-                    <button
-                      onClick={() => setVibeExpanded(o => !o)}
-                      className="w-full flex items-center justify-between text-left group"
-                      title="Como o áudio foi gerado"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Vibe</span>
-                        <span className="text-[11px] text-zinc-300 flex items-center gap-1">
-                          <span>{currentVibe.emoji}</span>
-                          <span>{currentVibe.label}</span>
-                          <span className="text-zinc-500">·</span>
-                          <span className="font-mono">{voiceSpeed.toFixed(2)}x</span>
-                        </span>
-                      </div>
-                      <svg className={`w-3 h-3 text-zinc-500 group-hover:text-zinc-300 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                      </svg>
-                    </button>
-                  ) : (
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mb-2">Vibe</div>
-                  )}
+                <div className="border-b border-white/5">
+                  {/* Collapsed header row */}
+                  <button
+                    onClick={() => {
+                      if (ready) {
+                        const next = !isOpen;
+                        setVoicePickerOpen(false);
+                        setVibeExpanded(next);
+                      }
+                    }}
+                    className="w-full px-4 py-2.5 flex items-center gap-2 text-left group hover:bg-white/[0.02] transition-colors"
+                    title={ready ? (isOpen ? 'Recolher' : 'Expandir voz e vibe') : undefined}
+                  >
+                    <div className={`w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-violet-400 to-violet-600' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
+                      {selectedVoiceLabel.label.slice(0, 1).toUpperCase()}
+                    </div>
+                    <span className="text-[11px] font-medium text-zinc-200 truncate max-w-[90px]">{selectedVoiceLabel.label}</span>
+                    {selectedVoiceLabel.isCustom && (
+                      <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 uppercase tracking-wider shrink-0">Sua</span>
+                    )}
+                    <span className="text-zinc-600 shrink-0">·</span>
+                    <span className="text-[11px] text-zinc-400 flex items-center gap-1 shrink-0">
+                      <span>{currentVibe.emoji}</span>
+                      <span>{currentVibe.label}</span>
+                    </span>
+                    {voiceSpeed !== 1 && (
+                      <>
+                        <span className="text-zinc-600 shrink-0">·</span>
+                        <span className="text-[11px] text-zinc-400 font-mono shrink-0">{voiceSpeed.toFixed(2)}×</span>
+                      </>
+                    )}
+                    <svg className={`w-3 h-3 text-zinc-600 group-hover:text-zinc-400 transition-transform ml-auto shrink-0 ${isOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </button>
 
+                  {/* Expanded panel */}
                   {isOpen && (
-                    <div className={ready ? 'mt-3' : ''}>
-                      <div className="flex flex-wrap gap-1.5 mb-3">
+                    <div className="px-4 pb-3 space-y-3">
+                      {/* Voice picker inline */}
+                      <button
+                        onClick={() => setVoicePickerOpen(o => !o)}
+                        className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] hover:bg-white/5 border border-white/10 transition-colors"
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-violet-400 to-violet-600 ring-2 ring-violet-300/40' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
+                            {selectedVoiceLabel.label.slice(0, 1).toUpperCase()}
+                          </div>
+                          <div className="text-left">
+                            <div className="text-xs font-medium text-zinc-200 flex items-center gap-1.5">
+                              {selectedVoiceLabel.label}
+                              {selectedVoiceLabel.isCustom && <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 uppercase tracking-wider">Sua</span>}
+                            </div>
+                            <div className="text-[10px] text-zinc-500">{selectedVoiceLabel.hint}</div>
+                          </div>
+                        </div>
+                        <svg className={`w-3.5 h-3.5 text-zinc-500 transition-transform ${voicePickerOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+                      </button>
+                      {voicePickerOpen && (
+                        <div className="mt-1 max-h-[300px] overflow-y-auto rounded-lg bg-[#0A0A0B] border border-white/10">
+                          {/* MINHAS VOZES */}
+                          <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider text-violet-300/60 font-semibold">Minhas vozes</div>
+                          {clonedVoices.length === 0 ? (
+                            <div className="px-3 pb-2 text-[10px] text-zinc-600 italic">Nenhuma voz salva ainda.</div>
+                          ) : (
+                            clonedVoices.map(v => {
+                              const daysLeft = Math.max(0, Math.floor((v.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));
+                              const isSelected = selectedVoiceId === v.voiceId;
+                              return (
+                                <div key={v.id} className={`group flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors ${isSelected ? 'bg-violet-500/10' : ''}`}>
+                                  <button onClick={() => { dispatch({ type: 'set-voice', voiceId: v.voiceId }); setVoicePickerOpen(false); }} className="flex items-center gap-2.5 flex-1 text-left">
+                                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-violet-400 to-violet-600 flex items-center justify-center text-[9px] font-bold text-white ring-2 ring-violet-300/30">
+                                      {v.name.slice(0, 1).toUpperCase()}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-[11px] font-medium text-zinc-200 truncate">{v.name}</div>
+                                      <div className="text-[9px] text-zinc-500 truncate">
+                                        {daysLeft > 1 ? `Expira em ${daysLeft} dias` : daysLeft === 1 ? 'Expira amanhã' : 'Expira hoje'} · {v.model}
+                                      </div>
+                                    </div>
+                                    {isSelected && <svg className="w-3.5 h-3.5 text-violet-400 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
+                                  </button>
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); if (confirm(`Remover a voz "${v.name}"?`)) { deleteClonedVoice(v.id); refreshClonedVoices(); } }}
+                                    className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400 transition-all"
+                                    title="Remover"
+                                  >
+                                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                                  </button>
+                                </div>
+                              );
+                            })
+                          )}
+                          <button
+                            onClick={() => { setSaveVoiceModalOpen(true); setVoicePickerOpen(false); }}
+                            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-violet-500/10 transition-colors text-left border-y border-white/5 mt-1"
+                          >
+                            <div className="w-6 h-6 rounded-full bg-violet-500/20 border border-dashed border-violet-400/40 flex items-center justify-center text-violet-300">
+                              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                            </div>
+                            <div className="flex-1">
+                              <div className="text-[11px] font-medium text-violet-200">Salvar voice_id do Minimax</div>
+                              <div className="text-[9px] text-zinc-500">Cole o ID que você já tem</div>
+                            </div>
+                          </button>
+                          <div className="px-3 pt-3 pb-1 text-[9px] uppercase tracking-wider text-zinc-500 font-semibold">Vozes padrão</div>
+                          {VOICE_OPTIONS.map(v => (
+                            <button key={v.id} onClick={() => { dispatch({ type: 'set-voice', voiceId: v.id }); setVoicePickerOpen(false); }} className={`w-full flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors text-left ${v.id === selectedVoiceId ? 'bg-violet-500/10' : ''}`}>
+                              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${v.gender === 'female' ? 'bg-gradient-to-br from-pink-400 to-rose-600' : 'bg-gradient-to-br from-cyan-400 to-blue-600'}`}>
+                                {v.label.slice(0, 1)}
+                              </div>
+                              <div className="flex-1">
+                                <div className="text-[11px] font-medium text-zinc-200">{v.label}</div>
+                                <div className="text-[9px] text-zinc-500">{v.hint}</div>
+                              </div>
+                              {v.id === selectedVoiceId && <svg className="w-3.5 h-3.5 text-violet-400" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Vibe controls */}
+                      <div className="flex flex-wrap gap-1.5">
                         {VIBE_OPTS.map(opt => (
                           <button
                             key={opt.id}
@@ -1991,7 +2024,6 @@ export const ReelsStudio: React.FC = () => {
                                 ? 'bg-violet-500/20 border-violet-400/50 text-violet-100'
                                 : 'bg-white/[0.03] border-white/10 text-zinc-400 hover:text-zinc-200 hover:border-white/20'
                             }`}
-                            title={`Aplica ${opt.label.toLowerCase()} ao próximo áudio gerado`}
                           >
                             <span>{opt.emoji}</span>
                             <span>{opt.label}</span>
@@ -2009,12 +2041,12 @@ export const ReelsStudio: React.FC = () => {
                           onChange={e => dispatch({ type: 'set-voice-speed', speed: parseFloat(e.target.value) })}
                           className="flex-1 accent-violet-400"
                         />
-                        <span className="text-[11px] text-zinc-300 font-mono tabular-nums w-10 text-right">{voiceSpeed.toFixed(2)}x</span>
+                        <span className="text-[11px] text-zinc-300 font-mono tabular-nums w-10 text-right">{voiceSpeed.toFixed(2)}×</span>
                       </div>
                       {ready && (
                         <button
                           onClick={() => setConfirmOpen(true)}
-                          className="mt-3 w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.35)] transition-all flex items-center justify-center gap-1.5"
+                          className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.35)] transition-all flex items-center justify-center gap-1.5"
                           title="Refaz o áudio com a emoção e ritmo escolhidos"
                         >
                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -2024,7 +2056,7 @@ export const ReelsStudio: React.FC = () => {
                         </button>
                       )}
                       {audio.status === 'generating' && (
-                        <div className="mt-3 text-[10px] text-violet-300 flex items-center gap-1.5 justify-center">
+                        <div className="text-[10px] text-violet-300 flex items-center gap-1.5 justify-center">
                           <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
                             <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -2076,7 +2108,7 @@ export const ReelsStudio: React.FC = () => {
                   },
                   onOpenMotionAdvanced: () => setMotionPickerBlockId(b.id),
                   onOpenAssetPicker: () => setAssetPickerBlockId(b.id),
-                  onSetStylePreset: (preset: StylePresetId | undefined) => dispatch({ type: 'set-block-style-preset', id: b.id, preset }),
+                  onSetStylePreset: (preset: StylePresetId | undefined) => dispatch({ type: 'set-block-style-preset-cascade', id: b.id, preset }),
                   onDuplicate: () => dispatch({ type: 'duplicate-block', id: b.id }),
                   motionBusyMessage: motionBusyByBlock[b.id] ?? null,
                 });
@@ -2146,14 +2178,22 @@ export const ReelsStudio: React.FC = () => {
                   </div>
                 </>
               )}
-              <button
-                onClick={() => setConfirmOpen(true)}
-                disabled={audio.status === 'generating'}
-                className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                title={`Custo estimado · $${estimatedTotalCost.toFixed(2)}`}
-              >
-                {audio.status === 'generating' ? '⏳ Gerando áudio...' : audio.status === 'ready' ? `🔄 Regenerar áudio${hasDirtyBlocks ? ` · $${estimatedAudioCost.toFixed(2)}` : ''}` : '🎙️ Gerar áudio'}
-              </button>
+              {(audio.status === 'idle' || audio.status === 'generating' || audio.status === 'error' || (audio.status === 'ready' && hasDirtyBlocks)) && (
+                <button
+                  onClick={() => setConfirmOpen(true)}
+                  disabled={audio.status === 'generating'}
+                  className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={`Custo estimado · $${estimatedTotalCost.toFixed(2)}`}
+                >
+                  {audio.status === 'generating'
+                    ? '⏳ Gerando áudio...'
+                    : audio.status === 'error'
+                    ? '⚠️ Tentar novamente'
+                    : audio.status === 'ready'
+                    ? `🔄 Regenerar áudio · $${estimatedAudioCost.toFixed(2)}`
+                    : '🎙️ Gerar áudio'}
+                </button>
+              )}
               {audio.status === 'error' && <div className="mt-2 text-[10px] text-red-400">{audio.error}</div>}
             </div>
           </div>
@@ -2912,12 +2952,21 @@ export const ReelsStudio: React.FC = () => {
           onClose={() => setReferencesModalOpen(false)}
           onOpenPlan={(a) => setPlanAnalysis(a)}
           onRemoveAnalysis={(createdAt) => dispatch({ type: 'remove-analysis', createdAt })}
+          onReanalyze={(meta) => {
+            setReferencesModalOpen(false);
+            setReanalyzeMeta(meta);
+            setVideoRefModalOpen(true);
+          }}
         />
       )}
 
       {videoRefModalOpen && (
         <VideoReferenceModal
-          onClose={() => setVideoRefModalOpen(false)}
+          initialReanalyzeMeta={reanalyzeMeta ?? undefined}
+          onClose={() => {
+            setVideoRefModalOpen(false);
+            setReanalyzeMeta(null);
+          }}
           onImported={(imported, analysis, meta) => {
             const persisted = {
               language: analysis.language,
@@ -2957,6 +3006,7 @@ export const ReelsStudio: React.FC = () => {
               null;
             if (suggested) dispatch({ type: 'set-emotion', emotion: suggested });
             setVideoRefModalOpen(false);
+            setReanalyzeMeta(null);
             setPlayhead(0);
             setPlaying(false);
           }}
@@ -2972,8 +3022,15 @@ export const ReelsStudio: React.FC = () => {
             });
             dispatch({ type: 'replace-blocks', blocks: imported });
             setVideoRefModalOpen(false);
+            setReanalyzeMeta(null);
             setPlayhead(0);
             setPlaying(false);
+          }}
+          onOpenVoiceSettings={() => {
+            setVideoRefModalOpen(false);
+            setReanalyzeMeta(null);
+            setSettingsTab('voice');
+            setSettingsOpen(true);
           }}
         />
       )}
@@ -3013,6 +3070,7 @@ export const ReelsStudio: React.FC = () => {
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSave={() => setSettingsOpen(false)}
+        initialTab={settingsTab}
       />
 
       {confirmClearOpen && (

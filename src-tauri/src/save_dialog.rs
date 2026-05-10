@@ -112,6 +112,68 @@ pub async fn save_file_with_dialog(
     })
 }
 
+/// Copy a file from src to dst (used to move the ffmpeg-muxed temp file to the user's chosen path).
+#[tauri::command]
+pub fn copy_file(src_path: String, dst_path: String) -> Result<(), String> {
+    std::fs::copy(&src_path, &dst_path)
+        .map_err(|e| format!("Falha ao copiar arquivo: {e}"))?;
+    Ok(())
+}
+
+/// Mux a silent video file with an audio file using ffmpeg, writing the result
+/// to `output_path`. Both inputs are expected to already exist on disk.
+/// Returns the output path on success.
+#[tauri::command]
+pub async fn mux_video_audio_ffmpeg(
+    video_path: String,
+    audio_path: String,
+    output_path: String,
+) -> Result<String, String> {
+    use tokio::process::Command;
+
+    // Try to find ffmpeg: $PATH first, then common Homebrew locations.
+    let ffmpeg_candidates = [
+        "ffmpeg",
+        "/opt/homebrew/bin/ffmpeg",
+        "/usr/local/bin/ffmpeg",
+        "/usr/bin/ffmpeg",
+    ];
+    let ffmpeg = ffmpeg_candidates
+        .iter()
+        .find(|&&p| {
+            if p == "ffmpeg" {
+                // "ffmpeg" without a path — let the OS resolve it
+                true
+            } else {
+                std::path::Path::new(p).exists()
+            }
+        })
+        .copied()
+        .unwrap_or("ffmpeg");
+
+    let output = Command::new(ffmpeg)
+        .args([
+            "-y",                    // overwrite output
+            "-i", &video_path,       // silent video
+            "-i", &audio_path,       // audio track
+            "-c:v", "copy",          // copy video stream — no re-encode
+            "-c:a", "aac",           // encode audio to AAC
+            "-b:a", "192k",
+            "-shortest",             // trim to the shorter of the two streams
+            &output_path,
+        ])
+        .output()
+        .await
+        .map_err(|e| format!("ffmpeg não encontrado ou falhou ao iniciar: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("ffmpeg falhou:\n{}", stderr));
+    }
+
+    Ok(output_path)
+}
+
 /// Reveal a saved file in Finder (selects the file, doesn't open it).
 #[tauri::command]
 pub fn reveal_file_in_finder(path: String) -> Result<(), String> {

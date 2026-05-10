@@ -31,6 +31,8 @@ export interface RenderInputs {
   quality: 'high' | 'lite';
   /** When provided, output skips silent regions; segments are in source time (0..duration). */
   silenceKeepSegments?: { start: number; end: number }[];
+  /** When true, render video track only — no AAC encoding. Use for ffmpeg mux path. */
+  videoOnly?: boolean;
 }
 
 export interface RenderProgress {
@@ -372,11 +374,15 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     const audio = await decodeAudioChannelData(inputs.audioBlob);
     if (cancelled) throw new Error('Cancelado');
 
+    const videoOnly = !!inputs.videoOnly;
+
     // Setup muxer + encoders.
     const muxer = new Muxer({
       target: new ArrayBufferTarget(),
       video: { codec: 'avc', width, height, frameRate: FRAMERATE },
-      audio: { codec: 'aac', numberOfChannels: 1, sampleRate: 48000 },
+      // Only declare audio track when we're encoding it ourselves.
+      // In videoOnly mode, ffmpeg will mux the audio separately.
+      ...(videoOnly ? {} : { audio: { codec: 'aac', numberOfChannels: 1, sampleRate: audio.sampleRate } }),
       fastStart: 'in-memory',
     });
 
@@ -391,27 +397,33 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       framerate: FRAMERATE,
     });
 
-    const audioEncoder = new AudioEncoder({
-      output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
-      error: (e) => { console.error('[render/audio] encoder error:', e); throw e; },
-    });
-    const audioConfig: AudioEncoderConfig = {
-      codec: 'mp4a.40.2',
-      sampleRate: 48000,
-      numberOfChannels: 1,
-      bitrate: 128_000,
-    };
-    // Probe support — WebKit silently substitutes sample rate / channel count
-    // and produces broken AAC headers if the config it likes differs from
-    // what we asked for. Logging the supported config tells us if WebKit is
-    // about to munge our parameters.
-    try {
-      const support = await AudioEncoder.isConfigSupported(audioConfig);
-      console.log('[render/audio] AAC config supported?', support.supported, 'effective:', support.config);
-    } catch (probeErr) {
-      console.warn('[render/audio] config probe threw:', probeErr);
+    // Audio encoder only used in non-videoOnly mode.
+    let audioChunksEncoded = 0;
+    let audioChunksOutput = 0;
+    const targetRate = audio.sampleRate;
+    let audioEncoder: AudioEncoder | null = null;
+    if (!videoOnly) {
+      audioEncoder = new AudioEncoder({
+        output: (chunk, meta) => {
+          audioChunksOutput++;
+          muxer.addAudioChunk(chunk, meta);
+        },
+        error: (e) => { console.error('[render/audio] encoder error:', e); throw e; },
+      });
+      const audioConfig: AudioEncoderConfig = {
+        codec: 'mp4a.40.2',
+        sampleRate: targetRate,
+        numberOfChannels: 1,
+        bitrate: 128_000,
+      };
+      try {
+        const support = await AudioEncoder.isConfigSupported(audioConfig);
+        console.log('[render/audio] AAC config · rate=', targetRate, '· supported?', support.supported, 'effective:', support.config);
+      } catch (probeErr) {
+        console.warn('[render/audio] config probe threw:', probeErr);
+      }
+      audioEncoder.configure(audioConfig);
     }
-    audioEncoder.configure(audioConfig);
 
     const canvas = new OffscreenCanvas(width, height);
     const ctx = canvas.getContext('2d', { alpha: false });
@@ -498,7 +510,7 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     for (let frame = 0; frame < totalFrames; frame++) {
       if (cancelled) {
         videoEncoder.close();
-        audioEncoder.close();
+        audioEncoder?.close();
         throw new Error('Cancelado');
       }
 
@@ -557,120 +569,96 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       }
     }
 
-    // ─── AUDIO PASS ──────────────────────────────────────────────────
-    onProgress({ phase: 'audio', framesDone: totalFrames, totalFrames, message: 'Encodando áudio...' });
+    // ─── AUDIO PASS (skipped in videoOnly mode) ──────────────────────
+    if (!videoOnly && audioEncoder) {
+      onProgress({ phase: 'audio', framesDone: totalFrames, totalFrames, message: 'Encodando áudio...' });
 
-    // Resample if source rate != 48000 (most Minimax MP3s come in 44.1k or 48k).
-    const targetRate = 48000;
-    const srcRate = audio.sampleRate;
-    let pcmFull: Float32Array;
-    if (srcRate === targetRate) {
-      pcmFull = audio.data;
-    } else {
-      const targetLen = Math.round(audio.data.length * (targetRate / srcRate));
-      pcmFull = new Float32Array(targetLen);
-      for (let i = 0; i < targetLen; i++) {
-        const srcIdx = i * (srcRate / targetRate);
-        const lo = Math.floor(srcIdx);
-        const hi = Math.min(audio.data.length - 1, lo + 1);
-        const frac = srcIdx - lo;
-        pcmFull[i] = audio.data[lo] * (1 - frac) + audio.data[hi] * frac;
-      }
-    }
+      const pcmFull = audio.data;
 
-    // Build the output PCM by walking each slot, inserting silence for offsets, and
-    // applying silence cuts within source ranges. Block silence-cut also clips the
-    // intersected ranges per slot.
-    const FADE_MS_DEFAULT = 5;
-    const FADE_MS_DISSOLVE = 150;
-    const pieces: Float32Array[] = [];
+      const FADE_MS_DEFAULT = 5;
+      const FADE_MS_DISSOLVE = 150;
+      const pieces: Float32Array[] = [];
 
-    const intersect = (a: { start: number; end: number }, b: { start: number; end: number }) => ({
-      start: Math.max(a.start, b.start),
-      end: Math.min(a.end, b.end),
-    });
-
-    const pushPcmRange = (startSec: number, endSec: number, fadeInMs: number, fadeOutMs: number) => {
-      const startIdx = Math.max(0, Math.floor(startSec * targetRate));
-      const endIdx = Math.min(pcmFull.length, Math.floor(endSec * targetRate));
-      if (endIdx <= startIdx) return;
-      const seg = new Float32Array(endIdx - startIdx);
-      seg.set(pcmFull.subarray(startIdx, endIdx));
-      const fadeInSamples = Math.floor((fadeInMs / 1000) * targetRate);
-      const fadeOutSamples = Math.floor((fadeOutMs / 1000) * targetRate);
-      for (let i = 0; i < Math.min(fadeInSamples, seg.length); i++) {
-        seg[i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeInSamples));
-      }
-      for (let i = 0; i < Math.min(fadeOutSamples, seg.length); i++) {
-        seg[seg.length - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeOutSamples));
-      }
-      pieces.push(seg);
-    };
-
-    for (let s = 0; s < layout.slots.length; s++) {
-      const slot = layout.slots[s];
-      const block = inputs.blocks.find(b => b.id === slot.blockId);
-      const prevBlock = s > 0 ? inputs.blocks.find(b => b.id === layout.slots[s - 1].blockId) : null;
-      const incomingDissolve = prevBlock?.transition === 'dissolve';
-      const outgoingDissolve = block?.transition === 'dissolve';
-      const fadeIn = incomingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
-      const fadeOut = outgoingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
-
-      // Push audio from sourceStart..sourceEnd, intersected with keepSegs if cut is on.
-      const blockRange = { start: slot.sourceStart, end: slot.sourceEnd };
-      if (cutOn) {
-        for (const k of keepSegs) {
-          const inter = intersect(blockRange, k);
-          if (inter.end > inter.start) pushPcmRange(inter.start, inter.end, fadeIn, fadeOut);
-        }
-      } else {
-        pushPcmRange(blockRange.start, blockRange.end, fadeIn, fadeOut);
-      }
-    }
-
-    const totalLen = pieces.reduce((s, x) => s + x.length, 0);
-    console.log('[render/audio] composed PCM · pieces=', pieces.length, '· totalSamples=', totalLen, '· seconds=', (totalLen / targetRate).toFixed(2));
-    const pcm = new Float32Array(totalLen);
-    {
-      let off = 0;
-      for (const seg of pieces) { pcm.set(seg, off); off += seg.length; }
-    }
-
-    // Push the PCM in ~1024-sample frames.
-    const FRAME_SIZE = 1024;
-    for (let offset = 0; offset < pcm.length; offset += FRAME_SIZE) {
-      if (cancelled) {
-        videoEncoder.close();
-        audioEncoder.close();
-        throw new Error('Cancelado');
-      }
-      const slice = pcm.subarray(offset, Math.min(pcm.length, offset + FRAME_SIZE));
-      // Copy into a fresh ArrayBuffer to satisfy AudioData's strict BufferSource type.
-      const buf = new Float32Array(slice.length);
-      buf.set(slice);
-      const audioData = new AudioData({
-        format: 'f32-planar',
-        sampleRate: targetRate,
-        numberOfFrames: buf.length,
-        numberOfChannels: 1,
-        timestamp: Math.round((offset / targetRate) * 1_000_000),
-        data: buf,
+      const intersect = (a: { start: number; end: number }, b: { start: number; end: number }) => ({
+        start: Math.max(a.start, b.start),
+        end: Math.min(a.end, b.end),
       });
-      while (audioEncoder.encodeQueueSize > 4) {
-        await new Promise(r => setTimeout(r, 1));
+
+      const pushPcmRange = (startSec: number, endSec: number, fadeInMs: number, fadeOutMs: number) => {
+        const startIdx = Math.max(0, Math.floor(startSec * targetRate));
+        const endIdx = Math.min(pcmFull.length, Math.floor(endSec * targetRate));
+        if (endIdx <= startIdx) return;
+        const seg = new Float32Array(endIdx - startIdx);
+        seg.set(pcmFull.subarray(startIdx, endIdx));
+        const fadeInSamples = Math.floor((fadeInMs / 1000) * targetRate);
+        const fadeOutSamples = Math.floor((fadeOutMs / 1000) * targetRate);
+        for (let i = 0; i < Math.min(fadeInSamples, seg.length); i++) {
+          seg[i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeInSamples));
+        }
+        for (let i = 0; i < Math.min(fadeOutSamples, seg.length); i++) {
+          seg[seg.length - 1 - i] *= 0.5 - 0.5 * Math.cos(Math.PI * (i / fadeOutSamples));
+        }
+        pieces.push(seg);
+      };
+
+      for (let s = 0; s < layout.slots.length; s++) {
+        const slot = layout.slots[s];
+        const prevBlock = s > 0 ? inputs.blocks.find(b => b.id === layout.slots[s - 1].blockId) : null;
+        const block = inputs.blocks.find(b => b.id === slot.blockId);
+        const incomingDissolve = prevBlock?.transition === 'dissolve';
+        const outgoingDissolve = block?.transition === 'dissolve';
+        const fadeIn = incomingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
+        const fadeOut = outgoingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
+        const blockRange = { start: slot.sourceStart, end: slot.sourceEnd };
+        if (cutOn) {
+          for (const k of keepSegs) {
+            const inter = intersect(blockRange, k);
+            if (inter.end > inter.start) pushPcmRange(inter.start, inter.end, fadeIn, fadeOut);
+          }
+        } else {
+          pushPcmRange(blockRange.start, blockRange.end, fadeIn, fadeOut);
+        }
       }
-      audioEncoder.encode(audioData);
-      audioData.close();
+
+      const totalLen = pieces.reduce((s, x) => s + x.length, 0);
+      const pcm = new Float32Array(totalLen);
+      { let off = 0; for (const seg of pieces) { pcm.set(seg, off); off += seg.length; } }
+
+      const FRAME_SIZE = 1024;
+      for (let offset = 0; offset < pcm.length; offset += FRAME_SIZE) {
+        if (cancelled) { videoEncoder.close(); audioEncoder.close(); throw new Error('Cancelado'); }
+        const slice = pcm.subarray(offset, Math.min(pcm.length, offset + FRAME_SIZE));
+        const buf = new Float32Array(slice.length);
+        buf.set(slice);
+        const audioData = new AudioData({
+          format: 'f32-planar',
+          sampleRate: targetRate,
+          numberOfFrames: buf.length,
+          numberOfChannels: 1,
+          timestamp: Math.round((offset / targetRate) * 1_000_000),
+          data: buf,
+        });
+        while (audioEncoder.encodeQueueSize > 4) { await new Promise(r => setTimeout(r, 1)); }
+        audioChunksEncoded++;
+        audioEncoder.encode(audioData);
+        audioData.close();
+      }
     }
 
     // ─── FINALISE ────────────────────────────────────────────────────
     onProgress({ phase: 'finalizing', framesDone: totalFrames, totalFrames, message: 'Empacotando MP4...' });
 
     await videoEncoder.flush();
-    await audioEncoder.flush();
-    console.log('[render/audio] flushed both encoders');
+    if (audioEncoder) {
+      await audioEncoder.flush();
+      const drainDeadline = performance.now() + 3000;
+      while (audioChunksOutput < audioChunksEncoded && performance.now() < drainDeadline) {
+        await new Promise(r => setTimeout(r, 10));
+      }
+    }
+    console.log('[render] flushed · audioEncoded=', audioChunksEncoded, '· audioOutput=', audioChunksOutput, '· videoOnly=', videoOnly);
     videoEncoder.close();
-    audioEncoder.close();
+    audioEncoder?.close();
     muxer.finalize();
 
     const target = muxer.target as ArrayBufferTarget;

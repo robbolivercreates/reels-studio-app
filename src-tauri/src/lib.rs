@@ -40,6 +40,8 @@ pub fn run() {
             save_dialog::pick_save_path,
             save_dialog::truncate_file,
             save_dialog::append_chunk_to_file,
+            save_dialog::mux_video_audio_ffmpeg,
+            save_dialog::copy_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

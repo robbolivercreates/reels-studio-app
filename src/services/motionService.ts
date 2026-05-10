@@ -464,6 +464,74 @@ optionally adding (N camera move) for cinematic openness. For blocks ≤ 3s, a
 simpler arc (A entrance + F punch + exit) is fine — camera optional, often skip.
 
 ═══════════════════════════════════════════════════════════
+ PRINCIPLE 9 — UI INTERFACE RECREATION (no asset attached)
+═══════════════════════════════════════════════════════════
+When the block text describes a software action — clicking a button, opening a menu,
+navigating a screen, typing into a field — AND no real screenshot asset is attached,
+DO NOT substitute an abstract metaphor. Instead: BUILD THE UI IN HTML/CSS.
+
+DETECTION: text contains verbs + UI nouns → apply this principle.
+  UI verbs:  clica, toca, abre, seleciona, arrasta, digita, navega, vai em, acessa,
+             click, tap, open, select, drag, type, navigate, go to, access
+  UI nouns:  menu, botão, aba, tela, painel, dashboard, settings, projetos, sidebar,
+             modal, campo, janela, app, plataforma, interface, feed, perfil, notificações,
+             button, tab, screen, panel, field, window, profile, notifications
+  Named apps: Claude, Figma, Canva, Notion, Instagram, TikTok, YouTube, Slack, Linear,
+              VS Code, ChatGPT, Google, Chrome, Safari, WhatsApp, Shopify, Webflow
+
+WHAT TO BUILD:
+① A simplified but recognisable mockup of the named interface using HTML/CSS/SVG.
+   - Use the app's real brand colors if known:
+     Claude = sidebar #1a1a1a + amber #D97706 accent
+     Figma  = dark #1e1e1e + blue #1abcfe
+     Notion = white #fff + black #000
+     Instagram = white bg + gradient purple/pink/orange icon
+     VS Code = #1e1e1e + blue #007acc
+     For unknown apps: generic dark shell (#1c1c1e) with neutral accent (#6366f1)
+   - A top bar / window chrome (app name or logo text, 1–2 nav items)
+   - The specific element being acted on — rendered as a real-looking button, list item,
+     sidebar link, or input field — highlighted or focused
+
+② A cursor SVG that moves to the target element and clicks it:
+   - Cursor: white arrow SVG (14×20px), absolute positioned
+   - Starts off-center (e.g. bottom-right quadrant), travels to target with ease:'power2.inOut', duration 0.7s
+   - On arrive: cursor scale 0.82 pulse (simulates press down), duration 0.08s, then back to 1
+   - After click: target element flashes with highlight color (opacity pulse or background-color tween), duration 0.15s
+   - SVG cursor markup: <svg viewBox="0 0 14 20" fill="white" stroke="#333" stroke-width="1"><path d="M0 0 L0 16 L4 12 L7 19 L9 18 L6 11 L11 11 Z"/></svg>
+
+③ The element being acted on must be CLEARLY LABELED with text matching what the
+   user said — if text says "clica em Projetos", the button/link must say "Projetos".
+
+STRUCTURE EXAMPLE — "clica em Projetos no Claude":
+  Track 0 (bg): panel #1a1a1a full slot
+  Track 1 (sidebar): left strip 180px wide, bg #111, border-right 1px solid #333
+    - "Claude" wordmark at top (font-weight 600, color #fff, font-size 14px)
+    - 4 nav items: "Novo chat", "Projetos" (highlighted amber bg #D97706, text #000),
+      "Histórico", "Configurações" — each 36px tall, 12px padding
+  Track 2 (main area): right of sidebar, dark bg, subtle placeholder content lines
+  Track 3 (cursor): SVG cursor animates from main area → "Projetos" sidebar item, then clicks
+  Track 4 (headline): block text as caption below the mockup in dead zone
+
+STRUCTURE EXAMPLE — "abre o menu Settings do Figma":
+  Track 0 (bg): #1e1e1e
+  Track 1 (top bar): full width 40px, bg #2c2c2c, "Figma" text left + menu items "File Edit View..."
+    - "Preferences" or "Settings" menu item highlighted
+  Track 2 (dropdown): appears at click position, white bg, list of settings options
+  Track 3 (cursor): travels to menu item, clicks, dropdown opens (animate from scaleY:0 to 1)
+
+DO NOT use placeholder rectangles labeled "App Screen" or "UI Mockup" — that is forbidden.
+DO build specific, named, recognisable interfaces with real text labels.
+If the named app is completely unknown, build a generic-but-plausible shell:
+  dark window chrome + sidebar/nav + centered content area + the specific action element labeled.
+
+⛔ SAFE AREA CONSTRAINT — applies to ALL UI mockups regardless of slot type:
+  The entire UI mockup (window, sidebar, chrome, all elements) MUST be contained within
+  the active slot's safe area. For full-frame (replace) slots: y:220–1540, x:80–1000.
+  For split slots (960px tall): y:80–820, x:60–1020.
+  NEVER let any div, absolute element, or animated child exceed these bounds — use
+  overflow:hidden on the root container and set explicit max-height matching the slot.
+
+═══════════════════════════════════════════════════════════
  ANTI-PATTERNS — avoid these mistakes
 ═══════════════════════════════════════════════════════════
 × Stacking 3+ rectangle "cards" with text inside — that's a slide deck, not motion design
@@ -1183,9 +1251,12 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         ``,
         `📐 SAFE AREA (full frame, 1080×1920):`,
         `  Place all primary content inside x:80–1000, y:220–1540.`,
-        `  • Top 220px reserved for status-bar-style chrome / hook badge.`,
-        `  • Bottom 380px reserved for caption rail (~y:1540–1820) + handle/CTA zone (y:1820–1920).`,
+        `  ⛔ FORBIDDEN: place any headline, hero icon, image, or primary content above y:220 or below y:1540.`,
+        `  ⛔ FORBIDDEN: position any element with top < 220px or bottom > 1540px — it will be clipped or overlap system UI.`,
+        `  • Top 220px (y:0–220): background gradients and atmosphere ONLY — no text, no icons, no UI chrome.`,
+        `  • Bottom 380px (y:1540–1920): caption rail and handle zone — no designed content here.`,
         `  • Hero/focal element vertical center: aim for y≈900-960 (true middle of the safe box).`,
+        `  • UI mockups (sidebars, windows, app chrome): must fit entirely within x:0–1080, y:220–1540. Cap height at 1320px max.`,
       ].join('\n');
     }
     // overlay

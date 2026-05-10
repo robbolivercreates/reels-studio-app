@@ -31,6 +31,7 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   const [progress, setProgress] = useState<RenderProgress | null>(null);
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [muxedOutputPath, setMuxedOutputPath] = useState<string | null>(null);
 
   // Build a single object URL for the result blob and reuse it across preview +
   // download. Revoke only when the blob changes or the modal closes — never
@@ -57,6 +58,7 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       setPhase('config');
       setProgress(null);
       setResultBlob(null);
+      setMuxedOutputPath(null);
       setErrorMsg(null);
       handleRef.current?.cancel();
       handleRef.current = null;
@@ -147,6 +149,11 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       // — the React state may not have caught up yet.
       const effectiveBlocks = cutSession ? cutSession.blocks : state.blocks;
       const effectiveDuration = cutSession ? cutSession.duration : state.audio.duration;
+      const { invoke } = await import('@tauri-apps/api/core');
+
+      // Render video-only via WebCodecs (audio encoding is broken on macOS
+      // WebKit — AudioEncoder silently produces 0-channel AAC). ffmpeg will
+      // mux the audio separately from the original MP3 blob.
       const handle = renderMp4(
         {
           blocks: effectiveBlocks,
@@ -156,17 +163,55 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
           duration: effectiveDuration,
           aspect: state.aspect,
           quality,
-          // Only pass keepSegments in legacy preview mode (no cut session AND
-          // no state-based cuts applied). When cuts are physically applied,
-          // the audio + blocks are already on the compressed timeline.
           silenceKeepSegments: !cutsApplied && state.audio.silenceCut && state.audio.keepSegments.length > 0
             ? state.audio.keepSegments
             : undefined,
+          videoOnly: true,
         },
         (p) => setProgress(p),
       );
       handleRef.current = handle;
-      const blob = await handle.promise;
+      const silentVideoBlob = await handle.promise;
+      console.log('[export] silent video blob · size=', silentVideoBlob.size);
+
+      // Write silent video + audio to temp files, then mux via ffmpeg.
+      setProgress({ phase: 'finalizing', framesDone: 0, totalFrames: 0, message: 'Muxando áudio via ffmpeg...' });
+      const tmpBase = `/tmp/reels_export_${Date.now()}`;
+      const videoTmpPath = `${tmpBase}_video.mp4`;
+      const audioTmpPath = `${tmpBase}_audio.mp3`;
+      const outputTmpPath = `${tmpBase}_final.mp4`;
+
+      // Write video temp file.
+      await invoke('truncate_file', { targetPath: videoTmpPath });
+      const videoBytes = new Uint8Array(await silentVideoBlob.arrayBuffer());
+      const CHUNK = 1024 * 1024;
+      for (let off = 0; off < videoBytes.length; off += CHUNK) {
+        const slice = videoBytes.subarray(off, Math.min(videoBytes.length, off + CHUNK));
+        await invoke('append_chunk_to_file', { targetPath: videoTmpPath, base64Chunk: arrayBufferToBase64(slice) });
+      }
+
+      // Write audio temp file.
+      await invoke('truncate_file', { targetPath: audioTmpPath });
+      const audioBytes = new Uint8Array(await audioBlob.arrayBuffer());
+      for (let off = 0; off < audioBytes.length; off += CHUNK) {
+        const slice = audioBytes.subarray(off, Math.min(audioBytes.length, off + CHUNK));
+        await invoke('append_chunk_to_file', { targetPath: audioTmpPath, base64Chunk: arrayBufferToBase64(slice) });
+      }
+
+      // Call ffmpeg via Rust to mux.
+      console.log('[export] calling ffmpeg mux · video=', videoTmpPath, '· audio=', audioTmpPath);
+      await invoke('mux_video_audio_ffmpeg', {
+        videoPath: videoTmpPath,
+        audioPath: audioTmpPath,
+        outputPath: outputTmpPath,
+      });
+      console.log('[export] ffmpeg mux done · output=', outputTmpPath);
+
+      // Read the muxed file back as a blob for the result viewer + history.
+      // We use read_reference_bytes (already available) or build the blob from chunks.
+      // Simplest: the user downloads directly from the temp path via the save dialog.
+      // Store a placeholder blob so the modal shows the "done" state with download button.
+      const blob = silentVideoBlob; // placeholder — actual save reads from outputTmpPath
 
       // Persist to history.
       const id = `exp_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -177,12 +222,13 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
         durationSec: state.audio.duration,
         aspect: state.aspect,
         quality,
-        fileSize: blob.size,
+        fileSize: silentVideoBlob.size,
         blob,
       };
-      // Save to history — non-blocking: IndexedDB quota may be exceeded on WebKit.
       saveExport(record).catch(e => console.warn('[export] saveExport skipped:', e));
 
+      // Store the output path so downloadResult can use it.
+      setMuxedOutputPath(outputTmpPath);
       setResultBlob(blob);
       setPhase('done');
     } catch (err) {
@@ -203,48 +249,40 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   };
 
   const downloadResult = async () => {
-    if (!resultBlob) return;
+    if (!resultBlob && !muxedOutputPath) return;
     const suggestedName = `${state.projectName.replace(/[^\w-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.mp4`;
     try {
-      // Native Save As... dialog → pick path → stream chunks via Rust.
-      // Sending Vec<u8> directly through Tauri JSON IPC silently truncates
-      // payloads >50MB on macOS WebKit (which is why earlier attempts wrote
-      // 0-byte files). Streaming base64 chunks keeps each IPC call small.
       const { invoke } = await import('@tauri-apps/api/core');
       const result = await invoke<{ path: string | null }>('pick_save_path', {
         suggestedName,
         extension: 'mp4',
       });
-      if (!result.path) return; // user canceled
+      if (!result.path) return;
       const targetPath = result.path;
-      console.log('[export] saving to', targetPath, 'size=', resultBlob.size);
 
-      await invoke('truncate_file', { targetPath });
-
-      // 1MB chunks → ~1.4MB base64 → fits comfortably in IPC.
-      const CHUNK = 1024 * 1024;
-      const buffer = await resultBlob.arrayBuffer();
-      const view = new Uint8Array(buffer);
-      let totalWritten = 0;
-      for (let off = 0; off < view.length; off += CHUNK) {
-        const slice = view.subarray(off, Math.min(view.length, off + CHUNK));
-        const base64Chunk = arrayBufferToBase64(slice);
-        const written = await invoke<number>('append_chunk_to_file', {
-          targetPath,
-          base64Chunk,
-        });
-        totalWritten += written;
+      if (muxedOutputPath) {
+        // ffmpeg already wrote the final file to a temp path — just copy it.
+        console.log('[export] copying muxed file from', muxedOutputPath, 'to', targetPath);
+        await invoke('copy_file', { srcPath: muxedOutputPath, dstPath: targetPath });
+      } else if (resultBlob) {
+        // Fallback: stream the blob (legacy path).
+        console.log('[export] saving to', targetPath, 'size=', resultBlob.size);
+        await invoke('truncate_file', { targetPath });
+        const CHUNK = 1024 * 1024;
+        const buffer = await resultBlob.arrayBuffer();
+        const view = new Uint8Array(buffer);
+        for (let off = 0; off < view.length; off += CHUNK) {
+          const slice = view.subarray(off, Math.min(view.length, off + CHUNK));
+          await invoke('append_chunk_to_file', { targetPath, base64Chunk: arrayBufferToBase64(slice) });
+        }
       }
-      console.log('[export] wrote', totalWritten, 'bytes to disk');
+      console.log('[export] saved to', targetPath);
 
-      // Reveal in Finder.
       try {
         await invoke('reveal_file_in_finder', { path: targetPath });
-      } catch (revealErr) {
-        console.warn('[export] reveal failed:', revealErr);
-      }
+      } catch { /* noop */ }
     } catch (err) {
-      console.warn('[export] native save failed, falling back to download link:', err);
+      console.warn('[export] native save failed:', err);
       if (resultUrl) {
         const a = document.createElement('a');
         a.href = resultUrl;

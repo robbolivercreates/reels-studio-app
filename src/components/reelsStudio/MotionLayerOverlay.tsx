@@ -109,20 +109,20 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) 
   const isSplit = layer === 'split-bottom' || layer === 'split-top';
 
   // Position + blend for each layer mode.
+  // z-index 30 ensures motion sits above the avatar video (z-index 20).
   const wrapperStyle: React.CSSProperties = isSplit
     ? {
         position: 'absolute',
         left: 0, right: 0,
         top: layer === 'split-bottom' ? '50%' : 0,
         bottom: layer === 'split-top' ? '50%' : 0,
+        zIndex: 30,
       }
     : layer === 'overlay'
-    ? { opacity: 0.88, mixBlendMode: 'screen' }
-    : { opacity: 1 }; // replace
+    ? { position: 'absolute', inset: 0, opacity: 0.88, mixBlendMode: 'screen', zIndex: 30 }
+    : { position: 'absolute', inset: 0, opacity: 1, zIndex: 30 }; // replace
 
-  const videoStyle: React.CSSProperties = isSplit
-    ? { width: '100%', height: '100%', objectFit: 'cover' }
-    : { width: '100%', height: '100%', objectFit: 'cover' };
+  const videoStyle: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' };
 
   const mediaEl = mp4Url ? (
     <video
@@ -151,8 +151,8 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) 
   return (
     <div
       ref={wrapperRef}
-      className={isSplit ? 'pointer-events-none' : 'absolute inset-0 pointer-events-none'}
-      style={isSplit ? wrapperStyle : { ...wrapperStyle, position: 'absolute', inset: 0 }}
+      className="pointer-events-none"
+      style={wrapperStyle}
     >
       {mediaEl}
     </div>

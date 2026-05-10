@@ -45,7 +45,7 @@ export const applyLipsyncRule = (
   rawKeep: KeepRange[],
   sourceDuration: number,
   blocks: ScriptBlock[],
-  clipsByBlockId: Record<string, AvatarClipState>,
+  _clipsByBlockId: Record<string, AvatarClipState>,
 ): KeepRange[] => {
   if (rawKeep.length === 0) return [{ start: 0, end: sourceDuration }];
 
@@ -58,14 +58,15 @@ export const applyLipsyncRule = (
   }
   if (cursor < sourceDuration) silences.push({ start: cursor, end: sourceDuration });
 
-  // Build the protected ranges: source-time ranges of avatar blocks with a
-  // ready clip. We keep silences that are LONGER than the tolerance AND
-  // that fall (fully or partially) inside any of these protected ranges.
+  // Build the protected ranges: source-time ranges of ALL avatar blocks.
+  // We protect regardless of clip status — the clip may not exist yet when
+  // silence cut is applied, but the avatar will be generated after, and
+  // HeyGen's lipsync model needs the natural speech rhythm (including pauses)
+  // to stay intact. Cutting silences inside avatar blocks before clip generation
+  // causes mouth misalignment because the model trained on uncut natural audio.
   const protectedRanges: { start: number; end: number }[] = [];
   for (const b of blocks) {
     if (b.kind !== 'avatar') continue;
-    const clip = clipsByBlockId[b.id];
-    if (!clip || clip.status !== 'ready') continue;
     protectedRanges.push({ start: b.start, end: b.end });
   }
 

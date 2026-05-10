@@ -74,6 +74,11 @@ export interface AudioSlice {
   end: number;
 }
 
+// Extra audio tail sent to HeyGen beyond the block's logical end time.
+// Prevents the last consonant/syllable from being cut mid-phoneme, which
+// causes HeyGen's lipsync model to misalign the mouth close on the final word.
+const TAIL_PADDING_SEC = 0.18;
+
 export const sliceAudioByBlocks = async (
   fullBlob: Blob,
   ranges: { blockId: string; start: number; end: number }[],
@@ -83,7 +88,11 @@ export const sliceAudioByBlocks = async (
   const channel = buffer.getChannelData(0);
 
   return ranges.map(r => {
-    const samples = sliceChannel(channel, r.start, r.end, sampleRate);
+    // Extend the slice slightly past block.end so HeyGen receives the natural
+    // phoneme decay of the last word. The block timing itself is unchanged —
+    // this only affects the audio fed to the lipsync model.
+    const sliceEnd = Math.min(buffer.duration, r.end + TAIL_PADDING_SEC);
+    const samples = sliceChannel(channel, r.start, sliceEnd, sampleRate);
     const int16 = float32ToInt16(samples);
     const wavBlob = encodeWav(int16, sampleRate);
     return {

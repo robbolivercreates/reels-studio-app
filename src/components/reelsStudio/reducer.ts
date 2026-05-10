@@ -273,6 +273,23 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       };
     }
 
+    case 'set-block-style-preset-cascade': {
+      // Apply preset to the target block AND all blocks without generated motion HTML.
+      // Blocks that already have motion.html are never touched — user already approved their style.
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          const hasMotion = !!(b.motion?.html);
+          if (b.id !== action.id && hasMotion) return b;
+          if (action.preset === undefined) {
+            const { stylePresetOverride: _s, ...rest } = b;
+            return rest;
+          }
+          return { ...b, stylePresetOverride: action.preset };
+        }),
+      };
+    }
+
     // Multi-asset handlers — replace the legacy single-asset action.
     // Layout derivation rule (shared): empty list → strip auto-layout,
     // non-empty → media-top (avatar) or media-only (broll).
