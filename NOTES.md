@@ -130,7 +130,7 @@ Header com 2 ações principais (kind + motion). Outras ações em
 | 1 | Multi-asset carrossel sequencial | ✅ **shipped** (não testado em runtime ainda) | |
 | 2 | UX redesign do card | ✅ **shipped** (não testado em runtime ainda) | Header reduzido pra 3 elementos · `⋯` menu · Inspector strip |
 | 3 | Asset não anexado vazando pro Gemini | parked | Resolvido como side effect do #1 (não passar projectAssets quando block já tem attachedAssets) |
-| 4 | Câmera virtual (Onda B do Hyperframes) | parked | Voltar depois |
+| 4 | Câmera virtual (Onda B do Hyperframes) | ✅ **shipped** | Técnica N adicionada ao GSAP_TECHNIQUES com 5 padrões (dolly-in/out, pan, drift, dolly-into-a-point) |
 
 ---
 

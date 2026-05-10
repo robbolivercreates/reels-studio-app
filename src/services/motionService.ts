@@ -419,9 +419,49 @@ M) ICON SWAP CHAIN — same slot, different icons appear/swap over time
    tl.fromTo('.icon3', { scale: 0.8, opacity: 0 }, { scale: 1, opacity: 1, duration: 0.4, ease: 'back.out(1.4)' }, 4.1)
    Optionally pulse the last icon as climax: tl.to('.icon3', { scale: 1.08, duration: 0.4, yoyo: true, repeat: 1 }, 5.5)
 
+N) VIRTUAL CAMERA MOVES — animate the WHOLE scene as if a camera is moving
+   The host CSS already enables 3D on #root. You can animate #root itself to
+   simulate a dolly-in (zoom toward a focal point), pan, or pull-back. Used
+   sparingly, this is the single biggest "this looks cinematic" upgrade.
+
+   Pick ONE camera move per shot — don't combine multiple. Time the move so
+   it lands BEFORE the hero element finishes its entrance, not after.
+
+   ① DOLLY-IN (zoom toward centre — reveals/discoveries):
+      tl.fromTo('#root', { scale: 1, transformOrigin: '50% 50%' }, { scale: 1.06, duration: DURATION, ease: 'expo.out' }, 0)
+      Subtle (1.0 → 1.06) so it doesn't crop content. transformOrigin sets the focal point.
+
+   ② DOLLY-OUT (pull back — reveals scope, "everything fits in the frame"):
+      tl.fromTo('#root', { scale: 1.15, transformOrigin: '50% 50%' }, { scale: 1, duration: 1.2, ease: 'expo.out' }, 0)
+      Starts zoomed in, pulls back as the hero appears.
+
+   ③ PAN (horizontal sweep — for "this then that" beats or carousels):
+      tl.fromTo('#root', { x: -60 }, { x: 0, duration: 0.9, ease: 'power3.out' }, 0)
+      Small offsets (≤80px). Combines well with multi-beat structures (K).
+
+   ④ DRIFT (continuous slow motion — adds life without distracting):
+      tl.to('#root', { x: '+=20', duration: DURATION, ease: 'sine.inOut' }, 0)
+      Use ONLY when there's no other camera move and the scene is visually quiet.
+
+   ⑤ DOLLY-INTO-A-POINT (focus on something off-centre — e.g. an asset, a label):
+      tl.fromTo('#root', { scale: 1, transformOrigin: '70% 30%' }, { scale: 1.10, duration: 1.0, ease: 'expo.out' }, 0)
+      Origin in % targets exactly where you want to land. Pair with the hero entrance.
+
+   RULES:
+   • Camera moves use 'expo.out' or 'power3.out' — the cinematic ease language.
+     NEVER 'back.out' on camera (that's bouncy, kills the cinematic feel).
+   • One camera move per motion. Multiple stacked = nausea.
+   • Camera move duration = 0.8-1.2s for snap reveals, OR full DURATION for slow
+     drifts. Mid-length (3-5s) feels indecisive.
+   • Compatible with #root because the host CSS sets transform-style:preserve-3d.
+     If you want depth, pair the camera with rotateY on inner cards (P4.5 DEPTH).
+   • DON'T animate #root opacity — the runtime hides clips by class="clip", so
+     fading the whole scene fights with that.
+
 Combine: pick ONE of the multi-beat structures (K or M) for blocks > 4s, then
-combine with (J background drift) and (I particles or L canvas) for atmosphere. For blocks
-≤ 3s, a simpler arc (A entrance + F punch + exit) is fine.
+combine with (J background drift) and (I particles or L canvas) for atmosphere,
+optionally adding (N camera move) for cinematic openness. For blocks ≤ 3s, a
+simpler arc (A entrance + F punch + exit) is fine — camera optional, often skip.
 
 ═══════════════════════════════════════════════════════════
  ANTI-PATTERNS — avoid these mistakes
