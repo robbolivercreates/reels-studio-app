@@ -13,12 +13,13 @@
  */
 
 const DB_NAME = 'reels_studio_v1';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const STORE_PROJECT = 'project';
 const STORE_AUDIO = 'audio'; // ALWAYS the pristine Minimax output. Cuts live in memory only.
 const STORE_CLIPS = 'clips';
 const STORE_TAKES = 'takes';
 const STORE_EXPORTS = 'exports';
+const STORE_NAMED_PROJECTS = 'named_projects';
 const PROJECT_KEY = 'current';
 const AUDIO_KEY = 'current';
 
@@ -42,6 +43,7 @@ const openDB = (): Promise<IDBDatabase> => {
       if (!db.objectStoreNames.contains(STORE_CLIPS)) db.createObjectStore(STORE_CLIPS); // key = blockId
       if (!db.objectStoreNames.contains(STORE_TAKES)) db.createObjectStore(STORE_TAKES); // key = takeId
       if (!db.objectStoreNames.contains(STORE_EXPORTS)) db.createObjectStore(STORE_EXPORTS); // key = exportId
+      if (!db.objectStoreNames.contains(STORE_NAMED_PROJECTS)) db.createObjectStore(STORE_NAMED_PROJECTS); // key = project id
     };
     req.onsuccess = () => {
       const db = req.result;
@@ -372,6 +374,137 @@ export const deleteExport = async (id: string): Promise<void> => {
 
 export const clearAllExports = async (): Promise<void> => {
   await reqOf(STORE_EXPORTS, 'readwrite', s => s.clear());
+};
+
+// ─── NAMED PROJECTS (multi-project save/load) ─────────────────────
+// Each named project is a PersistedProject snapshot + optional audio
+// ArrayBuffer stored inline. Clips and takes are NOT stored per-project
+// (they're large and ephemeral — user can regenerate). Audio is stored
+// inline because it's the core asset and typically < 5MB per project.
+
+export interface NamedProjectMeta {
+  id: string;
+  name: string;
+  savedAt: number;
+  durationSec: number;
+  blockCount: number;
+  aspect: string;
+}
+
+interface NamedProjectRecord {
+  meta: NamedProjectMeta;
+  snapshot: PersistedProject;
+  audioBuffer?: ArrayBuffer;
+  audioType?: string;
+}
+
+export const saveNamedProject = async (state: ReelsState): Promise<string> => {
+  const id = `project_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+  const snapshot: PersistedProject = {
+    projectName: state.projectName,
+    blocks: state.audio.cutsApplied && state.audio.originalBlocks
+      ? state.audio.originalBlocks
+      : state.blocks,
+    audio: {
+      ...state.audio,
+      url: null,
+      applyingCuts: false,
+      cutsApplied: false,
+      originalBlocks: undefined,
+      originalWords: undefined,
+      originalDuration: undefined,
+      originalPeaks: undefined,
+      duration: state.audio.cutsApplied && state.audio.originalDuration
+        ? state.audio.originalDuration
+        : state.audio.duration,
+      peaks: state.audio.cutsApplied && state.audio.originalPeaks
+        ? state.audio.originalPeaks
+        : state.audio.peaks,
+      words: state.audio.cutsApplied && state.audio.originalWords
+        ? state.audio.originalWords
+        : state.audio.words,
+    },
+    selectedVoiceId: state.selectedVoiceId,
+    aspect: state.aspect,
+    avatarClips: state.avatarClips,
+    avatarModel: state.avatarModel,
+    selectedPhotoId: state.selectedPhotoId,
+    takes: state.takes.map(t => ({ ...t, url: null })),
+    activeTakeId: state.activeTakeId,
+    lastAnalysis: state.lastAnalysis,
+    analyses: state.analyses,
+    emotion: state.emotion,
+    voiceSpeed: state.voiceSpeed,
+    savedAt: Date.now(),
+  };
+
+  // Try to include the current audio blob inline.
+  let audioBuffer: ArrayBuffer | undefined;
+  let audioType: string | undefined;
+  if (state.audio.url) {
+    try {
+      const res = await fetch(state.audio.url);
+      const blob = await res.blob();
+      audioBuffer = await blob.arrayBuffer();
+      audioType = blob.type || 'audio/mpeg';
+    } catch {
+      // Non-fatal: project saves without audio; user will need to re-generate.
+    }
+  }
+
+  const meta: NamedProjectMeta = {
+    id,
+    name: state.projectName,
+    savedAt: snapshot.savedAt,
+    durationSec: state.audio.duration,
+    blockCount: snapshot.blocks.length,
+    aspect: state.aspect,
+  };
+
+  const record: NamedProjectRecord = { meta, snapshot, audioBuffer, audioType };
+  await reqOf(STORE_NAMED_PROJECTS, 'readwrite', s => s.put(record, id));
+  return id;
+};
+
+export const listNamedProjects = async (): Promise<NamedProjectMeta[]> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAMED_PROJECTS, 'readonly');
+    const store = transaction.objectStore(STORE_NAMED_PROJECTS);
+    const results: NamedProjectMeta[] = [];
+    const req = store.openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (cursor) {
+        const record = cursor.value as NamedProjectRecord;
+        results.push(record.meta);
+        cursor.continue();
+      } else {
+        resolve(results.sort((a, b) => b.savedAt - a.savedAt));
+      }
+    };
+    req.onerror = () => reject(req.error);
+  });
+};
+
+export const loadNamedProject = async (id: string): Promise<{ snapshot: PersistedProject; audioBlob: Blob | null } | null> => {
+  try {
+    const result = await reqOf(STORE_NAMED_PROJECTS, 'readonly', s => s.get(id));
+    if (!result) return null;
+    const record = result as NamedProjectRecord;
+    let audioBlob: Blob | null = null;
+    if (record.audioBuffer) {
+      audioBlob = new Blob([record.audioBuffer], { type: record.audioType || 'audio/mpeg' });
+    }
+    return { snapshot: record.snapshot, audioBlob };
+  } catch {
+    return null;
+  }
+};
+
+export const deleteNamedProject = async (id: string): Promise<void> => {
+  await reqOf(STORE_NAMED_PROJECTS, 'readwrite', s => s.delete(id));
 };
 
 // ─── HARD RESET ──────────────────────────────────────────────────

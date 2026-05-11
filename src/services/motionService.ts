@@ -640,6 +640,13 @@ export interface GenerateMotionInput {
    * motion in the same reel visually consistent (same palette, same style).
    */
   existingBrand?: BrandResearch;
+  /**
+   * BCP-47 output language for the visible motion text + intent + rationale.
+   * When omitted, defaults to 'pt-BR' (legacy behaviour). Should match the
+   * script's language so the motion doesn't say "Crie tudo" while the avatar
+   * speaks English.
+   */
+  outputLanguage?: string;
 }
 
 // ─── Step 1: Brand research via Google Search grounding ───────────────────────
@@ -817,6 +824,42 @@ async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: G
 }
 
 // ─── Step 2: HTML generation ──────────────────────────────────────────────────
+
+/**
+ * Builds a high-priority language-instruction block prepended to the user
+ * brief. Overrides the legacy pt-BR examples baked into SYSTEM_PROMPT.
+ * The instruction targets `intent`, `text`, and `rationale` (the visible /
+ * narrated outputs); HTML class names and CSS stay in English regardless.
+ */
+const buildMotionLanguageSection = (lang: string): string => {
+  const labels: Record<string, string> = {
+    'pt-BR': 'Brazilian Portuguese',
+    'pt-PT': 'European Portuguese',
+    'en-US': 'American English',
+    'es-ES': 'European Spanish',
+    'es-419': 'Latin American Spanish',
+    'fr-FR': 'French',
+    'it-IT': 'Italian',
+    'de-DE': 'German',
+  };
+  const label = labels[lang] ?? lang;
+  if (lang === 'pt-BR') {
+    // Legacy default — no extra section needed, the SYSTEM_PROMPT already targets pt-BR.
+    return '';
+  }
+  return [
+    `--- OUTPUT LANGUAGE OVERRIDE (HIGHEST PRIORITY) ---`,
+    `The script for this reel is in ${label} (${lang}).`,
+    `ALL VISIBLE / SPOKEN OUTPUTS must be in ${label}, NOT in Portuguese:`,
+    `  • "intent" field → write in ${label}`,
+    `  • "text" field (the headline on screen) → write in ${label}`,
+    `  • "rationale" field → write in ${label}`,
+    `  • Any visible <h1>, <h2>, <p>, <span> text inside the HTML → ${label}`,
+    `Ignore the pt-BR examples in the system prompt; treat them as STRUCTURAL templates only — translate the actual wording.`,
+    `Keep HTML class names, CSS property names, GSAP API calls, and code identifiers in English (they are code, not content).`,
+    ``,
+  ].join('\n');
+};
 
 export const generateMotionHtml = async (input: GenerateMotionInput): Promise<GenerationOutput & { brand?: BrandResearch }> => {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
@@ -1320,7 +1363,11 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ``,
   ].filter(Boolean).join('\n');
 
+  const lang = input.outputLanguage ?? 'pt-BR';
+  const languageSection = buildMotionLanguageSection(lang);
+
   const userBrief = [
+    languageSection,
     slotSection,
     '',
     reelContextSection,

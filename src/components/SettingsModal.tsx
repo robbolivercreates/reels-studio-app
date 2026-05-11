@@ -1,9 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { VoiceProfilesPanel } from './reelsStudio/VoiceProfilesPanel';
+
+export type SettingsTab = 'api-keys' | 'voice';
 
 interface Props {
   isOpen: boolean;
   onClose: () => void;
   onSave: () => void;
+  initialTab?: SettingsTab;
+  onVoiceProfileChange?: () => void;
 }
 
 interface KeyConfig {
@@ -107,11 +112,13 @@ interface FieldState {
   validationMessage: string;
 }
 
-export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
+export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialTab = 'api-keys', onVoiceProfileChange }) => {
   const [fields, setFields] = useState<Record<string, FieldState>>({});
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
 
   useEffect(() => {
     if (!isOpen) return;
+    setActiveTab(initialTab);
     const next: Record<string, FieldState> = {};
     for (const k of KEYS) {
       const stored = localStorage.getItem(k.storageKey) ?? '';
@@ -124,9 +131,12 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
       };
     }
     setFields(next);
-  }, [isOpen]);
+  }, [isOpen, initialTab]);
 
   if (!isOpen) return null;
+
+  const isVoice = activeTab === 'voice';
+  const widthClass = isVoice ? 'max-w-5xl' : 'max-w-lg';
 
   const patchField = (storageKey: string, patch: Partial<FieldState>) => {
     setFields(prev => ({ ...prev, [storageKey]: { ...prev[storageKey], ...patch } }));
@@ -166,13 +176,30 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
     patchField(k.storageKey, { value: '', editing: true, validation: 'idle', validationMessage: '' });
   };
 
+  const tabBtn = (id: SettingsTab, label: string) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
+        activeTab === id
+          ? 'bg-violet-500/20 border border-violet-500/40 text-violet-100'
+          : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-white/10'
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6">
-      <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-lg w-full overflow-hidden flex flex-col max-h-[90vh]">
-        <div className="px-6 pt-6 pb-4 flex items-start justify-between">
+      <div className={`bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] ${widthClass} w-full overflow-hidden flex flex-col max-h-[90vh]`}>
+        <div className="px-6 pt-6 pb-3 flex items-start justify-between">
           <div>
             <div className="text-base font-semibold text-zinc-100 mb-1">Configurações</div>
-            <div className="text-xs text-zinc-500">Suas chaves ficam salvas localmente — nunca saem do app.</div>
+            <div className="text-xs text-zinc-500">
+              {isVoice
+                ? 'Estilo de escrita aplicado em todo roteiro gerado por IA.'
+                : 'Suas chaves ficam salvas localmente — nunca saem do app.'}
+            </div>
           </div>
           <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -181,7 +208,21 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
           </button>
         </div>
 
-        <div className="px-6 pb-2 flex-1 overflow-y-auto space-y-5">
+        <div className="px-6 pb-3 flex items-center gap-2 border-b border-white/5">
+          {tabBtn('api-keys', 'Chaves de API')}
+          {tabBtn('voice', 'Voz e estilo')}
+        </div>
+
+        {isVoice ? (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <VoiceProfilesPanel
+              onActiveChange={() => onVoiceProfileChange?.()}
+              onClose={onClose}
+            />
+          </div>
+        ) : (
+        <>
+        <div className="px-6 pt-4 pb-2 flex-1 overflow-y-auto space-y-5">
           {KEYS.map(k => {
             const f = fields[k.storageKey] ?? { value: '', editing: true, visible: false, validation: 'idle' as ValidationState, validationMessage: '' };
             const hasStored = !!localStorage.getItem(k.storageKey);
@@ -296,6 +337,8 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave }) => {
             Salvar
           </button>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

@@ -25,7 +25,7 @@ import {
   type RewriteLevel,
 } from './voiceProfile';
 import { VoiceProfilesPanel } from './VoiceProfilesPanel';
-import type { ScriptBlock } from './types';
+import type { ScriptBlock, BlockKind, ToneOption, LanguageOption, RegenerateContext } from './types';
 import {
   generateReelFromContent,
   fetchArticleFromUrl,
@@ -36,6 +36,8 @@ import {
   type DurationTarget,
   type GeneratedReel,
 } from '../../services/scriptFromContentService';
+import { ScriptPreviewPanel, type BusyState } from './ScriptPreviewPanel';
+import { regenerateBlock, generateNewBlock } from '../../services/blockGeneratorService';
 
 export interface ContentImportPayload {
   caption: string;
@@ -45,13 +47,18 @@ export interface ContentImportPayload {
   estimatedDurationSec: number;
   sourceTitle?: string;
   sourceUrl?: string;
+  /** Optional language override chosen by the user in the preview panel. */
+  languageOverride?: LanguageOption;
 }
 
 interface Props {
   onClose: () => void;
-  onImported: (blocks: ScriptBlock[], analysis: VideoAnalysisResult, meta: ReferenceMeta) => void;
+  onOpenVoiceSettings?: () => void;
+  onImported: (blocks: ScriptBlock[], analysis: VideoAnalysisResult, meta: ReferenceMeta, languageOverride?: LanguageOption) => void;
   /** Optional separate handler for content-derived imports (article / text / URL). */
   onContentImported?: (blocks: ScriptBlock[], payload: ContentImportPayload) => void;
+  /** When set, the modal opens directly into the library tab and auto-runs re-analyse on this file. */
+  initialReanalyzeMeta?: ReferenceMeta;
 }
 
 type Tab = 'url' | 'upload' | 'library' | 'article';
@@ -65,8 +72,8 @@ const fmtAgo = (ts: number) => {
   return `${Math.floor(s / 86400)}d atrás`;
 };
 
-export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onContentImported }) => {
-  const [tab, setTab] = useState<Tab>('url');
+export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onContentImported, onOpenVoiceSettings, initialReanalyzeMeta }) => {
+  const [tab, setTab] = useState<Tab>(initialReanalyzeMeta ? 'library' : 'url');
   const [folder, setFolder] = useState<string>('');
   const [refs, setRefs] = useState<ReferenceMeta[]>([]);
   const [url, setUrl] = useState('');
@@ -83,6 +90,8 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
   const [activeProfile, setActiveProfile] = useState<VoiceProfile | null>(null);
   /** Per-run rewrite override. null = use the profile default. */
   const [rewriteOverride, setRewriteOverride] = useState<RewriteLevel | null>(null);
+  /** Per-run language override (set in the voice profile bar). 'auto' = use the profile default. */
+  const [languageOverride, setLanguageOverride] = useState<LanguageOption>('auto');
   const [showProfilesPanel, setShowProfilesPanel] = useState(false);
 
   // Article / text tab state.
@@ -97,6 +106,19 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
   const articleFileRef = useRef<HTMLInputElement>(null);
   const [generatedPreview, setGeneratedPreview] = useState<GeneratedReel | null>(null);
   const [generatedSource, setGeneratedSource] = useState<{ title?: string; sourceUrl?: string } | null>(null);
+  /** Editable list of blocks for the article preview (mirrors generatedPreview.blocks but mutable). */
+  const [articlePreviewBlocks, setArticlePreviewBlocks] = useState<ScriptBlock[]>([]);
+
+  /** Video preview state — populated by handleAnalyseUpload / handleDownloadAndAnalyse / handleReuse. */
+  const [videoPreview, setVideoPreview] = useState<{
+    blocks: ScriptBlock[];
+    analysis: VideoAnalysisResult;
+    meta: ReferenceMeta;
+    bytesGetter: () => Promise<{ bytes: Uint8Array; mimeType: string }>;
+  } | null>(null);
+  const [previewBusy, setPreviewBusy] = useState<BusyState | undefined>(undefined);
+  /** Guard so we only auto-run re-analyse once per modal open. */
+  const initialReanalyzeFired = useRef(false);
 
   // On mount: load folder + library; subscribe to download progress; load voice profiles.
   useEffect(() => {
@@ -112,11 +134,28 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
     return () => { unlisten?.(); };
   }, []);
 
-  /** Build the profile to send to Gemini, applying any per-run override. */
+  // Auto-trigger re-analyse when a meta is passed in (from the References history modal).
+  // Waits for activeProfile to load so the voice profile is included in the Gemini call.
+  useEffect(() => {
+    if (!initialReanalyzeMeta) return;
+    if (initialReanalyzeFired.current) return;
+    if (!activeProfile) return; // wait for profiles to load
+    initialReanalyzeFired.current = true;
+    void handleReuse(initialReanalyzeMeta);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialReanalyzeMeta, activeProfile]);
+
+  /** Build the profile to send to Gemini, applying any per-run rewrite + language overrides. */
   const profileForCall = (): VoiceProfile | undefined => {
     if (!activeProfile) return undefined;
-    if (!rewriteOverride || rewriteOverride === activeProfile.rewriteLevel) return activeProfile;
-    return { ...activeProfile, rewriteLevel: rewriteOverride };
+    let next = activeProfile;
+    if (rewriteOverride && rewriteOverride !== activeProfile.rewriteLevel) {
+      next = { ...next, rewriteLevel: rewriteOverride };
+    }
+    if (languageOverride && languageOverride !== 'auto') {
+      next = { ...next, outputLanguage: languageOverride };
+    }
+    return next;
   };
 
   const refreshProfiles = (next: VoiceProfile) => {
@@ -184,7 +223,13 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
       setBusy('Analisando com Gemini Flash-Lite…');
       const result = await analyseReferenceBlob(pendingFile, profileForCall());
       await refreshLibrary();
-      onImported(result.blocks, result, meta);
+      // Cache bytes from the saved file for future regenerations.
+      const bytesGetter = async () => {
+        const bytes = await readReferenceBytes(meta.fileName);
+        return { bytes, mimeType: pendingFile.type || 'video/mp4' };
+      };
+      setVideoPreview({ blocks: result.blocks, analysis: result, meta, bytesGetter });
+      setBusy(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Falha ao analisar.');
       setBusy(null);
@@ -202,7 +247,12 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
       setBusy('Analisando com Gemini Flash-Lite…');
       const result = await analyseReferenceFromBytes(bytes, 'video/mp4', profileForCall());
       await refreshLibrary();
-      onImported(result.blocks, result, meta);
+      const bytesGetter = async () => {
+        const fresh = await readReferenceBytes(meta.fileName);
+        return { bytes: fresh, mimeType: 'video/mp4' };
+      };
+      setVideoPreview({ blocks: result.blocks, analysis: result, meta, bytesGetter });
+      setBusy(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Falha ao baixar / analisar.');
       setBusy(null);
@@ -216,7 +266,12 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
       const bytes = await readReferenceBytes(meta.fileName);
       setBusy('Analisando com Gemini Flash-Lite…');
       const result = await analyseReferenceFromBytes(bytes, 'video/mp4', profileForCall());
-      onImported(result.blocks, result, meta);
+      const bytesGetter = async () => {
+        const fresh = await readReferenceBytes(meta.fileName);
+        return { bytes: fresh, mimeType: 'video/mp4' };
+      };
+      setVideoPreview({ blocks: result.blocks, analysis: result, meta, bytesGetter });
+      setBusy(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Falha na análise.');
       setBusy(null);
@@ -276,10 +331,11 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
           framework: articleFramework,
           durationSec: articleDuration,
           extraInstructions: articleExtraInstructions.trim() || undefined,
-          voiceProfile: activeProfile ?? undefined,
+          voiceProfile: profileForCall(),
         },
       );
       setGeneratedPreview(result);
+      setArticlePreviewBlocks(result.blocks);
       setGeneratedSource({ title, sourceUrl });
       setBusy(null);
     } catch (e) {
@@ -288,10 +344,10 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
     }
   };
 
-  const handleAcceptGenerated = () => {
+  const handleAcceptGenerated = (language: LanguageOption) => {
     if (!generatedPreview) return;
     if (onContentImported) {
-      onContentImported(generatedPreview.blocks, {
+      onContentImported(articlePreviewBlocks, {
         caption: generatedPreview.caption,
         hashtags: generatedPreview.hashtags,
         frameworkUsed: generatedPreview.frameworkUsed,
@@ -299,8 +355,182 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
         estimatedDurationSec: generatedPreview.estimatedDurationSec,
         sourceTitle: generatedSource?.title,
         sourceUrl: generatedSource?.sourceUrl,
+        languageOverride: language === 'auto' ? undefined : language,
       });
     }
+  };
+
+  // ─── Preview-panel handlers (shared between video + article) ─────────
+
+  const buildRegenContext = (
+    extra: string,
+    tone: ToneOption,
+    blocks: ScriptBlock[],
+    language: LanguageOption,
+  ): RegenerateContext => ({
+    extraInstructions: extra.trim() || undefined,
+    toneOverride: tone,
+    languageOverride: language,
+    previousAttempt: blocks.map(b => ({ kind: b.kind, text: b.text })),
+  });
+
+  /**
+   * Resolves a per-generation language override (chip in preview) into a real
+   * VoiceProfile that gets sent to Gemini. When 'auto', returns the active
+   * profile unchanged. Otherwise, clones the profile with the new outputLanguage.
+   */
+  const profileWithLanguage = (lang: LanguageOption): VoiceProfile | undefined => {
+    const base = profileForCall();
+    if (!base) return undefined;
+    if (lang === 'auto') return base;
+    return { ...base, outputLanguage: lang };
+  };
+
+  // VIDEO regenerate-all
+  const onVideoRegenerateAll = async (extra: string, tone: ToneOption, language: LanguageOption) => {
+    if (!videoPreview) return;
+    setPreviewBusy({ kind: 'all' });
+    try {
+      const { bytes, mimeType } = await videoPreview.bytesGetter();
+      const result = await analyseReferenceFromBytes(
+        bytes,
+        mimeType,
+        profileWithLanguage(language),
+        buildRegenContext(extra, tone, videoPreview.blocks, language),
+      );
+      setVideoPreview({ ...videoPreview, blocks: result.blocks, analysis: result });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao regenerar.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  // VIDEO regenerate-block
+  const onVideoRegenerateBlock = async (blockId: string, extra: string, language: LanguageOption) => {
+    if (!videoPreview) return;
+    const idx = videoPreview.blocks.findIndex(b => b.id === blockId);
+    if (idx === -1) return;
+    setPreviewBusy({ kind: 'block', blockId });
+    try {
+      const block = videoPreview.blocks[idx];
+      const neighbors = {
+        prev: videoPreview.blocks[idx - 1],
+        next: videoPreview.blocks[idx + 1],
+      };
+      const updated = await regenerateBlock(block, neighbors, profileWithLanguage(language), extra);
+      const nextBlocks = [...videoPreview.blocks];
+      nextBlocks[idx] = updated;
+      setVideoPreview({ ...videoPreview, blocks: nextBlocks });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao regenerar bloco.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  // VIDEO add-block
+  const onVideoAddBlock = async (kind: BlockKind, prompt: string, language: LanguageOption) => {
+    if (!videoPreview) return;
+    setPreviewBusy({ kind: 'add' });
+    try {
+      const last = videoPreview.blocks[videoPreview.blocks.length - 1];
+      const neighbors = { prev: last, next: undefined };
+      const fresh = await generateNewBlock(kind, prompt, neighbors, profileWithLanguage(language));
+      setVideoPreview({ ...videoPreview, blocks: [...videoPreview.blocks, fresh] });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao gerar bloco.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  const onVideoApprove = (language: LanguageOption) => {
+    if (!videoPreview) return;
+    const updatedAnalysis = { ...videoPreview.analysis, blocks: videoPreview.blocks };
+    onImported(
+      videoPreview.blocks,
+      updatedAnalysis,
+      videoPreview.meta,
+      language === 'auto' ? undefined : language,
+    );
+  };
+
+  const onVideoCancel = () => {
+    setVideoPreview(null);
+    setPreviewBusy(undefined);
+  };
+
+  // ARTICLE regenerate-all
+  const onArticleRegenerateAll = async (extra: string, tone: ToneOption, language: LanguageOption) => {
+    if (!generatedPreview || !generatedSource) return;
+    setPreviewBusy({ kind: 'all' });
+    try {
+      let content = articleText.trim();
+      if (articleSourceMode === 'url' && articleUrl.trim()) {
+        const fetched = await fetchArticleFromUrl(articleUrl.trim());
+        content = fetched.text;
+      }
+      const result = await generateReelFromContent(
+        { text: content, title: generatedSource.title, sourceUrl: generatedSource.sourceUrl },
+        {
+          style: articleStyle,
+          framework: articleFramework,
+          durationSec: articleDuration,
+          extraInstructions: articleExtraInstructions.trim() || undefined,
+          voiceProfile: profileWithLanguage(language) ?? activeProfile ?? undefined,
+        },
+        buildRegenContext(extra, tone, articlePreviewBlocks, language),
+      );
+      setGeneratedPreview(result);
+      setArticlePreviewBlocks(result.blocks);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao regenerar.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  const onArticleRegenerateBlock = async (blockId: string, extra: string, language: LanguageOption) => {
+    const idx = articlePreviewBlocks.findIndex(b => b.id === blockId);
+    if (idx === -1) return;
+    setPreviewBusy({ kind: 'block', blockId });
+    try {
+      const block = articlePreviewBlocks[idx];
+      const neighbors = {
+        prev: articlePreviewBlocks[idx - 1],
+        next: articlePreviewBlocks[idx + 1],
+      };
+      const updated = await regenerateBlock(block, neighbors, profileWithLanguage(language) ?? activeProfile ?? undefined, extra);
+      const next = [...articlePreviewBlocks];
+      next[idx] = updated;
+      setArticlePreviewBlocks(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao regenerar bloco.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  const onArticleAddBlock = async (kind: BlockKind, prompt: string, language: LanguageOption) => {
+    setPreviewBusy({ kind: 'add' });
+    try {
+      const last = articlePreviewBlocks[articlePreviewBlocks.length - 1];
+      const neighbors = { prev: last, next: undefined };
+      const fresh = await generateNewBlock(kind, prompt, neighbors, profileWithLanguage(language) ?? activeProfile ?? undefined);
+      setArticlePreviewBlocks([...articlePreviewBlocks, fresh]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Falha ao gerar bloco.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  const onArticleCancel = () => {
+    setGeneratedPreview(null);
+    setArticlePreviewBlocks([]);
+    setGeneratedSource(null);
+    setPreviewBusy(undefined);
   };
 
   const tabBtn = (id: Tab, label: string) => (
@@ -337,6 +567,62 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
           <VoiceProfilesPanel
             onActiveChange={refreshProfiles}
             onClose={() => setShowProfilesPanel(false)}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Video preview takes over the modal entirely.
+  if (videoPreview) {
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-6">
+        <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-3xl w-full overflow-hidden flex flex-col max-h-[92vh]">
+          <ScriptPreviewPanel
+            mode="video"
+            blocks={videoPreview.blocks}
+            detectedHeader={{
+              format: videoPreview.analysis.format,
+              durationSec: videoPreview.analysis.durationSec,
+              tone: videoPreview.analysis.tone,
+              hookStyle: videoPreview.analysis.hookStyle,
+              language: videoPreview.analysis.language,
+            }}
+            onBlocksChange={(next) => setVideoPreview({ ...videoPreview, blocks: next })}
+            onRegenerateAll={onVideoRegenerateAll}
+            onRegenerateBlock={onVideoRegenerateBlock}
+            onAddBlock={onVideoAddBlock}
+            onApprove={onVideoApprove}
+            onCancel={onVideoCancel}
+            busy={previewBusy}
+            initialLanguage={languageOverride}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  // Article preview also takes over.
+  if (generatedPreview && articlePreviewBlocks.length > 0) {
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-6">
+        <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-3xl w-full overflow-hidden flex flex-col max-h-[92vh]">
+          <ScriptPreviewPanel
+            mode="article"
+            blocks={articlePreviewBlocks}
+            detectedHeader={{
+              durationSec: generatedPreview.estimatedDurationSec,
+              framework: generatedPreview.frameworkUsed,
+              rationale: generatedPreview.rationale,
+            }}
+            onBlocksChange={setArticlePreviewBlocks}
+            onRegenerateAll={onArticleRegenerateAll}
+            onRegenerateBlock={onArticleRegenerateBlock}
+            onAddBlock={onArticleAddBlock}
+            onApprove={handleAcceptGenerated}
+            onCancel={onArticleCancel}
+            busy={previewBusy}
+            initialLanguage={languageOverride}
           />
         </div>
       </div>
@@ -386,9 +672,23 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
               ))}
             </select>
             <span className="text-zinc-500">·</span>
-            <span className="text-zinc-300">
-              {LANGUAGE_OPTIONS.find(l => l.value === activeProfile.outputLanguage)?.label ?? activeProfile.outputLanguage}
-            </span>
+            <select
+              value={languageOverride}
+              onChange={e => setLanguageOverride(e.target.value as LanguageOption)}
+              disabled={!!busy}
+              className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+              title="Idioma de saída desta importação"
+            >
+              <option value="auto">
+                Auto · {LANGUAGE_OPTIONS.find(l => l.value === activeProfile.outputLanguage)?.label ?? activeProfile.outputLanguage}
+              </option>
+              <option value="pt-BR">PT-BR</option>
+              <option value="en-US">EN-US</option>
+              <option value="es-ES">ES-ES</option>
+              <option value="fr-FR">FR</option>
+              <option value="it-IT">IT</option>
+              <option value="de-DE">DE</option>
+            </select>
             <span className="text-zinc-500">·</span>
             <select
               value={rewriteOverride ?? activeProfile.rewriteLevel}
@@ -405,7 +705,10 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
               ))}
             </select>
             <button
-              onClick={() => setShowProfilesPanel(true)}
+              onClick={() => {
+                if (onOpenVoiceSettings) onOpenVoiceSettings();
+                else setShowProfilesPanel(true);
+              }}
               disabled={!!busy}
               className="ml-auto px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-zinc-200 font-medium disabled:opacity-50"
             >
@@ -662,70 +965,7 @@ export const VideoReferenceModal: React.FC<Props> = ({ onClose, onImported, onCo
                 </>
               )}
 
-              {generatedPreview && (
-                <div className="space-y-3">
-                  <div className="rounded-lg bg-violet-500/[0.06] border border-violet-400/30 p-3 space-y-1.5">
-                    <div className="text-[10px] uppercase tracking-[0.18em] text-violet-300">
-                      ✨ Roteiro gerado · {generatedPreview.frameworkUsed} · ~{generatedPreview.estimatedDurationSec}s
-                    </div>
-                    {generatedPreview.rationale && (
-                      <div className="text-[11px] text-zinc-300 leading-relaxed">{generatedPreview.rationale}</div>
-                    )}
-                  </div>
-
-                  <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                    {generatedPreview.blocks.map((b, i) => {
-                      const isAvatar = b.kind === 'avatar';
-                      return (
-                        <div key={b.id} className="px-3 py-2 rounded-lg bg-black/30 border border-white/5">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className={`text-[9px] font-semibold tracking-wider uppercase ${isAvatar ? 'text-violet-300' : 'text-emerald-300'}`}>
-                              {isAvatar ? 'Avatar' : 'B-roll'}
-                            </span>
-                            <span className="text-[9px] text-zinc-600 font-mono">#{i + 1}</span>
-                          </div>
-                          <div className="text-[12.5px] text-zinc-100 leading-relaxed">{b.text}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {(generatedPreview.caption || generatedPreview.hashtags.length > 0) && (
-                    <div className="rounded-lg bg-black/30 border border-white/5 p-3 space-y-2">
-                      {generatedPreview.caption && (
-                        <div>
-                          <div className="text-[9px] uppercase tracking-wider text-zinc-500 mb-1">Caption sugerida</div>
-                          <div className="text-[12px] text-zinc-200 leading-relaxed">{generatedPreview.caption}</div>
-                        </div>
-                      )}
-                      {generatedPreview.hashtags.length > 0 && (
-                        <div className="flex flex-wrap gap-1">
-                          {generatedPreview.hashtags.map(h => (
-                            <span key={h} className="text-[10px] text-violet-300 bg-violet-500/10 px-2 py-0.5 rounded-full border border-violet-500/20">
-                              {h.startsWith('#') ? h : `#${h}`}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setGeneratedPreview(null)}
-                      className="flex-1 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-medium text-zinc-300 transition-colors"
-                    >
-                      ↻ Gerar outra versão
-                    </button>
-                    <button
-                      onClick={handleAcceptGenerated}
-                      className="flex-1 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.4)] transition-all"
-                    >
-                      Usar este roteiro →
-                    </button>
-                  </div>
-                </div>
-              )}
+              {/* Article preview is now rendered by ScriptPreviewPanel via early-return above. */}
             </div>
           )}
 

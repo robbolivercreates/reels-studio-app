@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import type { ScriptBlock, BlockKind } from '../components/reelsStudio/types';
+import type { ScriptBlock, BlockKind, RegenerateContext } from '../components/reelsStudio/types';
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
+import { buildRegenPromptSection } from './regenPrompt';
 
 // ─── STYLES ─────────────────────────────────────────────────────────────
 
@@ -112,16 +113,16 @@ Hard rules:
 - Segment into 4-7 blocks. Each block 2-7 seconds spoken (TTS pace). Mark each block as "avatar" (speaker on camera) or "broll" (only voice while screen / cutaway plays). Default to alternation: avatar (hook) → broll (proof/demo) → avatar (insight) → broll (cont.) → avatar (CTA).
 
 REEL FORMAT vs LONG-FORM FORMAT — IMPORTANT:
-- Reels are SHORT (15-60s). They do NOT contain a self-introduction block ("Eu sou X, aqui falamos sobre Y..."). Self-intros are for long-form YouTube videos.
-- Reels do NOT end with long sign-offs ("espero que você tenha gostado, tchau tchau, te vejo no próximo"). Reels end with ONE punchy CTA related to the content.
+- Reels are SHORT (15-60s). They do NOT contain a self-introduction block (e.g. "I'm X, on this channel we talk about Y..."). Self-intros are for long-form YouTube videos.
+- Reels do NOT end with long sign-offs (e.g. "hope you enjoyed, see you in the next one"). Reels end with ONE punchy CTA related to the content.
 - Even if the voice profile shows examples of self-intros and long sign-offs, those are reference for the user's LONG-FORM videos. Do NOT replicate them in a reel script.
-- The CTA at the end should be SHORT, in the user's voice, tied to the content's value. Examples of acceptable CTAs (in pt-BR): "Salva pra não esquecer.", "Comenta aqui se você quer ver mais disso.", "Manda pra alguém que precisa ver isso.", "Link na bio se quiser o passo a passo." — pick ONE.
+- The CTA at the end should be SHORT, in the user's voice, tied to the content's value. Pattern: ONE clear action ("save this", "comment your take", "share with someone who needs this", "link in bio"). Write it in the output language defined by the voice profile.
 
 - Anti-plagiarism: do NOT lift sentences directly from the source. Synthesise, compress, rephrase. Never copy >6 consecutive words from the source.
-- Output language follows the OUTPUT LANGUAGE rule from the voice profile if present, otherwise pt-BR.
+- Output language follows the OUTPUT LANGUAGE rule from the voice profile. If no profile is given, default to English.
 
 TTS delivery rules (output goes to Minimax speech-2.8-hd):
-- Numbers in words (não "50%", sim "cinquenta por cento").
+- Numbers in words (e.g. "fifty percent", not "50%"; "cinquenta por cento", não "50%").
 - No emojis, no parentheses, no hashtags, no URLs in "blocks[].text".
 - Short sentences. Commas and periods as breathing pauses.
 - Hashtags + emojis ARE allowed in the "caption" and "hashtags" fields.
@@ -181,6 +182,7 @@ const sanitiseSource = (text: string): string => {
 export const generateReelFromContent = async (
   source: ContentSource,
   options: GenerateOptions,
+  regen?: RegenerateContext,
 ): Promise<GeneratedReel> => {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
@@ -203,6 +205,10 @@ export const generateReelFromContent = async (
     promptLines.push('');
     promptLines.push(buildVoicePromptSection(options.voiceProfile));
   }
+  const regenSection = buildRegenPromptSection(regen);
+  if (regenSection) {
+    promptLines.push(regenSection);
+  }
   promptLines.push('');
   promptLines.push('--- SOURCE CONTENT ---');
   if (source.title) promptLines.push(`Title: ${source.title}`);
@@ -222,8 +228,10 @@ export const generateReelFromContent = async (
         config: {
           responseMimeType: 'application/json',
           responseSchema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
-          // Higher temp for viral style, lower for informative.
-          temperature: options.style === 'viral' || options.style === 'opinion' ? 0.85 : 0.55,
+          // Higher temp when regenerating (force divergence) or for viral/opinion styles.
+          temperature: regen
+            ? 0.9
+            : options.style === 'viral' || options.style === 'opinion' ? 0.85 : 0.55,
         },
       });
       break;

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { reducer, INITIAL_STATE } from './reelsStudio/reducer';
 import { useHistoryReducer } from './reelsStudio/useHistoryReducer';
 import { generateProjectAudio, estimateScriptDuration } from './reelsStudio/audioEngine';
-import { saveAudioBlob, saveClipBlob } from './reelsStudio/persistence';
+import { saveAudioBlob, saveClipBlob, saveNamedProject, listNamedProjects, loadNamedProject, deleteNamedProject, type NamedProjectMeta } from './reelsStudio/persistence';
 import { VOICE_OPTIONS, getVoice } from './reelsStudio/voices';
 import type { ScriptBlock, ScreenTake } from './reelsStudio/types';
 import {
@@ -23,6 +23,8 @@ import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
 import { createMotionFromBlock, isMotionAssetsStale, type MotionConfig } from './reelsStudio/motionLibrary';
 import { STYLE_PRESETS, type StylePresetId, findStylePreset } from './reelsStudio/motionStylePresets';
 import { generateMotionHtml, buildFullHtmlDoc } from '../services/motionService';
+import { generateInstagramCaption } from '../services/captionService';
+import { copyText } from './reelsStudio/clipboard';
 import { invoke } from '@tauri-apps/api/core';
 import { GenerateAvatarsModal } from './reelsStudio/GenerateAvatarsModal';
 import { ClipPreviewLightbox } from './reelsStudio/ClipPreviewLightbox';
@@ -42,7 +44,8 @@ import { setCutSession, clearCutSession, getCutSession } from './reelsStudio/cut
 import { SilenceCutControl } from './reelsStudio/SilenceCutControl';
 import { computeLayout, hitTest, projectToSourceTime } from './reelsStudio/timeline';
 import { getLayoutSlots, LAYOUT_OPTIONS, defaultAvatarZoom } from './reelsStudio/layouts';
-import type { SilencePreset, BlockLayout, BlockTransition } from './reelsStudio/types';
+import type { SilencePreset, BlockLayout, BlockTransition, LanguageOption } from './reelsStudio/types';
+import { ensureProfiles, outputLanguageToTts, type OutputLanguage } from './reelsStudio/voiceProfile';
 import { sliceAudioByBlocks } from './reelsStudio/audioSlicer';
 import { generateAvatarClips } from './reelsStudio/avatarGenerator';
 import { loadAvatarPhotos } from './reelsStudio/avatarPhotosStore';
@@ -89,6 +92,12 @@ export const ReelsStudio: React.FC = () => {
   const [videoRefModalOpen, setVideoRefModalOpen] = useState(false);
   const [referencesModalOpen, setReferencesModalOpen] = useState(false);
   const [reanalyzeMeta, setReanalyzeMeta] = useState<import('./reelsStudio/referenceVideoStore').ReferenceMeta | null>(null);
+  /**
+   * Last per-generation language override set by the preview panel. When set,
+   * `handleGenerate` uses it for TTS instead of the active voice profile's language.
+   * Cleared whenever blocks change via a normal edit (so it doesn't stick forever).
+   */
+  const [ttsLanguageOverride, setTtsLanguageOverride] = useState<OutputLanguage | null>(null);
   const [planAnalysis, setPlanAnalysis] = useState<PersistedAnalysis | null>(null);
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [motionPickerBlockId, setMotionPickerBlockId] = useState<string | null>(null);
@@ -102,9 +111,17 @@ export const ReelsStudio: React.FC = () => {
   const [reviewTakeId, setReviewTakeId] = useState<string | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [capcutExportStatus, setCapcutExportStatus] = useState<string | null>(null);
+  const [captionOpen, setCaptionOpen] = useState(false);
+  const [captionText, setCaptionText] = useState<string | null>(null);
+  const [captionLoading, setCaptionLoading] = useState(false);
+  const [captionCopied, setCaptionCopied] = useState(false);
   const capcutLastFolderRef = useRef<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState<'api-keys' | 'voice'>('api-keys');
+  const [projectsOpen, setProjectsOpen] = useState(false);
+  const [savedProjects, setSavedProjects] = useState<NamedProjectMeta[]>([]);
+  const [savingNamed, setSavingNamed] = useState(false);
+  const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
 
   // Drag-to-reorder timeline blocks (by id). dragOverIndex = where to drop in
   // the avatar+broll combined sequence. Both null when not dragging.
@@ -200,6 +217,96 @@ export const ReelsStudio: React.FC = () => {
   };
 
   const { hydrated, savedAt, saving, clearProject } = useReelsPersistence({ state, dispatch });
+
+  const handleOpenProjects = async () => {
+    const list = await listNamedProjects();
+    setSavedProjects(list);
+    setProjectsOpen(true);
+  };
+
+  const handleSaveNamed = async () => {
+    setSavingNamed(true);
+    try {
+      await saveNamedProject(state);
+      const list = await listNamedProjects();
+      setSavedProjects(list);
+    } catch (err) {
+      console.error('[reels/save-named]', err);
+      alert('Erro ao salvar projeto: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setSavingNamed(false);
+    }
+  };
+
+  const handleLoadNamedProject = async (id: string) => {
+    setLoadingProjectId(id);
+    try {
+      const data = await loadNamedProject(id);
+      if (!data) { alert('Projeto não encontrado.'); return; }
+      const { snapshot, audioBlob } = data;
+
+      let audioUrl: string | null = null;
+      let peaks: number[] = snapshot.audio.peaks;
+      let duration = snapshot.audio.duration;
+
+      if (audioBlob) {
+        audioUrl = URL.createObjectURL(audioBlob);
+        if (!peaks || peaks.length === 0) {
+          try {
+            const AC = (window.AudioContext as typeof AudioContext | undefined) ??
+              ((window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
+            const ctx = new AC();
+            const ab = await audioBlob.arrayBuffer();
+            const buffer = await ctx.decodeAudioData(ab.slice(0));
+            const { computePeaks } = await import('./reelsStudio/audioEngine');
+            peaks = computePeaks(buffer);
+            duration = buffer.duration;
+            ctx.close().catch(() => {});
+          } catch { /* peaks stay empty */ }
+        }
+      }
+
+      const restoredState = {
+        ...snapshot,
+        audio: {
+          ...snapshot.audio,
+          url: audioUrl,
+          peaks,
+          duration,
+          applyingCuts: false,
+          cutsApplied: false,
+          originalBlocks: undefined,
+          originalWords: undefined,
+          originalDuration: undefined,
+          originalPeaks: undefined,
+          status: (audioBlob ? 'ready' : 'idle') as 'ready' | 'idle',
+          silenceCut: snapshot.audio.silenceCut ?? false,
+          silencePreset: snapshot.audio.silencePreset ?? 'fast' as const,
+          keepSegments: snapshot.audio.keepSegments ?? [],
+          detectedSilenceSec: snapshot.audio.detectedSilenceSec ?? 0,
+          detectingSilence: false,
+        },
+        avatarClips: {},
+        takes: [],
+        activeTakeId: null,
+        emotion: snapshot.emotion ?? 'neutral',
+        voiceSpeed: snapshot.voiceSpeed ?? 1.0,
+        analyses: snapshot.analyses ?? (snapshot.lastAnalysis ? [snapshot.lastAnalysis] : []),
+      };
+      dispatch({ type: 'hydrate', state: restoredState });
+      setProjectsOpen(false);
+    } catch (err) {
+      console.error('[reels/load-named]', err);
+      alert('Erro ao abrir projeto: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setLoadingProjectId(null);
+    }
+  };
+
+  const handleDeleteNamedProject = async (id: string) => {
+    await deleteNamedProject(id);
+    setSavedProjects(prev => prev.filter(p => p.id !== id));
+  };
 
   const activeTake = state.takes.find(t => t.id === state.activeTakeId) ?? null;
 
@@ -605,8 +712,13 @@ export const ReelsStudio: React.FC = () => {
     setConfirmOpen(false);
     dispatch({ type: 'audio-start' });
     try {
+      // Per-generation override (set by preview panel) wins over the active
+      // voice profile's outputLanguage.
+      const { profiles, activeId } = ensureProfiles();
+      const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+      const effectiveLang: OutputLanguage | undefined = ttsLanguageOverride ?? profile?.outputLanguage;
       const result = await generateProjectAudio(blocks, selectedVoiceId, {
-        language: 'Portuguese',
+        language: outputLanguageToTts(effectiveLang),
         emotion,
         speed: voiceSpeed,
       });
@@ -630,7 +742,7 @@ export const ReelsStudio: React.FC = () => {
     } catch (err) {
       dispatch({ type: 'audio-error', error: err instanceof Error ? err.message : 'Falha ao gerar áudio' });
     }
-  }, [blocks, selectedVoiceId, emotion, voiceSpeed, isClonedVoice, refreshClonedVoices]);
+  }, [blocks, selectedVoiceId, emotion, voiceSpeed, isClonedVoice, refreshClonedVoices, ttsLanguageOverride]);
 
   const avatarBlocks = useMemo(() => blocks.filter(b => b.kind === 'avatar' && b.end > b.start), [blocks]);
 
@@ -746,6 +858,13 @@ export const ReelsStudio: React.FC = () => {
         },
         // Reuse the reel's brand identity so all motions stay visually consistent.
         existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
+        // Match motion text language to the script language (TTS override wins
+        // over the active voice profile, same precedence used for audio).
+        outputLanguage: (() => {
+          const { profiles, activeId } = ensureProfiles();
+          const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+          return ttsLanguageOverride ?? profile?.outputLanguage;
+        })(),
       });
       // Cache the brand identity if this was the first motion (research happened).
       if (result.brand && !state.brandIdentity) {
@@ -1504,6 +1623,31 @@ export const ReelsStudio: React.FC = () => {
             )}
           </button>
           <button
+            onClick={handleSaveNamed}
+            disabled={savingNamed}
+            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/20 hover:text-emerald-300 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            title="Salvar projeto na lista"
+          >
+            {savingNamed ? (
+              <span className="w-3.5 h-3.5 border border-zinc-400 border-t-transparent rounded-full animate-spin" />
+            ) : (
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+              </svg>
+            )}
+            <span>Salvar</span>
+          </button>
+          <button
+            onClick={handleOpenProjects}
+            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-violet-500/20 hover:text-violet-300 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5"
+            title="Meus projetos salvos"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+            </svg>
+            <span>Projetos</span>
+          </button>
+          <button
             onClick={() => { setConfirmClearMode('new'); setConfirmClearOpen(true); }}
             className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-violet-500/20 hover:text-violet-200 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5"
             title="Começar um novo projeto"
@@ -2230,6 +2374,13 @@ export const ReelsStudio: React.FC = () => {
               🎙️ Gerar Áudio
             </button>
             <button
+              onClick={() => setCaptionOpen(v => !v)}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-pink-500/10 hover:bg-pink-500/20 text-pink-300 border border-pink-500/20 transition-colors"
+              title="Gerar descrição otimizada para Instagram"
+            >
+              📸 Descrição
+            </button>
+            <button
               onClick={() => setAvatarsModalOpen(true)}
               disabled={audio.status !== 'ready' || avatarBlocks.length === 0 || generatingClips}
               className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
@@ -2305,6 +2456,80 @@ export const ReelsStudio: React.FC = () => {
               </button>
             </div>
           </div>
+
+          {/* Caption modal */}
+          {captionOpen && (
+            <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[80] p-6" onClick={() => setCaptionOpen(false)}>
+              <div className="bg-[#141416] border border-pink-500/20 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+                {/* Header */}
+                <div className="flex items-center justify-between px-5 pt-5 pb-3 shrink-0">
+                  <div>
+                    <div className="text-sm font-semibold text-zinc-100">Descrição Instagram</div>
+                    <div className="text-[11px] text-zinc-500 mt-0.5">Gerada com base no roteiro · CTA do último bloco</div>
+                  </div>
+                  <button onClick={() => setCaptionOpen(false)} className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                  </button>
+                </div>
+
+                {/* Body */}
+                <div className="flex-1 overflow-y-auto px-5 pb-3 min-h-0">
+                  {!captionText && !captionLoading && (
+                    <button
+                      onClick={async () => {
+                        setCaptionLoading(true);
+                        try { setCaptionText(await generateInstagramCaption(blocks, state.projectName)); }
+                        finally { setCaptionLoading(false); }
+                      }}
+                      className="w-full py-3 rounded-xl bg-pink-500/15 hover:bg-pink-500/25 text-sm font-semibold text-pink-300 transition-colors mt-2"
+                    >
+                      📸 Gerar descrição
+                    </button>
+                  )}
+                  {captionLoading && (
+                    <div className="text-sm text-zinc-500 text-center py-8 animate-pulse">Gerando descrição...</div>
+                  )}
+                  {captionText && !captionLoading && (
+                    <textarea
+                      readOnly
+                      value={captionText}
+                      onClick={e => e.currentTarget.select()}
+                      className="w-full text-[13px] text-zinc-200 leading-relaxed bg-black/30 border border-white/5 rounded-xl p-4 resize-none outline-none cursor-text font-sans"
+                      style={{ minHeight: '260px', height: Math.min(600, Math.max(260, captionText.split('\n').length * 22)) + 'px' }}
+                    />
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div className="flex gap-2 px-5 pb-5 pt-2 shrink-0 border-t border-white/5">
+                  {captionText && (
+                    <button
+                      onClick={async () => {
+                        setCaptionLoading(true);
+                        try { setCaptionText(await generateInstagramCaption(blocks, state.projectName)); setCaptionCopied(false); }
+                        finally { setCaptionLoading(false); }
+                      }}
+                      disabled={captionLoading}
+                      className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors disabled:opacity-40"
+                    >
+                      ↺ Regerar
+                    </button>
+                  )}
+                  {captionText && (
+                    <button
+                      onClick={() => { copyText(captionText).then(() => { setCaptionCopied(true); setTimeout(() => setCaptionCopied(false), 2500); }); }}
+                      className="flex-1 py-2.5 rounded-lg bg-pink-500/20 hover:bg-pink-500/30 text-xs font-semibold text-pink-200 transition-colors"
+                    >
+                      {captionCopied ? '✓ Copiado!' : '📋 Copiar tudo'}
+                    </button>
+                  )}
+                  <button onClick={() => setCaptionOpen(false)} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-400 transition-colors">
+                    Fechar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center gap-2 text-[11px] text-zinc-500">
             <button
@@ -2887,8 +3112,10 @@ export const ReelsStudio: React.FC = () => {
       {importModalOpen && (
         <ImportScriptModal
           onClose={() => setImportModalOpen(false)}
-          onImported={(imported) => {
+          onImported={(imported, languageOverride) => {
             dispatch({ type: 'replace-blocks', blocks: imported });
+            // Persist per-generation language override for the upcoming TTS call.
+            setTtsLanguageOverride(languageOverride ? (languageOverride as OutputLanguage) : null);
             setImportModalOpen(false);
             setPlayhead(0);
             setPlaying(false);
@@ -2967,7 +3194,9 @@ export const ReelsStudio: React.FC = () => {
             setVideoRefModalOpen(false);
             setReanalyzeMeta(null);
           }}
-          onImported={(imported, analysis, meta) => {
+          onImported={(imported, analysis, meta, languageOverride) => {
+            // Propagate the user's per-generation language pick (if any) to the TTS step.
+            setTtsLanguageOverride(languageOverride ? (languageOverride as OutputLanguage) : null);
             const persisted = {
               language: analysis.language,
               format: analysis.format,
@@ -3021,6 +3250,7 @@ export const ReelsStudio: React.FC = () => {
               source: payload.sourceUrl ?? payload.sourceTitle,
             });
             dispatch({ type: 'replace-blocks', blocks: imported });
+            setTtsLanguageOverride(payload.languageOverride ? (payload.languageOverride as OutputLanguage) : null);
             setVideoRefModalOpen(false);
             setReanalyzeMeta(null);
             setPlayhead(0);
@@ -3072,6 +3302,68 @@ export const ReelsStudio: React.FC = () => {
         onSave={() => setSettingsOpen(false)}
         initialTab={settingsTab}
       />
+
+      {/* Projects modal */}
+      {projectsOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6" onClick={() => setProjectsOpen(false)}>
+          <div className="bg-[#141416] border border-violet-500/20 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-5 pt-5 pb-4 shrink-0">
+              <div>
+                <div className="text-sm font-semibold text-zinc-100">Projetos salvos</div>
+                <div className="text-[11px] text-zinc-500 mt-0.5">Clique em Abrir para carregar um projeto</div>
+              </div>
+              <button onClick={() => setProjectsOpen(false)} className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors text-lg leading-none">×</button>
+            </div>
+            <div className="overflow-y-auto flex-1 px-5 pb-5">
+              {savedProjects.length === 0 ? (
+                <div className="text-center py-10">
+                  <div className="text-2xl mb-2">📁</div>
+                  <div className="text-sm text-zinc-500">Nenhum projeto salvo ainda.</div>
+                  <div className="text-[11px] text-zinc-600 mt-1">Clique em "Salvar" no header para guardar o projeto atual.</div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {savedProjects.map(p => (
+                    <div key={p.id} className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/[0.06] hover:border-violet-500/30 transition-colors group">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-semibold text-zinc-100 truncate">{p.name}</div>
+                        <div className="text-[10px] text-zinc-500 mt-0.5 flex items-center gap-2">
+                          <span>{p.blockCount} bloco{p.blockCount !== 1 ? 's' : ''}</span>
+                          <span>·</span>
+                          <span>{p.aspect}</span>
+                          {p.durationSec > 0 && <><span>·</span><span>{Math.round(p.durationSec)}s</span></>}
+                          <span>·</span>
+                          <span>{formatRelativeTime(p.savedAt)}</span>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          onClick={() => handleLoadNamedProject(p.id)}
+                          disabled={loadingProjectId === p.id}
+                          className="px-3 py-1.5 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 text-xs font-semibold text-violet-300 transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                        >
+                          {loadingProjectId === p.id ? (
+                            <span className="w-3 h-3 border border-violet-400 border-t-transparent rounded-full animate-spin" />
+                          ) : 'Abrir'}
+                        </button>
+                        <button
+                          onClick={() => handleDeleteNamedProject(p.id)}
+                          className="w-7 h-7 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 text-zinc-500 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                          title="Excluir projeto"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmClearOpen && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6">

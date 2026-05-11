@@ -28,6 +28,12 @@ export type BlockTransition = 'cut' | 'fade' | 'dissolve';
 export type ToneOption = 'current' | 'more-direct' | 'more-casual' | 'more-didactic';
 
 /**
+ * Output language override applied per-generation (chip in the preview panel).
+ * `auto` = use the voice profile's outputLanguage. Anything else overrides it.
+ */
+export type LanguageOption = 'auto' | 'pt-BR' | 'en-US' | 'es-ES' | 'fr-FR' | 'it-IT' | 'de-DE';
+
+/**
  * Optional regeneration context passed to script-generation services.
  * Used by the preview panel to ask Gemini to diverge from a previous
  * attempt and apply user feedback / tone tweaks.
@@ -36,6 +42,8 @@ export interface RegenerateContext {
   extraInstructions?: string;
   previousAttempt?: { kind: BlockKind; text: string }[];
   toneOverride?: ToneOption;
+  /** When set (and not 'auto'), forces this output language regardless of voice profile. */
+  languageOverride?: LanguageOption;
 }
 
 /**

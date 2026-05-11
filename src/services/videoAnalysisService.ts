@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import type { ScriptBlock, BlockKind } from '../components/reelsStudio/types';
+import type { ScriptBlock, BlockKind, RegenerateContext } from '../components/reelsStudio/types';
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
+import { buildRegenPromptSection } from './regenPrompt';
 
 export interface BlockDirection {
   /** Index in the blocks array this direction applies to. */
@@ -190,6 +191,7 @@ const callGemini = async (
   mimeType: string,
   base64: string,
   voiceProfile?: VoiceProfile,
+  regen?: RegenerateContext,
 ): Promise<VideoAnalysisResult> => {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
@@ -199,6 +201,8 @@ const callGemini = async (
   if (voiceProfile) {
     promptParts.push({ text: '\n\n' + buildVoicePromptSection(voiceProfile) });
   }
+  const regenSection = buildRegenPromptSection(regen);
+  if (regenSection) promptParts.push({ text: regenSection });
   promptParts.push({ inlineData: { mimeType, data: base64 } });
 
   let lastError: unknown;
@@ -211,7 +215,9 @@ const callGemini = async (
         config: {
           responseMimeType: 'application/json',
           responseSchema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
-          temperature: voiceProfile?.rewriteLevel === 'reimagine' ? 0.85 : 0.55,
+          temperature: regen
+            ? 0.9
+            : voiceProfile?.rewriteLevel === 'reimagine' ? 0.85 : 0.55,
         },
       });
       break;
@@ -304,6 +310,7 @@ const MAX_INLINE_BYTES = 20 * 1024 * 1024; // 20MB Gemini inline limit
 export const analyseReferenceBlob = async (
   file: Blob,
   voiceProfile?: VoiceProfile,
+  regen?: RegenerateContext,
 ): Promise<VideoAnalysisResult> => {
   if (file.size > MAX_INLINE_BYTES) {
     throw new Error(
@@ -312,13 +319,14 @@ export const analyseReferenceBlob = async (
     );
   }
   const base64 = await blobToBase64(file);
-  return callGemini(sanitizeMime(file), base64, voiceProfile);
+  return callGemini(sanitizeMime(file), base64, voiceProfile, regen);
 };
 
 export const analyseReferenceFromBytes = async (
   bytes: Uint8Array,
   mimeType?: string,
   voiceProfile?: VoiceProfile,
+  regen?: RegenerateContext,
 ): Promise<VideoAnalysisResult> => {
   if (bytes.byteLength > MAX_INLINE_BYTES) {
     throw new Error(
@@ -329,5 +337,6 @@ export const analyseReferenceFromBytes = async (
     mimeType?.startsWith('video/') ? mimeType : 'video/mp4',
     bytesToBase64(bytes),
     voiceProfile,
+    regen,
   );
 };

@@ -248,6 +248,34 @@ export const LANGUAGE_OPTIONS: { value: OutputLanguage; label: string; ttsName: 
   { value: 'de-DE',  label: 'Deutsch',                 ttsName: 'German' },
 ];
 
+/**
+ * Maps an OutputLanguage (BCP-47) to the Minimax TTS `language_boost` value.
+ * 'source' falls back to 'auto' so Minimax detects from the text itself.
+ * Anything unknown also falls back to 'auto'.
+ */
+export const outputLanguageToTts = (
+  lang: OutputLanguage | undefined,
+): 'auto' | 'English' | 'Chinese' | 'Spanish' | 'French' | 'Portuguese' | 'German' | 'Italian' | 'Japanese' | 'Korean' | 'Russian' | 'Arabic' | 'Turkish' | 'Dutch' | 'Polish' | 'Thai' | 'Vietnamese' | 'Indonesian' | 'Hindi' | 'Czech' => {
+  switch (lang) {
+    case 'pt-BR':
+    case 'pt-PT':
+      return 'Portuguese';
+    case 'en-US':
+      return 'English';
+    case 'es-ES':
+    case 'es-419':
+      return 'Spanish';
+    case 'fr-FR':
+      return 'French';
+    case 'it-IT':
+      return 'Italian';
+    case 'de-DE':
+      return 'German';
+    default:
+      return 'auto';
+  }
+};
+
 export type LanguageSimplicity = 'default' | 'simple' | 'very-simple';
 
 export const SIMPLICITY_LABELS: Record<LanguageSimplicity, { label: string; hint: string }> = {

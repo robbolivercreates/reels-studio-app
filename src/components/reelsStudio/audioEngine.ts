@@ -1,4 +1,4 @@
-import { generateSpeech, DEFAULT_VOICE_SETTINGS, type MinimaxEmotion } from '../../services/minimaxService';
+import { generateSpeech, DEFAULT_VOICE_SETTINGS, type MinimaxEmotion, type TtsLanguage } from '../../services/minimaxService';
 import type { ScriptBlock, WordTimestamp, ReelEmotion } from './types';
 import { WAVEFORM_BUCKETS } from './types';
 
@@ -93,7 +93,8 @@ export const recomputeBlockTimings = (
 };
 
 export interface AudioGenerationOptions {
-  language?: 'Portuguese' | 'English';
+  /** Minimax language_boost. Defaults to 'auto' (let Minimax detect from text). */
+  language?: TtsLanguage;
   emotion?: ReelEmotion;
   speed?: number; // 0.85..1.2
 }
@@ -106,7 +107,7 @@ export const generateProjectAudio = async (
   const fullText = blocks.map(b => b.text.trim()).filter(Boolean).join(' ');
   if (!fullText) throw new Error('Script vazio.');
 
-  const language = options.language ?? 'Portuguese';
+  const language: TtsLanguage = options.language ?? 'auto';
   const emotion: MinimaxEmotion = options.emotion ?? 'neutral';
   const speed = Math.max(0.85, Math.min(1.2, options.speed ?? 1.0));
 

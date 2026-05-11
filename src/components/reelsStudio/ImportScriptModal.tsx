@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
 import { importScriptWithAI, importScriptHeuristic } from './scriptImporter';
-import type { ScriptBlock } from './types';
+import type { ScriptBlock, BlockKind, ToneOption, LanguageOption, RegenerateContext } from './types';
+import { ScriptPreviewPanel, type BusyState } from './ScriptPreviewPanel';
+import { regenerateBlock, generateNewBlock } from '../../services/blockGeneratorService';
+import { ensureProfiles, type VoiceProfile } from './voiceProfile';
 
 interface Props {
   onClose: () => void;
-  onImported: (blocks: ScriptBlock[]) => void;
+  /** Imported blocks plus optional language override from the preview panel. */
+  onImported: (blocks: ScriptBlock[], languageOverride?: LanguageOption) => void;
 }
 
 const PLACEHOLDER = `Cole seu roteiro aqui. Exemplo:
@@ -22,25 +26,37 @@ export const ImportScriptModal: React.FC<Props> = ({ onClose, onImported }) => {
   const [useAI, setUseAI] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** Per-run language pick from the pre-import form. 'auto' = use profile default. */
+  const [languageOverride, setLanguageOverride] = useState<LanguageOption>('auto');
+
+  // Preview state.
+  const [previewBlocks, setPreviewBlocks] = useState<ScriptBlock[] | null>(null);
+  const [previewBusy, setPreviewBusy] = useState<BusyState | undefined>(undefined);
 
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
   const estimatedSeconds = wordCount / 2.5;
   const canImport = text.trim().length > 0 && !analyzing;
 
+  const activeProfile = (): VoiceProfile | undefined => {
+    const { profiles, activeId } = ensureProfiles();
+    return profiles.find(p => p.id === activeId) ?? profiles[0];
+  };
+
   const handleImport = async () => {
     setError(null);
     if (!useAI) {
       const blocks = importScriptHeuristic(text);
-      onImported(blocks);
+      setPreviewBlocks(blocks);
       return;
     }
     setAnalyzing(true);
     try {
-      const blocks = await importScriptWithAI(text);
-      onImported(blocks);
+      const blocks = await importScriptWithAI(text, undefined, profileWithLanguage(languageOverride));
+      setPreviewBlocks(blocks);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Falha ao analisar com IA';
       setError(msg);
+    } finally {
       setAnalyzing(false);
     }
   };
@@ -48,8 +64,118 @@ export const ImportScriptModal: React.FC<Props> = ({ onClose, onImported }) => {
   const handleFallback = () => {
     setError(null);
     const blocks = importScriptHeuristic(text);
-    onImported(blocks);
+    setPreviewBlocks(blocks);
   };
+
+  // ─── Preview handlers ─────────────────────────────────────────────────
+
+  const buildRegenContext = (
+    extra: string,
+    tone: ToneOption,
+    blocks: ScriptBlock[],
+    language: LanguageOption,
+  ): RegenerateContext => ({
+    extraInstructions: extra.trim() || undefined,
+    toneOverride: tone,
+    languageOverride: language,
+    previousAttempt: blocks.map(b => ({ kind: b.kind, text: b.text })),
+  });
+
+  /** Clones the active profile with the chosen language override (or returns it untouched on 'auto'). */
+  const profileWithLanguage = (lang: LanguageOption): VoiceProfile | undefined => {
+    const base = activeProfile();
+    if (!base) return undefined;
+    if (lang === 'auto') return base;
+    return { ...base, outputLanguage: lang };
+  };
+
+  const onRegenerateAll = async (extra: string, tone: ToneOption, language: LanguageOption) => {
+    if (!previewBlocks) return;
+    setPreviewBusy({ kind: 'all' });
+    try {
+      const blocks = await importScriptWithAI(
+        text,
+        buildRegenContext(extra, tone, previewBlocks, language),
+        profileWithLanguage(language),
+      );
+      setPreviewBlocks(blocks);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao regenerar.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  const onRegenerateBlock = async (blockId: string, extra: string, language: LanguageOption) => {
+    if (!previewBlocks) return;
+    const idx = previewBlocks.findIndex(b => b.id === blockId);
+    if (idx === -1) return;
+    setPreviewBusy({ kind: 'block', blockId });
+    try {
+      const block = previewBlocks[idx];
+      const neighbors = { prev: previewBlocks[idx - 1], next: previewBlocks[idx + 1] };
+      const updated = await regenerateBlock(block, neighbors, profileWithLanguage(language), extra);
+      const next = [...previewBlocks];
+      next[idx] = updated;
+      setPreviewBlocks(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao regenerar bloco.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  const onAddBlock = async (kind: BlockKind, prompt: string, language: LanguageOption) => {
+    if (!previewBlocks) return;
+    setPreviewBusy({ kind: 'add' });
+    try {
+      const last = previewBlocks[previewBlocks.length - 1];
+      const fresh = await generateNewBlock(kind, prompt, { prev: last }, profileWithLanguage(language));
+      setPreviewBlocks([...previewBlocks, fresh]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao gerar bloco.');
+    } finally {
+      setPreviewBusy(undefined);
+    }
+  };
+
+  const onApprove = (language: LanguageOption) => {
+    if (!previewBlocks) return;
+    onImported(previewBlocks, language === 'auto' ? undefined : language);
+  };
+
+  const onCancelPreview = () => {
+    setPreviewBlocks(null);
+    setPreviewBusy(undefined);
+  };
+
+  // Preview takes over the modal entirely.
+  if (previewBlocks) {
+    const avatarCount = previewBlocks.filter(b => b.kind === 'avatar').length;
+    return (
+      <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-6">
+        <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-3xl w-full overflow-hidden flex flex-col max-h-[92vh]">
+          <ScriptPreviewPanel
+            mode="script"
+            blocks={previewBlocks}
+            detectedHeader={{
+              durationSec: estimatedSeconds,
+              language: languageOverride === 'auto' ? activeProfile()?.outputLanguage : languageOverride,
+              format: `${previewBlocks.length} blocos · ${avatarCount} avatar / ${previewBlocks.length - avatarCount} B-roll`,
+            }}
+            onBlocksChange={setPreviewBlocks}
+            onRegenerateAll={onRegenerateAll}
+            onRegenerateBlock={onRegenerateBlock}
+            onAddBlock={onAddBlock}
+            onApprove={onApprove}
+            onCancel={onCancelPreview}
+            busy={previewBusy}
+            initialLanguage={languageOverride}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-6">
@@ -102,6 +228,31 @@ export const ImportScriptModal: React.FC<Props> = ({ onClose, onImported }) => {
               </div>
             </div>
           </label>
+
+          {/* Language picker */}
+          <div className="mt-4 flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">Idioma</span>
+            <select
+              value={languageOverride}
+              onChange={e => setLanguageOverride(e.target.value as LanguageOption)}
+              disabled={analyzing}
+              className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+              title="Idioma de saída deste roteiro"
+            >
+              <option value="auto">
+                Auto · {activeProfile()?.outputLanguage ?? 'perfil'}
+              </option>
+              <option value="pt-BR">PT-BR</option>
+              <option value="en-US">EN-US</option>
+              <option value="es-ES">ES-ES</option>
+              <option value="fr-FR">FR</option>
+              <option value="it-IT">IT</option>
+              <option value="de-DE">DE</option>
+            </select>
+            <span className="text-[10px] text-zinc-600 italic">
+              {languageOverride === 'auto' ? 'usa o idioma do perfil ativo' : 'sobrescreve o perfil só nesta importação'}
+            </span>
+          </div>
 
           {error && (
             <div className="mt-3 p-2.5 rounded-lg bg-red-500/10 border border-red-500/30">

@@ -1,5 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
-import type { ScriptBlock, BlockKind } from './types';
+import type { ScriptBlock, BlockKind, RegenerateContext } from './types';
+import { buildRegenPromptSection } from '../../services/regenPrompt';
+import { buildVoicePromptSection, type VoiceProfile } from './voiceProfile';
 
 const uid = () => `b_${Math.random().toString(36).slice(2, 9)}`;
 
@@ -97,21 +99,31 @@ Return ONLY raw JSON in this exact shape:
   ]
 }`;
 
-export const importScriptWithAI = async (rawText: string): Promise<ScriptBlock[]> => {
+export const importScriptWithAI = async (
+  rawText: string,
+  regen?: RegenerateContext,
+  voiceProfile?: VoiceProfile,
+): Promise<ScriptBlock[]> => {
   const apiKey = localStorage.getItem('GOOGLE_API_KEY');
   if (!apiKey) {
     throw new Error('GOOGLE_API_KEY não configurada. Adicione em Configurações pra usar IA.');
   }
   const ai = new GoogleGenAI({ apiKey });
 
+  const parts: { text: string }[] = [
+    { text: SYSTEM_PROMPT },
+    { text: `\n\nSCRIPT:\n${rawText.trim()}` },
+  ];
+  if (voiceProfile) {
+    parts.push({ text: '\n\n' + buildVoicePromptSection(voiceProfile) });
+  }
+  const regenSection = buildRegenPromptSection(regen);
+  if (regenSection) parts.push({ text: regenSection });
+
   const response = await ai.models.generateContent({
     model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        { text: SYSTEM_PROMPT },
-        { text: `\n\nSCRIPT:\n${rawText.trim()}` },
-      ],
-    },
+    contents: { parts },
+    config: { temperature: regen ? 0.9 : 0.55 },
   });
 
   const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';

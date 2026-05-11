@@ -13,6 +13,8 @@ interface Props {
   onClose: () => void;
   onOpenPlan: (analysis: PersistedAnalysis) => void;
   onRemoveAnalysis: (createdAt: number) => void;
+  /** Trigger re-analysis of an existing reference file via the script preview pipeline. */
+  onReanalyze?: (meta: ReferenceMeta) => void;
 }
 
 const fmtSize = (b: number) =>
@@ -35,7 +37,7 @@ interface Row {
   key: string;
 }
 
-export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan, onRemoveAnalysis }) => {
+export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan, onRemoveAnalysis, onReanalyze }) => {
   const [refs, setRefs] = useState<ReferenceMeta[]>([]);
   const [folder, setFolder] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -242,6 +244,15 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
                             title="Ver plano de gravação"
                           >
                             📋 Ver plano
+                          </button>
+                        )}
+                        {meta && onReanalyze && (
+                          <button
+                            onClick={() => onReanalyze(meta)}
+                            className="px-2.5 py-1 rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/30 text-[10.5px] font-semibold text-violet-200 transition-colors flex items-center gap-1"
+                            title="Re-analisar com revisão"
+                          >
+                            🔄 Re-analisar
                           </button>
                         )}
                         {meta && (

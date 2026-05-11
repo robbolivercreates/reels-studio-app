@@ -3,6 +3,8 @@ import { renderMp4, type RenderProgress, type RenderHandle } from './mp4Renderer
 import { saveExport, loadAudioBlob, type ExportRecord } from './persistence';
 import { detectExportCapability } from './exportCapability';
 import type { ReelsState } from './types';
+import { copyText } from './clipboard';
+import { generateInstagramCaption } from '../../services/captionService';
 
 interface Props {
   open: boolean;
@@ -32,6 +34,9 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [muxedOutputPath, setMuxedOutputPath] = useState<string | null>(null);
+  const [caption, setCaption] = useState<string | null>(null);
+  const [captionLoading, setCaptionLoading] = useState(false);
+  const [captionCopied, setCaptionCopied] = useState(false);
 
   // Build a single object URL for the result blob and reuse it across preview +
   // download. Revoke only when the blob changes or the modal closes — never
@@ -59,6 +64,8 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       setProgress(null);
       setResultBlob(null);
       setMuxedOutputPath(null);
+      setCaption(null);
+      setCaptionCopied(false);
       setErrorMsg(null);
       handleRef.current?.cancel();
       handleRef.current = null;
@@ -485,13 +492,86 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
           </div>
 
           {resultUrl && (
-            <video
-              src={resultUrl}
-              controls
-              playsInline
-              className="w-full aspect-[9/16] bg-black object-contain"
-            />
+            <div className="flex justify-center bg-black px-4 py-2">
+              <video
+                src={resultUrl}
+                controls
+                playsInline
+                className="max-h-[40vh] w-auto rounded-lg"
+                style={{ aspectRatio: state.aspect === '9:16' ? '9/16' : state.aspect === '16:9' ? '16/9' : '1/1' }}
+              />
+            </div>
           )}
+
+          {/* Caption generator */}
+          <div className="px-6 pb-4 border-t border-white/5 pt-4">
+            {!caption && (
+              <button
+                onClick={async () => {
+                  setCaptionLoading(true);
+                  try {
+                    const text = await generateInstagramCaption(state.blocks, state.projectName);
+                    setCaption(text);
+                  } finally {
+                    setCaptionLoading(false);
+                  }
+                }}
+                disabled={captionLoading}
+                className="w-full py-2.5 rounded-lg bg-pink-500/10 border border-pink-500/30 hover:bg-pink-500/20 text-xs font-semibold text-pink-300 transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {captionLoading ? (
+                  <><span className="animate-spin">⟳</span> Gerando descrição...</>
+                ) : (
+                  <><span>📸</span> Gerar descrição pro Instagram</>
+                )}
+              </button>
+            )}
+            {caption && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">Descrição Instagram</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={async () => {
+                        setCaptionLoading(true);
+                        try {
+                          const text = await generateInstagramCaption(state.blocks, state.projectName);
+                          setCaption(text);
+                          setCaptionCopied(false);
+                        } finally {
+                          setCaptionLoading(false);
+                        }
+                      }}
+                      disabled={captionLoading}
+                      className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                    >
+                      {captionLoading ? '⟳' : '↺ Regerar'}
+                    </button>
+                    <button
+                      onClick={() => {
+                        copyText(caption);
+                        setCaptionCopied(true);
+                        setTimeout(() => setCaptionCopied(false), 2000);
+                      }}
+                      className="text-[10px] text-emerald-400 hover:text-emerald-300 transition-colors font-semibold"
+                    >
+                      {captionCopied ? '✓ Copiado!' : 'Copiar'}
+                    </button>
+                  </div>
+                </div>
+                <div
+                  className="bg-black/30 border border-white/5 rounded-lg p-3 text-[11px] text-zinc-300 leading-relaxed whitespace-pre-wrap max-h-40 overflow-y-auto cursor-text select-text"
+                  onClick={() => {
+                    copyText(caption);
+                    setCaptionCopied(true);
+                    setTimeout(() => setCaptionCopied(false), 2000);
+                  }}
+                >
+                  {caption}
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="px-6 py-4 flex gap-2 border-t border-white/5">
             <button onClick={shareResult} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors flex items-center justify-center gap-2">
