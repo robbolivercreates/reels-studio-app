@@ -56,9 +56,11 @@ export const LAYOUT_OPTIONS: { id: BlockLayout; label: string }[] = [
  * HeyGen always renders 16:9 (1920×1080). When the reel is 9:16, we need to
  * zoom into the clip to avoid letterbox; in 16:9 / 1:1 no zoom is needed by default.
  */
-export const defaultAvatarZoom = (aspect: '9:16' | '16:9' | '1:1', layout: BlockLayout | undefined): number => {
+export const defaultAvatarZoom = (aspect: '9:16' | '16:9' | '1:1' | 'carousel', layout: BlockLayout | undefined): number => {
   // For split layouts the avatar already lives in a smaller box; cover handles fit.
   if (layout === 'avatar-top' || layout === 'media-top') return 1;
   if (aspect === '9:16') return 1.78; // 16/9 ≈ 1.78 — exactly covers a vertical canvas
+  // carousel = 4:5 — HeyGen 16:9 clip needs 1.25x zoom to fill height (5/4 * 1.0 = 1.25 min, add a touch more)
+  if (aspect === 'carousel') return 1.4;
   return 1;
 };

@@ -22,7 +22,7 @@ tauri = { version = "2", features = ["protocol-asset", "devtools"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["process", "io-util", "rt", "macros"] }
+tokio = { version = "1", features = ["process", "io-util", "rt", "rt-multi-thread", "macros", "sync", "time", "net"] }
 dirs = "5"
 sha2 = "0.10"
 hex = "0.4"
@@ -33,3 +33,24 @@ rfd = "0.15"
 # overhead of encoding Vec<u8> as a number array (which silently corrupts
 # transfers >50MB on macOS WebKit).
 base64 = "0.22"
+
+# Embedded MCP server — exposes Reels Studio actions as tools so that a local
+# Claude Code / Codex CLI (using the user's own subscription) can chat-control
+# the app. Uses Streamable HTTP transport on an ephemeral 127.0.0.1 port.
+rmcp = { version = "1.7", features = ["server", "transport-streamable-http-server", "macros"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
+# Detect `claude` (and later `codex`) CLIs on the user's PATH so the Agents
+# settings tab can show real install/auth status before spawning subprocesses.
+which = "6"
+# Edit ~/.codex/config.toml in-place when we add Codex support (PR4).
+toml_edit = "0.22"
+# CancellationToken lets the MCP server shut down gracefully when the
+# Tauri window closes.
+tokio-util = { version = "0.7", features = ["rt"] }
+
+# Process-group signaling on Unix — `tokio::Child::kill` only signals the PID
+# leader, which doesn't reach Claude Code's spawned sub-processes. We use
+# `killpg` to take down the whole group cleanly.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["signal"] }

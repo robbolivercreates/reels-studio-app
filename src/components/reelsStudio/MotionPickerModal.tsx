@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   STYLE_PRESETS,
+  NATIVE_PRESET_IDS,
   findStylePreset,
   type StylePresetId,
 } from './motionStylePresets';
@@ -12,7 +13,8 @@ import {
   newMotionId,
 } from './motionLibrary';
 import { generateMotionHtml, buildFullHtmlDoc } from '../../services/motionService';
-import type { ScriptBlock } from './types';
+import type { ScriptBlock, MotionColorMode, AppTheme } from './types';
+import { useTheme } from './useTheme';
 
 interface Props {
   block: ScriptBlock;
@@ -20,6 +22,12 @@ interface Props {
   brandIdentity?: Record<string, unknown>;
   /** Called when generation produced a new brand (first motion of the reel). */
   onBrandLearned?: (brand: Record<string, unknown>) => void;
+  /** Global reel color mode — used to bias generation + warn the user on dark presets. */
+  motionColorMode: MotionColorMode;
+  /** Setter for the reel-wide motion color mode. */
+  onSetMotionColorMode: (mode: MotionColorMode) => void;
+  /** App UI theme — modal chrome respects this. */
+  appTheme: AppTheme;
   onClose: () => void;
   onSave: (motion: MotionConfig | undefined) => void;
 }
@@ -39,7 +47,8 @@ const deriveDefaultText = (blockText: string): string => {
   return sentence.slice(0, 60).split(' ').slice(0, -1).join(' ') + '…';
 };
 
-export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBrandLearned, onClose, onSave }) => {
+export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBrandLearned, motionColorMode, onSetMotionColorMode, appTheme, onClose, onSave }) => {
+  const tokens = useTheme(appTheme);
   // Existing motion or fresh draft.
   const initial: MotionConfig = useMemo(() => block.motion ?? {
     id: newMotionId(),
@@ -80,28 +89,32 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
   };
 
   const fullHtmlDoc = useMemo(
-    () => motion.html ? buildFullHtmlDoc(motion) : '',
-    [motion.html, motion.id, motion.durationSec],
+    () => motion.html ? buildFullHtmlDoc(motion, motion.canvasAspect, motionColorMode) : '',
+    [motion.html, motion.id, motion.durationSec, motion.canvasAspect, motionColorMode],
   );
 
   // ─── Generate via Gemini ─────────────────────────────────────────────
 
   const handleGenerate = async () => {
+    const isNative = NATIVE_PRESET_IDS.includes(motion.presetId);
     setError(null);
-    setBusy('Gemini lendo o bloco e criando o motion…');
+    setBusy(isNative ? 'Gerando motion nativo…' : 'Gemini lendo o bloco e criando o motion…');
     try {
       const result = await generateMotionHtml({
         presetId: motion.presetId,
         blockText: block.text,
         // Pass overrides only if user toggled advanced and edited them.
+        // For native presets, always pass text so user can customise the command.
         intent: showAdvanced ? motion.intent : undefined,
-        text: showAdvanced ? motion.text : undefined,
+        text: (isNative || showAdvanced) ? motion.text : undefined,
         secondaryText: motion.secondaryText,
         number: motion.number,
         durationSec: motion.durationSec,
         compositionId: motion.id,
         motionLayer: motion.layer,
+        canvasAspect: motion.canvasAspect,
         existingBrand: brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
+        motionColorMode,
       });
       // First motion of the reel? Cache the brand so subsequent motions reuse it.
       if (result.brand && !brandIdentity && onBrandLearned) {
@@ -212,15 +225,35 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
   const preset = findStylePreset(motion.presetId);
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[60] p-6">
-      <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-5xl w-full overflow-hidden flex flex-col max-h-[92vh]">
+    <div
+      className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-[60] p-6"
+      style={{ backgroundColor: appTheme === 'light' ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.7)' }}
+    >
+      <div
+        className="rounded-2xl shadow-2xl max-w-5xl w-full overflow-hidden flex flex-col max-h-[92vh]"
+        style={{
+          backgroundColor: tokens.bg.surface,
+          border: `1px solid ${tokens.border.subtle}`,
+          color: tokens.text.primary,
+        }}
+      >
         {/* Header */}
-        <div className="px-6 pt-6 pb-4 flex items-start justify-between border-b border-white/5">
+        <div
+          className="px-6 pt-6 pb-4 flex items-start justify-between"
+          style={{ borderBottom: `1px solid ${tokens.border.subtle}` }}
+        >
           <div>
-            <div className="text-base font-semibold text-zinc-100 mb-1">Motion graphic</div>
-            <div className="text-xs text-zinc-500 max-w-xl truncate">"{block.text}"</div>
+            <div className="text-base font-semibold mb-1" style={{ color: tokens.text.primary }}>Motion graphic</div>
+            <div className="text-xs max-w-xl truncate" style={{ color: tokens.text.tertiary }}>"{block.text}"</div>
           </div>
-          <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors" disabled={!!busy}>
+          <button
+            onClick={onClose}
+            className="p-1 transition-colors"
+            style={{ color: tokens.text.tertiary }}
+            disabled={!!busy}
+            onMouseEnter={e => e.currentTarget.style.color = tokens.text.primary}
+            onMouseLeave={e => e.currentTarget.style.color = tokens.text.tertiary}
+          >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
@@ -229,62 +262,141 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
 
         <div className="flex flex-1 overflow-hidden">
           {/* Left: form */}
-          <div className="w-[440px] shrink-0 border-r border-white/5 overflow-y-auto px-5 py-4 space-y-4">
+          <div
+            className="w-[440px] shrink-0 overflow-y-auto px-5 py-4 space-y-4"
+            style={{ borderRight: `1px solid ${tokens.border.subtle}` }}
+          >
 
-            {/* Auto / advanced toggle */}
-            <div className="rounded-lg bg-violet-500/[0.06] border border-violet-400/20 px-3 py-2.5">
-              <div className="flex items-start gap-2">
-                <span className="text-violet-300 text-sm">✨</span>
-                <div className="flex-1">
-                  <div className="text-[12px] text-zinc-100 font-medium leading-tight">
-                    {showAdvanced ? 'Modo manual' : 'IA decide tudo'}
-                  </div>
-                  <div className="text-[10.5px] text-zinc-400 mt-0.5 leading-snug">
-                    {showAdvanced
-                      ? 'Edite a ideia, o texto e o estilo visual abaixo.'
-                      : 'Pesquisa as cores da marca, classifica o bloco e gera a animação ideal. Zero configuração.'}
-                  </div>
-                </div>
+            {/* Hint card — always-on AI explanation */}
+            <div
+              className="rounded-lg px-3 py-2.5"
+              style={{
+                backgroundColor: tokens.bg.hover,
+                border: `1px solid ${tokens.border.subtle}`,
+              }}
+            >
+              <div className="text-[12px] font-medium leading-tight" style={{ color: tokens.text.primary }}>
+                A IA escolhe a ideia e a animação
+              </div>
+              <div className="text-[10.5px] mt-0.5 leading-snug" style={{ color: tokens.text.secondary }}>
+                Pesquisa as cores da marca, classifica o bloco e gera a animação. Você pode trocar o estilo abaixo ou editar texto e ideia.
+              </div>
+            </div>
+
+            {/* Motion color mode — global to the reel */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.18em] mb-1.5" style={{ color: tokens.text.tertiary }}>
+                Modo do reel
+              </div>
+              <div
+                className="flex rounded-md p-0.5"
+                style={{ backgroundColor: tokens.bg.hover }}
+              >
                 <button
-                  onClick={() => setShowAdvanced(v => !v)}
-                  className="text-[10px] text-violet-300 hover:text-violet-200 underline shrink-0"
+                  onClick={() => onSetMotionColorMode('dark')}
+                  className="flex-1 px-2 py-1.5 rounded text-[11px] flex items-center justify-center gap-1.5 transition-colors"
+                  style={{
+                    backgroundColor: motionColorMode === 'dark' ? tokens.bg.surface : 'transparent',
+                    color: motionColorMode === 'dark' ? tokens.text.primary : tokens.text.secondary,
+                  }}
                 >
-                  {showAdvanced ? 'Voltar pra automático' : 'Ajuste manual'}
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                  </svg>
+                  Escuro
+                </button>
+                <button
+                  onClick={() => onSetMotionColorMode('light')}
+                  className="flex-1 px-2 py-1.5 rounded text-[11px] flex items-center justify-center gap-1.5 transition-colors"
+                  style={{
+                    backgroundColor: motionColorMode === 'light' ? tokens.bg.surface : 'transparent',
+                    color: motionColorMode === 'light' ? tokens.text.primary : tokens.text.secondary,
+                  }}
+                >
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <circle cx="12" cy="12" r="4" />
+                    <path strokeLinecap="round" d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4" />
+                  </svg>
+                  Claro
                 </button>
               </div>
-            </div>
-
-            {/* Style preset — only shown in advanced mode */}
-            {showAdvanced && (
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mb-2">Estilo base <span className="normal-case text-zinc-600">(as cores da marca sobrescrevem)</span></div>
-              <div className="grid grid-cols-2 gap-2">
-                {STYLE_PRESETS.map(p => (
-                  <button
-                    key={p.id}
-                    onClick={() => patch('presetId', p.id as StylePresetId)}
-                    className={`text-left px-3 py-2.5 rounded-lg border transition-colors ${
-                      motion.presetId === p.id
-                        ? 'bg-violet-500/15 border-violet-500/40'
-                        : 'bg-black/20 border-white/10 hover:border-white/20'
-                    }`}
-                    title={p.bestFor}
-                  >
-                    <div className="text-xs font-medium text-zinc-100 flex items-center gap-1.5">
-                      <span>{p.emoji}</span>
-                      <span>{p.label}</span>
-                    </div>
-                    <div className="text-[10px] text-zinc-500 mt-0.5 leading-snug line-clamp-2">{p.description}</div>
-                  </button>
-                ))}
+              <div className="text-[10px] mt-1" style={{ color: tokens.text.tertiary }}>
+                Vale para todas as motions deste reel.
               </div>
             </div>
-            )}
+
+            {/* Style preset — always visible, single source of truth */}
+            <div>
+              <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: tokens.text.tertiary }}>
+                Estilo base
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {STYLE_PRESETS.map(p => {
+                  const isSelected = motion.presetId === p.id;
+                  const willInvert = motionColorMode === 'light' && p.bgType === 'dark';
+                  const isWarm = p.bgType === 'warm';
+                  return (
+                    <button
+                      key={p.id}
+                      onClick={() => patch('presetId', p.id as StylePresetId)}
+                      className="text-left px-3 py-2.5 rounded-lg transition-colors relative"
+                      style={{
+                        backgroundColor: isSelected ? tokens.bg.active : tokens.bg.hover,
+                        border: `1px solid ${isSelected ? tokens.accent.focus : tokens.border.subtle}`,
+                      }}
+                      title={p.bestFor}
+                    >
+                      <div className="text-xs font-medium flex items-center gap-1.5" style={{ color: tokens.text.primary }}>
+                        <span>{p.emoji}</span>
+                        <span>{p.label}</span>
+                      </div>
+                      <div className="text-[10px] mt-0.5 leading-snug line-clamp-2" style={{ color: tokens.text.secondary }}>
+                        {p.description}
+                      </div>
+                      {(willInvert || isWarm) && (
+                        <div
+                          className="absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded"
+                          style={{
+                            backgroundColor: tokens.bg.elevated,
+                            color: tokens.text.tertiary,
+                            border: `1px solid ${tokens.border.subtle}`,
+                          }}
+                        >
+                          {willInvert ? '☀ invertido' : '⊙ quente'}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Editar texto e ideia — collapsed disclosure */}
+            <div>
+              <button
+                onClick={() => setShowAdvanced(v => !v)}
+                className="w-full flex items-center justify-between px-3 py-2 rounded-lg transition-colors text-xs"
+                style={{
+                  color: tokens.text.secondary,
+                  backgroundColor: tokens.bg.hover,
+                  border: `1px solid ${tokens.border.subtle}`,
+                }}
+              >
+                <span>Editar texto e ideia</span>
+                <svg
+                  className="w-3 h-3 transition-transform"
+                  style={{ transform: showAdvanced ? 'rotate(180deg)' : 'rotate(0deg)' }}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+            </div>
 
             {showAdvanced && (
               <>
                 <div>
-                  <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
+                  <label className="text-[10px] uppercase tracking-[0.18em] block mb-1.5" style={{ color: tokens.text.tertiary }}>
                     Ideia / o que mostrar
                   </label>
                   <textarea
@@ -292,19 +404,33 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
                     onChange={e => patch('intent', e.target.value)}
                     rows={3}
                     placeholder='Ex: "engrenagem girando + raio cruzando"'
-                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50 leading-relaxed resize-y"
+                    className="w-full px-3 py-2 rounded-lg text-xs outline-none leading-relaxed resize-y"
+                    style={{
+                      backgroundColor: tokens.bg.hover,
+                      color: tokens.text.primary,
+                      border: `1px solid ${tokens.border.subtle}`,
+                    }}
+                    onFocus={e => e.currentTarget.style.borderColor = tokens.accent.focus}
+                    onBlur={e => e.currentTarget.style.borderColor = tokens.border.subtle}
                   />
                 </div>
 
                 <div>
-                  <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
+                  <label className="text-[10px] uppercase tracking-[0.18em] block mb-1.5" style={{ color: tokens.text.tertiary }}>
                     Texto que aparece
                   </label>
                   <input
                     value={motion.text}
                     onChange={e => patch('text', e.target.value)}
                     placeholder="Frase curta que destaca no motion"
-                    className="w-full px-3 py-2 rounded-lg bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50"
+                    className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                    style={{
+                      backgroundColor: tokens.bg.hover,
+                      color: tokens.text.primary,
+                      border: `1px solid ${tokens.border.subtle}`,
+                    }}
+                    onFocus={e => e.currentTarget.style.borderColor = tokens.accent.focus}
+                    onBlur={e => e.currentTarget.style.borderColor = tokens.border.subtle}
                   />
                 </div>
               </>
@@ -312,17 +438,23 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
 
             {/* When Gemini decided, show what it picked (read-only-ish) */}
             {!showAdvanced && motion.html && (motion.intent || motion.text) && (
-              <div className="rounded-lg bg-black/30 border border-white/5 p-3 space-y-1.5 text-[11px]">
+              <div
+                className="rounded-lg p-3 space-y-1.5 text-[11px]"
+                style={{
+                  backgroundColor: tokens.bg.hover,
+                  border: `1px solid ${tokens.border.subtle}`,
+                }}
+              >
                 {motion.intent && (
                   <div>
-                    <span className="text-zinc-500 uppercase tracking-wider text-[9px]">Ideia escolhida — </span>
-                    <span className="text-zinc-200">{motion.intent}</span>
+                    <span className="uppercase tracking-wider text-[9px]" style={{ color: tokens.text.tertiary }}>Ideia escolhida — </span>
+                    <span style={{ color: tokens.text.primary }}>{motion.intent}</span>
                   </div>
                 )}
                 {motion.text && (
                   <div>
-                    <span className="text-zinc-500 uppercase tracking-wider text-[9px]">Texto destacado — </span>
-                    <span className="text-zinc-200 font-medium">{motion.text}</span>
+                    <span className="uppercase tracking-wider text-[9px]" style={{ color: tokens.text.tertiary }}>Texto destacado — </span>
+                    <span className="font-medium" style={{ color: tokens.text.primary }}>{motion.text}</span>
                   </div>
                 )}
               </div>
@@ -375,6 +507,31 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
               </div>
             </div>
 
+            {/* Claude UI — command field (always visible for native preset) */}
+            {NATIVE_PRESET_IDS.includes(motion.presetId) && (
+              <div>
+                <label className="text-[10px] uppercase tracking-[0.18em] block mb-1.5" style={{ color: tokens.text.tertiary }}>
+                  Comando digitado
+                </label>
+                <input
+                  value={motion.text}
+                  onChange={e => patch('text', e.target.value)}
+                  placeholder="Ex: Ultraplan: crie meu plano de conteúdo"
+                  className="w-full px-3 py-2 rounded-lg text-xs outline-none"
+                  style={{
+                    backgroundColor: tokens.bg.hover,
+                    color: tokens.text.primary,
+                    border: `1px solid ${tokens.border.subtle}`,
+                  }}
+                  onFocus={e => e.currentTarget.style.borderColor = tokens.accent.focus}
+                  onBlur={e => e.currentTarget.style.borderColor = tokens.border.subtle}
+                />
+                <div className="text-[9.5px] mt-1" style={{ color: tokens.text.tertiary }}>
+                  Deixe vazio para detectar automaticamente pelo texto do bloco.
+                </div>
+              </div>
+            )}
+
             {/* Generate / Render buttons */}
             <div className="flex flex-col gap-2 pt-2">
               <button
@@ -382,7 +539,9 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
                 disabled={!!busy}
                 className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.4)] disabled:opacity-40 transition-all"
               >
-                {motion.html ? '↻ Regenerar com IA' : '✨ Gerar com IA'}
+                {NATIVE_PRESET_IDS.includes(motion.presetId)
+                  ? (motion.html ? '↻ Regenerar (nativo)' : '⚡ Gerar (nativo)')
+                  : (motion.html ? '↻ Regenerar com IA' : '✨ Gerar com IA')}
               </button>
               {motion.html && (
                 <button
@@ -443,21 +602,33 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
               <span className="ml-auto text-[10px] text-zinc-600">{preset.label} · {motion.durationSec}s</span>
             </div>
             <div className="flex-1 flex items-center justify-center p-5">
-              {previewMode === 'live' && motion.html && (
-                <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: 360, height: 640 }}>
-                  <iframe
-                    ref={iframeRef}
-                    title="motion preview"
-                    sandbox="allow-scripts allow-same-origin"
-                    style={{ width: 1080, height: 1920, border: 'none', transform: 'scale(0.333333)', transformOrigin: 'top left' }}
-                  />
-                </div>
-              )}
-              {previewMode === 'mp4' && mp4Url && (
-                <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: 360, height: 640 }}>
-                  <video src={mp4Url} controls autoPlay loop muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                </div>
-              )}
+              {previewMode === 'live' && motion.html && (() => {
+                const is45 = motion.canvasAspect === '4:5';
+                const previewW = is45 ? 320 : 360;
+                const previewH = is45 ? 400 : 640;
+                const canvasH = is45 ? 1350 : 1920;
+                const scale = previewW / 1080;
+                return (
+                  <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: previewW, height: previewH }}>
+                    <iframe
+                      ref={iframeRef}
+                      title="motion preview"
+                      sandbox="allow-scripts allow-same-origin"
+                      style={{ width: 1080, height: canvasH, border: 'none', transform: `scale(${scale})`, transformOrigin: 'top left' }}
+                    />
+                  </div>
+                );
+              })()}
+              {previewMode === 'mp4' && mp4Url && (() => {
+                const is45 = motion.canvasAspect === '4:5';
+                const previewW = is45 ? 320 : 360;
+                const previewH = is45 ? 400 : 640;
+                return (
+                  <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: previewW, height: previewH }}>
+                    <video src={mp4Url} controls autoPlay loop muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
+                );
+              })()}
               {!motion.html && (
                 <div className="text-zinc-500 text-sm text-center max-w-xs leading-relaxed">
                   Preencha a ideia + texto à esquerda e clique <span className="text-violet-300">✨ Gerar com IA</span> pra criar o motion.

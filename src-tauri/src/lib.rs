@@ -3,11 +3,16 @@ mod motions;
 mod assets;
 mod capcut;
 mod save_dialog;
+mod agent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            agent::init(&app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             references::references_dir,
             references::list_references,
@@ -42,6 +47,16 @@ pub fn run() {
             save_dialog::append_chunk_to_file,
             save_dialog::mux_video_audio_ffmpeg,
             save_dialog::copy_file,
+            agent::agent_publish_state,
+            agent::agent_mcp_port,
+            agent::agent_health,
+            agent::agent_register_mcp,
+            agent::agent_read_file_b64,
+            agent::claude_subprocess::agent_send,
+            agent::claude_subprocess::agent_cancel,
+            agent::approval::agent_approve,
+            agent::picker::agent_picker_result,
+            agent::tool_bridge::agent_tool_result,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -24,18 +24,363 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
-        body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; background-color: #0a0a0b; color: #fafafa; }
+        /* Design tokens — mirrored from src/components/reelsStudio/theme.ts.
+           Switched at the root with [data-theme="light"]. */
+        :root, [data-theme="dark"] {
+          --bg-canvas: #0A0A0B;
+          --bg-surface: #141416;
+          --bg-elevated: #1C1C1F;
+          --bg-hover: rgba(255,255,255,0.05);
+          --bg-active: rgba(255,255,255,0.08);
+          --border-subtle: rgba(255,255,255,0.08);
+          --border-default: rgba(255,255,255,0.12);
+          --text-primary: #FAFAFA;
+          --text-secondary: #A1A1AA;
+          --text-tertiary: #71717A;
+          --accent-bg: #FAFAFA;
+          --accent-fg: #0A0A0B;
+          --accent-focus: #8B5CF6;
+          --status-ok: #22C55E;
+          --status-warn: #F59E0B;
+          --status-err: #EF4444;
+          --status-pending: #A1A1AA;
+          --scroll-track: #1c1c1f;
+          --scroll-thumb: #3f3f46;
+          --scroll-thumb-hover: #52525b;
+        }
+        [data-theme="light"] {
+          --bg-canvas: #FAFAFA;
+          --bg-surface: #FFFFFF;
+          --bg-elevated: #F4F4F5;
+          --bg-hover: rgba(0,0,0,0.04);
+          --bg-active: rgba(0,0,0,0.06);
+          --border-subtle: rgba(0,0,0,0.08);
+          --border-default: rgba(0,0,0,0.12);
+          --text-primary: #0A0A0B;
+          --text-secondary: #52525B;
+          --text-tertiary: #71717A;
+          --accent-bg: #0A0A0B;
+          --accent-fg: #FAFAFA;
+          --accent-focus: #7C3AED;
+          --status-ok: #16A34A;
+          --status-warn: #D97706;
+          --status-err: #DC2626;
+          --status-pending: #71717A;
+          --scroll-track: #E4E4E7;
+          --scroll-thumb: #D4D4D8;
+          --scroll-thumb-hover: #A1A1AA;
+        }
+
+        body { font-family: 'Inter', sans-serif; margin: 0; padding: 0; background-color: var(--bg-canvas); color: var(--text-primary); }
         ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #1c1c1f; }
-        ::-webkit-scrollbar-thumb { background: #3f3f46; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #52525b; }
+        ::-webkit-scrollbar-track { background: var(--scroll-track); }
+        ::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); }
         #root { height: 100vh; width: 100vw; overflow: hidden; display: flex; flex-direction: column; }
+
+        /* Semantic utility classes — themed via CSS vars. Use these instead of
+           Tailwind's bg-zinc-X / text-zinc-X hardcoded values for chrome surfaces. */
+        .bg-surface  { background-color: var(--bg-surface); }
+        .bg-elevated { background-color: var(--bg-elevated); }
+        .bg-hover    { background-color: var(--bg-hover); }
+        .bg-active   { background-color: var(--bg-active); }
+        .text-primary   { color: var(--text-primary); }
+        .text-secondary { color: var(--text-secondary); }
+        .text-tertiary  { color: var(--text-tertiary); }
+        .border-subtle  { border-color: var(--border-subtle); }
+        .border-default { border-color: var(--border-default); }
+
+        /* Form field reset for light theme — Tailwind's bg-black/40 etc become
+           transparent surfaces that adopt the parent's background. */
+        [data-theme="light"] textarea,
+        [data-theme="light"] input[type="text"],
+        [data-theme="light"] input[type="number"],
+        [data-theme="light"] input[type="search"],
+        [data-theme="light"] input[type="email"],
+        [data-theme="light"] input[type="password"],
+        [data-theme="light"] input[type="url"],
+        [data-theme="light"] select {
+          color: var(--text-primary);
+        }
+        [data-theme="light"] input::placeholder,
+        [data-theme="light"] textarea::placeholder {
+          color: var(--text-tertiary);
+        }
+
+        /* ─── Light-theme overrides for common hardcoded Tailwind classes ───
+           This is the pragmatic alternative to migrating ~700 inline class
+           usages. Tailwind injects rules with `:where(...)` (0 specificity),
+           so [data-theme="light"] ... wins automatically.
+
+           The intent is to map the dark-grade neutrals (zinc/white-alpha/
+           black-alpha) that were hardcoded throughout the app to their
+           light-theme equivalents. Brand semantics (amber for avatar,
+           emerald for broll, violet for accents, red for danger) stay
+           untouched on purpose — they communicate meaning, not chrome. */
+
+        /* Surface backgrounds */
+        [data-theme="light"] .bg-\[\#0A0A0B\],
+        [data-theme="light"] .bg-\[\#0a0a0b\],
+        [data-theme="light"] .bg-\[\#0E0E10\],
+        [data-theme="light"] .bg-\[\#0F0F12\],
+        [data-theme="light"] .bg-zinc-950 { background-color: var(--bg-canvas) !important; }
+
+        [data-theme="light"] .bg-\[\#141416\],
+        [data-theme="light"] .bg-zinc-900 { background-color: var(--bg-surface) !important; }
+
+        [data-theme="light"] .bg-\[\#1C1C1F\],
+        [data-theme="light"] .bg-\[\#1c1c1f\],
+        [data-theme="light"] .bg-zinc-800 { background-color: var(--bg-elevated) !important; }
+
+        /* Black alpha overlays (used as form backgrounds) → light neutral fill */
+        [data-theme="light"] .bg-black\/40,
+        [data-theme="light"] .bg-black\/30,
+        [data-theme="light"] .bg-black\/20 { background-color: rgba(0,0,0,0.04) !important; }
+        [data-theme="light"] .bg-black\/50,
+        [data-theme="light"] .bg-black\/60 { background-color: rgba(0,0,0,0.06) !important; }
+
+        /* White alpha (hover/active surfaces) → darken instead */
+        [data-theme="light"] .bg-white\/5  { background-color: rgba(0,0,0,0.04) !important; }
+        [data-theme="light"] .bg-white\/10 { background-color: rgba(0,0,0,0.06) !important; }
+        [data-theme="light"] .bg-white\/15 { background-color: rgba(0,0,0,0.08) !important; }
+        [data-theme="light"] .bg-white\/20 { background-color: rgba(0,0,0,0.10) !important; }
+        [data-theme="light"] .hover\:bg-white\/5:hover  { background-color: rgba(0,0,0,0.04) !important; }
+        [data-theme="light"] .hover\:bg-white\/10:hover { background-color: rgba(0,0,0,0.06) !important; }
+
+        /* Borders */
+        [data-theme="light"] .border-white\/5,
+        [data-theme="light"] .border-white\/8 { border-color: rgba(0,0,0,0.08) !important; }
+        [data-theme="light"] .border-white\/10 { border-color: rgba(0,0,0,0.10) !important; }
+        [data-theme="light"] .border-white\/20 { border-color: rgba(0,0,0,0.12) !important; }
+        [data-theme="light"] .hover\:border-white\/20:hover { border-color: rgba(0,0,0,0.16) !important; }
+        [data-theme="light"] .hover\:border-white\/40:hover { border-color: rgba(0,0,0,0.24) !important; }
+
+        /* Text */
+        [data-theme="light"] .text-zinc-50,
+        [data-theme="light"] .text-zinc-100 { color: #0A0A0B !important; }
+        [data-theme="light"] .text-zinc-200 { color: #18181B !important; }
+        [data-theme="light"] .text-zinc-300 { color: #27272A !important; }
+        [data-theme="light"] .text-zinc-400 { color: #52525B !important; }
+        [data-theme="light"] .text-zinc-500 { color: #71717A !important; }
+        [data-theme="light"] .text-zinc-600 { color: #A1A1AA !important; }
+        [data-theme="light"] .text-white { color: #0A0A0B !important; }
+        [data-theme="light"] .placeholder-zinc-600::placeholder,
+        [data-theme="light"] .placeholder-zinc-500::placeholder { color: #A1A1AA !important; }
+
+        /* The big black gradient backgrounds in the preview canvas — keep
+           the preview canvas black even in light mode (it IS the video). The
+           outer wrapper is the part that should go light. The .bg-black class
+           on the inner preview is left alone. */
+
+        /* Block card semantic backgrounds: amber/emerald @ 4% alpha are nearly
+           invisible on a white surface. Bump alpha for light theme only. */
+        [data-theme="light"] .bg-amber-500\/\[0\.04\] { background-color: rgba(245,158,11,0.08) !important; }
+        [data-theme="light"] .bg-emerald-500\/\[0\.04\] { background-color: rgba(16,185,129,0.08) !important; }
+        [data-theme="light"] .border-amber-500\/20 { border-color: rgba(217,119,6,0.30) !important; }
+        [data-theme="light"] .border-emerald-500\/20 { border-color: rgba(5,150,105,0.30) !important; }
+        [data-theme="light"] .hover\:border-amber-500\/40:hover { border-color: rgba(217,119,6,0.50) !important; }
+        [data-theme="light"] .hover\:border-emerald-500\/40:hover { border-color: rgba(5,150,105,0.50) !important; }
+
+        /* Chip text on amber/emerald that was tuned for dark — needs darker
+           variant on light so it reads against the brighter tint background. */
+        [data-theme="light"] .text-amber-300 { color: #B45309 !important; }
+        [data-theme="light"] .text-emerald-300 { color: #047857 !important; }
+        [data-theme="light"] .text-amber-200 { color: #92400E !important; }
+        [data-theme="light"] .text-emerald-200 { color: #065F46 !important; }
+        [data-theme="light"] .bg-amber-500\/10,
+        [data-theme="light"] .bg-amber-500\/15 { background-color: rgba(245,158,11,0.16) !important; }
+        [data-theme="light"] .bg-emerald-500\/10,
+        [data-theme="light"] .bg-emerald-500\/15 { background-color: rgba(16,185,129,0.16) !important; }
+
+        /* Violet selection rings: keep visible but kill the heavy glow shadow
+           on light — `shadow-[0_0_Xpx_rgba(167,139,250,...)]` looks like a bug. */
+        [data-theme="light"] .shadow-\[0_0_24px_rgba\(167\,139\,250\,0\.35\)\],
+        [data-theme="light"] .shadow-\[0_0_24px_rgba\(167\,139\,250\,0\.15\)\],
+        [data-theme="light"] .shadow-\[0_0_16px_rgba\(124\,58\,237\,0\.4\)\],
+        [data-theme="light"] .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.4\)\],
+        [data-theme="light"] .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.5\)\] { box-shadow: 0 4px 12px rgba(124,58,237,0.10) !important; }
+
+        /* Fuchsia motion-button chip — also needs light variant */
+        [data-theme="light"] .bg-fuchsia-500\/\[0\.08\],
+        [data-theme="light"] .bg-fuchsia-500\/15 { background-color: rgba(217,70,239,0.10) !important; }
+        [data-theme="light"] .bg-fuchsia-500\/20 { background-color: rgba(217,70,239,0.14) !important; }
+        [data-theme="light"] .text-fuchsia-200,
+        [data-theme="light"] .text-fuchsia-100 { color: #86198F !important; }
+        [data-theme="light"] .border-fuchsia-400\/30,
+        [data-theme="light"] .border-fuchsia-400\/40,
+        [data-theme="light"] .border-fuchsia-400\/50 { border-color: rgba(192,38,211,0.40) !important; }
+        [data-theme="light"] .hover\:bg-fuchsia-500\/15:hover,
+        [data-theme="light"] .hover\:bg-fuchsia-500\/25:hover,
+        [data-theme="light"] .hover\:bg-fuchsia-500\/30:hover { background-color: rgba(217,70,239,0.22) !important; }
+
+        /* Violet accents (CTAs, selected items, links) */
+        [data-theme="light"] .text-violet-200,
+        [data-theme="light"] .text-violet-300,
+        [data-theme="light"] .text-violet-400 { color: #6D28D9 !important; }
+        [data-theme="light"] .bg-violet-500\/10,
+        [data-theme="light"] .bg-violet-500\/15,
+        [data-theme="light"] .bg-violet-500\/\[0\.06\],
+        [data-theme="light"] .bg-violet-500\/\[0\.04\] { background-color: rgba(124,58,237,0.08) !important; }
+        [data-theme="light"] .bg-violet-500\/20,
+        [data-theme="light"] .bg-violet-500\/25,
+        [data-theme="light"] .bg-violet-500\/30 { background-color: rgba(124,58,237,0.14) !important; }
+        [data-theme="light"] .border-violet-400\/20,
+        [data-theme="light"] .border-violet-400\/40,
+        [data-theme="light"] .border-violet-400\/50,
+        [data-theme="light"] .border-violet-500\/20,
+        [data-theme="light"] .border-violet-500\/40 { border-color: rgba(124,58,237,0.40) !important; }
+        [data-theme="light"] .ring-violet-400 { --tw-ring-color: #7C3AED !important; }
+
+        /* Red (destructive) — slightly darker reds on light */
+        [data-theme="light"] .text-red-300,
+        [data-theme="light"] .text-red-200 { color: #B91C1C !important; }
+        [data-theme="light"] .bg-red-500\/10,
+        [data-theme="light"] .bg-red-500\/15,
+        [data-theme="light"] .bg-red-500\/20 { background-color: rgba(220,38,38,0.10) !important; }
+
+        /* Scrollbars inside scrollable surfaces (Tailwind doesn't reset these) */
+        [data-theme="light"] ::-webkit-scrollbar-track { background: #E4E4E7; }
+        [data-theme="light"] ::-webkit-scrollbar-thumb { background: #D4D4D8; }
+        [data-theme="light"] ::-webkit-scrollbar-thumb:hover { background: #A1A1AA; }
+
+        /* ─── Extra surfaces missed in the first pass ─── */
+
+        /* Script panel + timeline bg hex codes */
+        [data-theme="light"] .bg-\[\#0E0E10\],
+        [data-theme="light"] .bg-\[\#0C0C0E\],
+        [data-theme="light"] .bg-\[\#0A0A0B\]\/50 { background-color: var(--bg-surface) !important; }
+
+        /* Pink accents (caption button etc.) — keep semantic but darker */
+        [data-theme="light"] .text-pink-300 { color: #BE185D !important; }
+        [data-theme="light"] .bg-pink-500\/10,
+        [data-theme="light"] .bg-pink-500\/15 { background-color: rgba(236,72,153,0.10) !important; }
+        [data-theme="light"] .bg-pink-500\/20 { background-color: rgba(236,72,153,0.14) !important; }
+        [data-theme="light"] .border-pink-500\/20,
+        [data-theme="light"] .border-pink-500\/40 { border-color: rgba(236,72,153,0.30) !important; }
+
+        /* ─── DEVIOLETIZATION: turn the remaining purple gradients/CTAs into
+           monochrome accent (black on light, white on dark). User explicitly
+           asked to drop the violet brand accent from CTAs in the chrome.
+
+           We DON'T touch:
+             - .ring-violet-* (focus rings — single semantic use)
+             - .text-violet-* on chip labels that already darkened on light
+             - things using bg-violet-500/0.0X (subtle hover hints — neutral enough) */
+
+        /* "Gerar áudio" big CTA gradient — replace with neutral solid */
+        .bg-gradient-to-b.from-violet-500.to-violet-600,
+        .bg-gradient-to-b.from-violet-400.to-violet-500,
+        .hover\:from-violet-400:hover.hover\:to-violet-500:hover { background: var(--accent-bg) !important; color: var(--accent-fg) !important; }
+        .bg-gradient-to-b.from-violet-500.to-violet-600 > *,
+        .bg-gradient-to-b.from-violet-400.to-violet-500 > * { color: var(--accent-fg) !important; }
+
+        /* Their glow shadows (carry over from old design) on dark and light alike */
+        .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.4\)\],
+        .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.5\)\],
+        .shadow-\[0_0_16px_rgba\(124\,58\,237\,0\.4\)\] { box-shadow: none !important; }
+        /* Dark mode still gets a subtle elevation */
+        [data-theme="dark"] .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.4\)\],
+        [data-theme="dark"] .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.5\)\],
+        [data-theme="dark"] .shadow-\[0_0_16px_rgba\(124\,58\,237\,0\.4\)\] { box-shadow: 0 4px 14px rgba(0,0,0,0.4) !important; }
+
+        /* "SUA" badge and similar small violet pills used as voice tags */
+        [data-theme="light"] .bg-violet-500\/30 { background-color: rgba(0,0,0,0.06) !important; }
+
+        /* Avatar "R" round chip — soft neutral instead of saturated violet */
+        [data-theme="light"] .bg-violet-600,
+        [data-theme="light"] .bg-violet-500 { background-color: rgba(0,0,0,0.85) !important; color: #FAFAFA !important; }
+        [data-theme="light"] .bg-violet-600 > *,
+        [data-theme="light"] .bg-violet-500 > * { color: #FAFAFA !important; }
+
+        /* Gradient chip backgrounds inside violet bubbles (the small R avatar) */
+        [data-theme="light"] .bg-gradient-to-br.from-violet-500.to-violet-700,
+        [data-theme="light"] .bg-gradient-to-r.from-violet-500.to-violet-600 { background: #0A0A0B !important; color: #FAFAFA !important; }
+
+        /* Status pill text on the top bar — was zinc-secondary which is fine on
+           dark but turns near-invisible if it inherited a wrong color. Force the
+           secondary token explicitly. */
+        [data-theme="light"] .tabular-nums { color: var(--text-primary); }
+
+        /* ─── AGGRESSIVE DEVIOLETIZATION (both themes) ─────────────────────
+           Apply to ALL themes — user explicitly wants no violet brand in the
+           chrome at all. Only the focus ring stays (single semantic use).
+           Affects: avatar chips, "Sua" pill, vibe picker selection, voice
+           picker selection, caption strips, etc.
+
+           Tailwind CDN injects rules with the same specificity as ours, but
+           AFTER us (because they're added at runtime via JS). To win we boost
+           specificity by prefixing with `body[data-theme]`. */
+
+        /* Avatar circle gradients (R) — neutralize to text/bg contrast */
+        body[data-theme] .bg-gradient-to-br.from-violet-400.to-violet-600,
+        body[data-theme] .bg-gradient-to-br.from-violet-500.to-violet-700,
+        body[data-theme] .bg-gradient-to-r.from-violet-500.to-violet-600 {
+          background: var(--text-primary) !important;
+          color: var(--bg-canvas) !important;
+        }
+        body[data-theme] .ring-violet-300\/40 { --tw-ring-color: transparent !important; }
+
+        /* All violet-* backgrounds (alpha variants) → neutral token */
+        body[data-theme] .bg-violet-500\/10,
+        body[data-theme] .bg-violet-500\/15,
+        body[data-theme] .bg-violet-500\/20,
+        body[data-theme] .bg-violet-500\/25,
+        body[data-theme] .bg-violet-500\/30 {
+          background-color: var(--bg-active) !important;
+        }
+        body[data-theme] .bg-violet-500\/\[0\.04\],
+        body[data-theme] .bg-violet-500\/\[0\.06\] {
+          background-color: var(--bg-hover) !important;
+        }
+
+        /* All violet borders → neutral */
+        body[data-theme] .border-violet-400\/40,
+        body[data-theme] .border-violet-400\/50,
+        body[data-theme] .border-violet-500\/40,
+        body[data-theme] .border-violet-500\/50 {
+          border-color: var(--border-default) !important;
+        }
+        body[data-theme] .border-violet-400\/20,
+        body[data-theme] .border-violet-400\/30,
+        body[data-theme] .border-violet-500\/20,
+        body[data-theme] .border-violet-500\/30 {
+          border-color: var(--border-subtle) !important;
+        }
+
+        /* Hovers */
+        body[data-theme] .hover\:bg-violet-500\/10:hover,
+        body[data-theme] .hover\:bg-violet-500\/15:hover,
+        body[data-theme] .hover\:bg-violet-500\/20:hover,
+        body[data-theme] .hover\:bg-violet-500\/25:hover {
+          background-color: var(--bg-hover) !important;
+        }
+        body[data-theme] .hover\:border-violet-400\/40:hover,
+        body[data-theme] .hover\:border-violet-400\/50:hover,
+        body[data-theme] .hover\:border-violet-500\/40:hover {
+          border-color: var(--border-default) !important;
+        }
+        body[data-theme] .hover\:text-violet-200:hover,
+        body[data-theme] .hover\:text-violet-300:hover {
+          color: var(--text-primary) !important;
+        }
+
+        /* Violet text — secondary token (active chips, links) */
+        body[data-theme] .text-violet-100,
+        body[data-theme] .text-violet-200,
+        body[data-theme] .text-violet-300,
+        body[data-theme] .text-violet-400 { color: var(--text-secondary) !important; }
+        body[data-theme] .text-violet-300\/60 { color: var(--text-tertiary) !important; }
+
+        /* Dashed clone-voice affordance */
+        body[data-theme] .border-dashed.border-violet-400\/40 { border-color: var(--border-default) !important; }
+
+        /* Keep ONLY: focus ring (.ring-violet-400 used in keyboard nav). */
 
         @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
         .fade-in { animation: fade-in 0.3s ease both; }
     </style>
 </head>
-<body class="bg-[#0a0a0b] text-zinc-50">
+<body data-theme="dark">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
 </body>

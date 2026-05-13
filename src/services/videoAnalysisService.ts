@@ -185,25 +185,46 @@ const sanitizeMime = (file: Blob | { type?: string }): string => {
   return 'video/mp4';
 };
 
-const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview'];
+// Flash em primeiro (multimodal barato); Pro como fallback de qualidade.
+// Flash Lite foi cortado — em análise de vídeo ele perde direção/tone com
+// frequência o suficiente pra atrapalhar mais que ajudar no custo.
+const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-pro-preview'];
+
+/** Status callback for the UI — surfaces upload/processing stages of large files. */
+export type AnalysisStatus =
+  | { stage: 'analyzing' }
+  | { stage: 'uploading'; megabytes: number }
+  | { stage: 'processing-upload' };
+
+/** Encapsulates the video payload sent to Gemini — either inline base64 (small) or a Files API handle (large). */
+type VideoPayload =
+  | { kind: 'inline'; mimeType: string; data: string }
+  | { kind: 'file'; fileUri: string; mimeType: string };
 
 const callGemini = async (
-  mimeType: string,
-  base64: string,
+  payload: VideoPayload,
   voiceProfile?: VoiceProfile,
   regen?: RegenerateContext,
 ): Promise<VideoAnalysisResult> => {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
-  const promptParts: { text?: string; inlineData?: { mimeType: string; data: string } }[] = [
-    { text: SYSTEM_PROMPT },
-  ];
+  type PromptPart =
+    | { text: string }
+    | { inlineData: { mimeType: string; data: string } }
+    | { fileData: { fileUri: string; mimeType: string } };
+
+  const promptParts: PromptPart[] = [{ text: SYSTEM_PROMPT }];
   if (voiceProfile) {
     promptParts.push({ text: '\n\n' + buildVoicePromptSection(voiceProfile) });
   }
   const regenSection = buildRegenPromptSection(regen);
   if (regenSection) promptParts.push({ text: regenSection });
-  promptParts.push({ inlineData: { mimeType, data: base64 } });
+
+  if (payload.kind === 'inline') {
+    promptParts.push({ inlineData: { mimeType: payload.mimeType, data: payload.data } });
+  } else {
+    promptParts.push({ fileData: { fileUri: payload.fileUri, mimeType: payload.mimeType } });
+  }
 
   let lastError: unknown;
   let response: Awaited<ReturnType<typeof ai.models.generateContent>> | undefined;
@@ -305,21 +326,120 @@ const callGemini = async (
   };
 };
 
-const MAX_INLINE_BYTES = 20 * 1024 * 1024; // 20MB Gemini inline limit
+/**
+ * Inline base64 cap. Gemini hard limit is ~20MB; we keep 2MB of margin to
+ * avoid edge-case rejections (base64 inflates size ~33%, plus the rest of the prompt).
+ */
+const MAX_INLINE_BYTES = 18 * 1024 * 1024;
+/**
+ * Files API hard cap we surface to the user. Google supports up to 2GB, but
+ * 500MB covers every reasonable Reel/TikTok/Short and avoids 30-min uploads.
+ */
+const MAX_FILES_API_BYTES = 500 * 1024 * 1024;
+
+/** Polls the Files API until the uploaded video is in ACTIVE state (or fails). */
+const waitForFileActive = async (
+  ai: GoogleGenAI,
+  fileName: string,
+  onStatus?: (s: AnalysisStatus) => void,
+): Promise<void> => {
+  const POLL_INTERVAL_MS = 1500;
+  const TIMEOUT_MS = 90_000;
+  const started = Date.now();
+  while (true) {
+    const f = await ai.files.get({ name: fileName });
+    if (f.state === 'ACTIVE') return;
+    if (f.state === 'FAILED') {
+      throw new Error(
+        `O Gemini não conseguiu processar o vídeo enviado${f.error?.message ? `: ${f.error.message}` : '.'}`,
+      );
+    }
+    if (Date.now() - started > TIMEOUT_MS) {
+      throw new Error('Timeout: o Gemini demorou mais de 90s pra processar o vídeo. Tente de novo.');
+    }
+    onStatus?.({ stage: 'processing-upload' });
+    await new Promise(r => setTimeout(r, POLL_INTERVAL_MS));
+  }
+};
+
+/** Uploads via Files API and waits for ACTIVE. Returns the file URI ready to use in `fileData`. */
+const uploadAndWaitForFile = async (
+  blob: Blob,
+  mimeType: string,
+  onStatus?: (s: AnalysisStatus) => void,
+): Promise<{ fileUri: string; fileName: string }> => {
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  onStatus?.({ stage: 'uploading', megabytes: +(blob.size / 1024 / 1024).toFixed(1) });
+  const uploaded = await ai.files.upload({ file: blob, config: { mimeType } });
+  if (!uploaded.name || !uploaded.uri) {
+    throw new Error('Upload do vídeo retornou resposta inválida do Gemini.');
+  }
+  await waitForFileActive(ai, uploaded.name, onStatus);
+  return { fileUri: uploaded.uri, fileName: uploaded.name };
+};
+
+/** Fire-and-forget cleanup. Failure is logged but never thrown — Google auto-deletes in 48h anyway. */
+const deleteFileQuietly = (fileName: string): void => {
+  try {
+    const ai = new GoogleGenAI({ apiKey: getApiKey() });
+    void ai.files.delete({ name: fileName }).catch(err => {
+      console.warn('[videoAnalysis] cleanup failed (will auto-expire in 48h):', err);
+    });
+  } catch (err) {
+    console.warn('[videoAnalysis] cleanup skipped:', err);
+  }
+};
+
+/**
+ * Decides between inline (≤18MB) and Files API (>18MB, ≤500MB). Above 500MB throws.
+ * After Files API analysis, schedules a fire-and-forget delete to keep the user's
+ * data on Google servers for as little time as possible.
+ */
+const analyseFromBlob = async (
+  blob: Blob,
+  voiceProfile?: VoiceProfile,
+  regen?: RegenerateContext,
+  onStatus?: (s: AnalysisStatus) => void,
+): Promise<VideoAnalysisResult> => {
+  const mimeType = sanitizeMime(blob);
+
+  if (blob.size > MAX_FILES_API_BYTES) {
+    const mb = (blob.size / 1024 / 1024).toFixed(1);
+    throw new Error(
+      `Vídeo de ${mb}MB é grande demais (limite: 500MB). Corte um trecho específico do Reel ou comprime antes.`,
+    );
+  }
+
+  // Small enough → inline (fast, no upload roundtrip).
+  if (blob.size <= MAX_INLINE_BYTES) {
+    onStatus?.({ stage: 'analyzing' });
+    const base64 = await blobToBase64(blob);
+    return callGemini({ kind: 'inline', mimeType, data: base64 }, voiceProfile, regen);
+  }
+
+  // Larger → Files API.
+  const { fileUri, fileName } = await uploadAndWaitForFile(blob, mimeType, onStatus);
+  onStatus?.({ stage: 'analyzing' });
+  try {
+    const result = await callGemini({ kind: 'file', fileUri, mimeType }, voiceProfile, regen);
+    // Privacy default: delete the uploaded file as soon as analysis is done.
+    // Fire-and-forget — user is already moving on to the preview.
+    deleteFileQuietly(fileName);
+    return result;
+  } catch (err) {
+    // On failure, still try to clean up the upload so it doesn't sit on Google for 48h.
+    deleteFileQuietly(fileName);
+    throw err;
+  }
+};
 
 export const analyseReferenceBlob = async (
   file: Blob,
   voiceProfile?: VoiceProfile,
   regen?: RegenerateContext,
+  onStatus?: (s: AnalysisStatus) => void,
 ): Promise<VideoAnalysisResult> => {
-  if (file.size > MAX_INLINE_BYTES) {
-    throw new Error(
-      `Vídeo tem ${(file.size / 1024 / 1024).toFixed(1)}MB. Limite atual: 20MB. ` +
-        `Comprima o vídeo (ou recorte só o trecho que importa) e tente de novo.`,
-    );
-  }
-  const base64 = await blobToBase64(file);
-  return callGemini(sanitizeMime(file), base64, voiceProfile, regen);
+  return analyseFromBlob(file, voiceProfile, regen, onStatus);
 };
 
 export const analyseReferenceFromBytes = async (
@@ -327,16 +447,10 @@ export const analyseReferenceFromBytes = async (
   mimeType?: string,
   voiceProfile?: VoiceProfile,
   regen?: RegenerateContext,
+  onStatus?: (s: AnalysisStatus) => void,
 ): Promise<VideoAnalysisResult> => {
-  if (bytes.byteLength > MAX_INLINE_BYTES) {
-    throw new Error(
-      `Vídeo tem ${(bytes.byteLength / 1024 / 1024).toFixed(1)}MB. Limite atual: 20MB.`,
-    );
-  }
-  return callGemini(
-    mimeType?.startsWith('video/') ? mimeType : 'video/mp4',
-    bytesToBase64(bytes),
-    voiceProfile,
-    regen,
-  );
+  // BlobPart in modern TS requires ArrayBuffer (not SharedArrayBuffer); slice() guarantees a plain one.
+  const ab = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+  const blob = new Blob([ab], { type: mimeType?.startsWith('video/') ? mimeType : 'video/mp4' });
+  return analyseFromBlob(blob, voiceProfile, regen, onStatus);
 };

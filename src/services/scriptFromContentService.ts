@@ -165,9 +165,12 @@ const getApiKey = (): string => {
   return key;
 };
 
-const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-flash-lite-preview'];
+// Flash como primeira escolha; Pro como fallback se Flash falhar (timeout,
+// 503 etc). Flash Lite foi removido — entrega script raso na maioria dos
+// artigos longos e o ganho de custo não compensa a regressão de qualidade.
+const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-pro-preview'];
 
-// Source content can be very long. Gemini Flash-Lite handles 1M tokens, but we still
+// Source content can be very long. Gemini Flash handles 1M tokens, but we still
 // trim to a sane upper bound to keep latency + cost down. Most articles fit in 30k chars.
 const MAX_SOURCE_CHARS = 60_000;
 

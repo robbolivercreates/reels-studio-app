@@ -1,7 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { VoiceProfilesPanel } from './reelsStudio/VoiceProfilesPanel';
+import type { AppTheme } from './reelsStudio/types';
+import { useModalChrome } from './reelsStudio/modalChrome';
+import {
+  loadClonedVoices,
+  saveClonedVoice,
+  deleteClonedVoice,
+  type ClonedVoice,
+  type MinimaxCloneModel,
+} from '../services/minimaxService';
+import { AgentSettingsTab } from './agent/AgentSettingsTab';
 
-export type SettingsTab = 'api-keys' | 'voice';
+export type SettingsTab = 'api-keys' | 'voice' | 'voices' | 'agents';
 
 interface Props {
   isOpen: boolean;
@@ -9,6 +19,9 @@ interface Props {
   onSave: () => void;
   initialTab?: SettingsTab;
   onVoiceProfileChange?: () => void;
+  /** Called whenever the saved-voices list changes so the voice picker refreshes. */
+  onClonedVoicesChange?: () => void;
+  appTheme?: AppTheme;
 }
 
 interface KeyConfig {
@@ -112,13 +125,55 @@ interface FieldState {
   validationMessage: string;
 }
 
-export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialTab = 'api-keys', onVoiceProfileChange }) => {
+export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialTab = 'api-keys', onVoiceProfileChange, onClonedVoicesChange, appTheme }) => {
+  const chrome = useModalChrome(appTheme);
   const [fields, setFields] = useState<Record<string, FieldState>>({});
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  // Vozes tab state.
+  const [clonedVoices, setClonedVoices] = useState<ClonedVoice[]>(() => loadClonedVoices());
+  const [newVoiceName, setNewVoiceName] = useState('');
+  const [newVoiceId, setNewVoiceId] = useState('');
+  const [newVoiceModel, setNewVoiceModel] = useState<MinimaxCloneModel>('speech-02-hd');
+  const [voiceFormError, setVoiceFormError] = useState<string | null>(null);
+
+  const refreshClonedVoices = () => setClonedVoices(loadClonedVoices());
+
+  const handleAddVoice = () => {
+    const name = newVoiceName.trim();
+    const voiceId = newVoiceId.trim();
+    if (!name) { setVoiceFormError('Dê um nome pra essa voz.'); return; }
+    if (!voiceId) { setVoiceFormError('Cole o voice_id do Minimax.'); return; }
+    if (clonedVoices.some(v => v.voiceId === voiceId)) {
+      setVoiceFormError('Já tem uma voz com esse ID salva.');
+      return;
+    }
+    const now = Date.now();
+    saveClonedVoice({
+      id: `manual-${now}-${Math.random().toString(36).slice(2, 8)}`,
+      name,
+      voiceId,
+      model: newVoiceModel,
+      createdAt: now,
+      expiresAt: now + 365 * 24 * 60 * 60 * 1000, // 1 year — manually-added voices don't expire by usage
+    });
+    refreshClonedVoices();
+    onClonedVoicesChange?.();
+    setNewVoiceName('');
+    setNewVoiceId('');
+    setVoiceFormError(null);
+  };
+
+  const handleDeleteVoice = (id: string, name: string) => {
+    if (!confirm(`Remover "${name}" da lista?`)) return;
+    deleteClonedVoice(id);
+    refreshClonedVoices();
+    onClonedVoicesChange?.();
+  };
 
   useEffect(() => {
     if (!isOpen) return;
     setActiveTab(initialTab);
+    refreshClonedVoices();
     const next: Record<string, FieldState> = {};
     for (const k of KEYS) {
       const stored = localStorage.getItem(k.storageKey) ?? '';
@@ -131,11 +186,14 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
       };
     }
     setFields(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialTab]);
 
   if (!isOpen) return null;
 
   const isVoice = activeTab === 'voice';
+  const isVoices = activeTab === 'voices';
+  const isAgents = activeTab === 'agents';
   const widthClass = isVoice ? 'max-w-5xl' : 'max-w-lg';
 
   const patchField = (storageKey: string, patch: Partial<FieldState>) => {
@@ -190,15 +248,19 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
   );
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6">
-      <div className={`bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] ${widthClass} w-full overflow-hidden flex flex-col max-h-[90vh]`}>
+    <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-[100] p-6" style={chrome.backdrop}>
+      <div className={`rounded-2xl ${widthClass} w-full overflow-hidden flex flex-col max-h-[90vh]`} style={chrome.card}>
         <div className="px-6 pt-6 pb-3 flex items-start justify-between">
           <div>
             <div className="text-base font-semibold text-zinc-100 mb-1">Configurações</div>
             <div className="text-xs text-zinc-500">
               {isVoice
                 ? 'Estilo de escrita aplicado em todo roteiro gerado por IA.'
-                : 'Suas chaves ficam salvas localmente — nunca saem do app.'}
+                : isVoices
+                  ? 'Adicione vozes do Minimax usando voice_id. Aparecem no seletor de voz junto com as clonadas.'
+                  : isAgents
+                    ? 'Conecte o Claude Code para conversar com seu projeto via chat. Usa sua assinatura — não precisa de chave de API.'
+                    : 'Suas chaves ficam salvas localmente — nunca saem do app.'}
             </div>
           </div>
           <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-200 transition-colors">
@@ -211,15 +273,128 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
         <div className="px-6 pb-3 flex items-center gap-2 border-b border-white/5">
           {tabBtn('api-keys', 'Chaves de API')}
           {tabBtn('voice', 'Voz e estilo')}
+          {tabBtn('voices', `Vozes${clonedVoices.length > 0 ? ` (${clonedVoices.length})` : ''}`)}
+          {tabBtn('agents', 'Agents')}
         </div>
 
-        {isVoice ? (
+        {isAgents ? (
+          <>
+          <AgentSettingsTab />
+          <div className="px-6 py-4 border-t border-white/5 bg-black/30 flex gap-2">
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Fechar</button>
+          </div>
+          </>
+        ) : isVoice ? (
           <div className="flex-1 overflow-hidden flex flex-col">
             <VoiceProfilesPanel
               onActiveChange={() => onVoiceProfileChange?.()}
               onClose={onClose}
             />
           </div>
+        ) : isVoices ? (
+          <>
+          <div className="px-6 pt-4 pb-4 flex-1 overflow-y-auto space-y-5">
+
+            {/* Add-voice form */}
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-3">
+              <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">Adicionar voz</div>
+
+              <div>
+                <label className="text-[10px] text-zinc-500 mb-1 block">Nome (como vai aparecer no seletor)</label>
+                <input
+                  value={newVoiceName}
+                  onChange={e => setNewVoiceName(e.target.value)}
+                  placeholder="Ex: Marina narradora"
+                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors"
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] text-zinc-500 mb-1 block">voice_id do Minimax</label>
+                <input
+                  value={newVoiceId}
+                  onChange={e => setNewVoiceId(e.target.value)}
+                  placeholder="custom_voice_xxxxxxxxxxxx"
+                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors font-mono"
+                />
+                <div className="mt-1 text-[10px] text-zinc-600">
+                  O ID que o Minimax retorna ao clonar uma voz. Aceita IDs próprios (do fal.ai) ou IDs públicos do catálogo Minimax.
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] text-zinc-500 mb-1 block">Modelo</label>
+                <select
+                  value={newVoiceModel}
+                  onChange={e => setNewVoiceModel(e.target.value as MinimaxCloneModel)}
+                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50"
+                >
+                  <option value="speech-02-hd">speech-02-hd · qualidade máxima (recomendado)</option>
+                  <option value="speech-02-turbo">speech-02-turbo · mais rápido</option>
+                  <option value="speech-01-hd">speech-01-hd · legado</option>
+                  <option value="speech-01-turbo">speech-01-turbo · legado rápido</option>
+                </select>
+              </div>
+
+              {voiceFormError && (
+                <div className="text-[10.5px] text-red-300">⚠ {voiceFormError}</div>
+              )}
+
+              <button
+                onClick={handleAddVoice}
+                className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all"
+              >
+                Salvar voz
+              </button>
+            </div>
+
+            {/* Saved voices list */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-semibold">Vozes salvas</div>
+                <div className="text-[10px] text-zinc-600">{clonedVoices.length} no total</div>
+              </div>
+              {clonedVoices.length === 0 ? (
+                <div className="px-3 py-6 text-center text-[11px] text-zinc-500 border border-dashed border-white/10 rounded-lg">
+                  Nenhuma voz salva ainda. Use o formulário acima.
+                </div>
+              ) : (
+                <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-1">
+                  {clonedVoices.map(v => (
+                    <div key={v.id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/5">
+                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-violet-400 to-violet-600 flex items-center justify-center text-[9px] font-bold text-white shrink-0">
+                        {v.name.slice(0, 1).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11.5px] font-medium text-zinc-100 truncate">{v.name}</div>
+                        <div className="text-[10px] text-zinc-500 font-mono truncate" title={v.voiceId}>{v.voiceId}</div>
+                      </div>
+                      <div className="text-[9.5px] text-zinc-600 shrink-0 hidden sm:block">{v.model}</div>
+                      <button
+                        onClick={() => { void navigator.clipboard.writeText(v.voiceId); }}
+                        className="text-[10px] px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-zinc-300 shrink-0"
+                        title="Copiar voice_id"
+                      >
+                        copiar
+                      </button>
+                      <button
+                        onClick={() => handleDeleteVoice(v.id, v.name)}
+                        className="text-[10px] px-2 py-1 rounded bg-white/5 hover:bg-red-500/20 hover:text-red-300 text-zinc-400 shrink-0"
+                        title="Remover"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="px-6 py-4 border-t border-white/5 bg-black/30 flex gap-2">
+            <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Fechar</button>
+          </div>
+          </>
         ) : (
         <>
         <div className="px-6 pt-4 pb-2 flex-1 overflow-y-auto space-y-5">

@@ -267,17 +267,40 @@ export interface PersistedAnalysis {
 /** Minimax HD 2.8 emotion presets. Drives voice expression on TTS generation. */
 export type ReelEmotion = 'neutral' | 'happy' | 'sad' | 'angry' | 'fearful' | 'surprised';
 
+/**
+ * Global color mode applied to every motion generated in this reel.
+ * 'dark'  = presets use their native dark backgrounds (default, previous behaviour).
+ * 'light' = dark presets get a forced light-background override so the whole reel
+ *            feels bright — useful for lifestyle, educational, or daytime content.
+ * Light presets (editorial-clean, soft-pastel, warm-editorial) are unaffected by
+ * this setting — they are always light.
+ */
+export type MotionColorMode = 'dark' | 'light';
+
+/**
+ * App-wide UI theme. Controls the COLOR OF THE APP CHROME — top bar, panels,
+ * modals, sidebars. Independent from `motionColorMode`, which controls how the
+ * rendered motion content looks. The two are intentionally decoupled so a user
+ * can edit in a dark IDE-feel and still author light-mode motion content (or
+ * vice versa).
+ */
+export type AppTheme = 'dark' | 'light';
+
 export interface ReelsState {
   projectName: string;
   blocks: ScriptBlock[];
   audio: AudioState;
   selectedVoiceId: string;
-  aspect: '9:16' | '16:9' | '1:1';
+  aspect: '9:16' | '16:9' | '1:1' | 'carousel';
   avatarClips: Record<string, AvatarClipState>; // keyed by blockId
   avatarModel: HeyGenModelChoice;
   selectedPhotoId: string | null;
   takes: ScreenTake[];
   activeTakeId: string | null;
+  /** Global light/dark mode for motion generation. Default: 'dark'. */
+  motionColorMode: MotionColorMode;
+  /** App UI theme (top bar, panels, modals). Default: 'dark'. */
+  appTheme: AppTheme;
   /** Most recent video-reference analysis. Cleared by `replace-blocks` only when not provided. */
   lastAnalysis?: PersistedAnalysis;
   /** History of analyses (newest first). Capped to keep storage bounded. */
@@ -325,6 +348,8 @@ export type ReelsAction =
   | { type: 'set-emotion'; emotion: ReelEmotion }
   | { type: 'set-voice-speed'; speed: number }
   | { type: 'set-aspect'; aspect: ReelsState['aspect'] }
+  | { type: 'set-motion-color-mode'; mode: MotionColorMode }
+  | { type: 'set-app-theme'; theme: AppTheme }
   | { type: 'audio-start' }
   | { type: 'audio-success'; url: string; duration: number; peaks: number[]; words: WordTimestamp[]; voiceId: string }
   | { type: 'audio-error'; error: string }

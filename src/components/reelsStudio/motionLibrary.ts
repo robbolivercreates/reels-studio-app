@@ -51,6 +51,8 @@ export interface MotionConfig {
   generatedAt?: number;
   /** When the MP4 was last rendered. */
   renderedAt?: number;
+  /** Canvas aspect ratio used when generating this motion. '4:5' for carousel, '9:16' (default) for reels. */
+  canvasAspect?: '9:16' | '4:5';
   /**
    * Ordered snapshot of the user-attached assets at the moment this motion's
    * HTML was generated. Compared at regeneration time against

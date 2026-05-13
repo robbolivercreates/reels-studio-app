@@ -27,7 +27,7 @@ export interface RenderInputs {
   activeTake: ScreenTake | null;
   audioBlob: Blob;
   duration: number;          // seconds (raw audio duration)
-  aspect: '9:16' | '16:9' | '1:1';
+  aspect: '9:16' | '16:9' | '1:1' | 'carousel';
   quality: 'high' | 'lite';
   /** When provided, output skips silent regions; segments are in source time (0..duration). */
   silenceKeepSegments?: { start: number; end: number }[];
@@ -51,10 +51,12 @@ export interface RenderHandle {
 
 const FRAMERATE = 30;
 
-const dimensionsFor = (aspect: '9:16' | '16:9' | '1:1', quality: 'high' | 'lite'): { width: number; height: number } => {
+const dimensionsFor = (aspect: '9:16' | '16:9' | '1:1' | 'carousel', quality: 'high' | 'lite'): { width: number; height: number } => {
   const big = quality === 'high' ? 1080 : 720;
   if (aspect === '9:16') return { width: big, height: Math.round(big * 16 / 9) };
   if (aspect === '16:9') return { width: Math.round(big * 16 / 9), height: big };
+  // carousel = 4:5 Instagram portrait format (1080×1350)
+  if (aspect === 'carousel') return { width: big, height: Math.round(big * 5 / 4) };
   return { width: big, height: big };
 };
 

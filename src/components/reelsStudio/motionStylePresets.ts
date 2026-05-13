@@ -17,7 +17,8 @@ export type StylePresetId =
   | 'soft-pastel'
   | 'cinematic-dark'
   | 'apple-system'
-  | 'warm-editorial';
+  | 'warm-editorial'
+  | 'claude-ui';
 
 /**
  * Whether the preset's intrinsic mood is dark, light, or warm cream/paper.
@@ -482,3 +483,26 @@ FORBIDDEN — your output MUST NOT contain:
 - NESTED timed elements. Two elements that both carry data-start cannot be parent-and-child. The OUTER one must drop its timing (be a static <div>) or the INNER must drop its timing. Wrapping a <video data-start> inside a <div class="clip" data-start> is FORBIDDEN — lint code: video_nested_in_timed_element. Same applies to canvas/img inside a timed shell. Rule of thumb: if the inner element needs its own timeline (video, canvas with data-start), then the outer wrapper is a plain non-timed <div> with NO class="clip" and NO data-start.
 - two clips on the SAME data-track-index that overlap in time at all (lint code: overlapping_clips_same_track). Background layer (vignette, mesh, gradient, bg-shell) and any other element on track 0 ALWAYS collide — keep ONLY ONE element on track 0 (the background), and put everything else on tracks 1+. If you need both a brand-chrome layer AND a bg gradient, put bg on track 0 and chrome on track 1.
 `.trim();
+
+// ─── Native presets (no Gemini — HTML is built programmatically) ──────────
+
+/** Preset IDs that are handled natively in motionService (no Gemini call). */
+export const NATIVE_PRESET_IDS: StylePresetId[] = ['claude-ui'];
+
+// Append the claude-ui entry to the canonical preset list.
+STYLE_PRESETS.push({
+  id: 'claude-ui',
+  label: 'Claude UI',
+  description: 'Interface escura do Claude com digitação do comando e resposta animada.',
+  emoji: '🤖',
+  bestFor: 'Demonstrar comandos do Claude (Ultraplan, Powerup, Insight, etc.).',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#1c1c1c',
+    warmGlow:  { color: '#e07b54', alpha: 0.08, pos: '30% 40%' },
+    coolGlow:  { color: '#c84040', alpha: 0.06, pos: '70% 60%' },
+    vignetteIntensity: 0.55,
+  },
+  // No geminiBrief needed — motionService bypasses Gemini for this preset.
+  geminiBrief: '',
+});

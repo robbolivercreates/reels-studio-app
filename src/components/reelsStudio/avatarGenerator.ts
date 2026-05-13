@@ -20,7 +20,7 @@ const getHeyGenKey = (): string => {
 // Always render the HeyGen clip at 1920×1080. Reels in 9:16 or 1:1 crop/zoom on
 // the compositor side — this preserves the maximum information from HeyGen and
 // avoids in-render letterboxing that's impossible to recover from later.
-const dimensionsFor = (_aspect: '9:16' | '16:9' | '1:1'): { width: number; height: number } => {
+const dimensionsFor = (_aspect: '9:16' | '16:9' | '1:1' | 'carousel'): { width: number; height: number } => {
   return { width: 1920, height: 1080 };
 };
 
@@ -28,7 +28,7 @@ interface SubmitArgs {
   audioUrl: string;
   talkingPhotoId: string;
   model: HeyGenModel;
-  aspect: '9:16' | '16:9' | '1:1';
+  aspect: '9:16' | '16:9' | '1:1' | 'carousel';
 }
 
 const submitHeyGenJob = async ({ audioUrl, talkingPhotoId, model, aspect }: SubmitArgs, apiKey: string): Promise<string> => {
@@ -131,7 +131,7 @@ const pollUntilReady = async (
 export interface ClipGenerationOptions {
   talkingPhotoId: string;
   model: HeyGenModel;
-  aspect: '9:16' | '16:9' | '1:1';
+  aspect: '9:16' | '16:9' | '1:1' | 'carousel';
   signal?: AbortSignal;
   onClipUpdate: (blockId: string, update: ClipProgress) => void;
 }

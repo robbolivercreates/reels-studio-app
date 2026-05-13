@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { reducer, INITIAL_STATE } from './reelsStudio/reducer';
 import { useHistoryReducer } from './reelsStudio/useHistoryReducer';
 import { generateProjectAudio, estimateScriptDuration } from './reelsStudio/audioEngine';
@@ -12,8 +13,6 @@ import {
   type ClonedVoice,
 } from '../services/minimaxService';
 import { SaveVoiceModal } from './reelsStudio/SaveVoiceModal';
-import { ImportScriptModal } from './reelsStudio/ImportScriptModal';
-import { VideoReferenceModal } from './reelsStudio/VideoReferenceModal';
 import { ReferencesModal } from './reelsStudio/ReferencesModal';
 import type { PersistedAnalysis } from './reelsStudio/types';
 import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
@@ -29,6 +28,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { GenerateAvatarsModal } from './reelsStudio/GenerateAvatarsModal';
 import { ClipPreviewLightbox } from './reelsStudio/ClipPreviewLightbox';
 import { useReelsPersistence } from './reelsStudio/useReelsPersistence';
+import { useAgentSnapshotPublisher } from './agent/useAgentSnapshotPublisher';
+import { useAgentToolBridge } from './agent/useAgentToolBridge';
+import { AgentPanel } from './agent/AgentPanel';
 import { ScreenRecordingFlow } from './reelsStudio/ScreenRecordingFlow';
 import { TakesPanel } from './reelsStudio/TakesPanel';
 import { AddBrollModal } from './reelsStudio/AddBrollModal';
@@ -44,12 +46,16 @@ import { setCutSession, clearCutSession, getCutSession } from './reelsStudio/cut
 import { SilenceCutControl } from './reelsStudio/SilenceCutControl';
 import { computeLayout, hitTest, projectToSourceTime } from './reelsStudio/timeline';
 import { getLayoutSlots, LAYOUT_OPTIONS, defaultAvatarZoom } from './reelsStudio/layouts';
-import type { SilencePreset, BlockLayout, BlockTransition, LanguageOption } from './reelsStudio/types';
+import type { SilencePreset, BlockLayout, BlockTransition, LanguageOption, ReelsState } from './reelsStudio/types';
 import { ensureProfiles, outputLanguageToTts, type OutputLanguage } from './reelsStudio/voiceProfile';
 import { sliceAudioByBlocks } from './reelsStudio/audioSlicer';
 import { generateAvatarClips } from './reelsStudio/avatarGenerator';
 import { loadAvatarPhotos } from './reelsStudio/avatarPhotosStore';
 import { generateMockClip } from './reelsStudio/mockClipGenerator';
+import { renderMp4 } from './reelsStudio/mp4Renderer';
+import JSZip from 'jszip';
+import { CreationWizard } from './reelsStudio/CreationWizard';
+import { useTheme } from './reelsStudio/useTheme';
 
 const PRICE_PER_AVATAR_SECOND = 0.058;
 const PRICE_AUDIO = 0.04;
@@ -73,11 +79,16 @@ const formatRelativeTime = (ts: number): string => {
 export const ReelsStudio: React.FC = () => {
   const [state, dispatch, history] = useHistoryReducer(reducer, INITIAL_STATE);
   const { blocks, audio, selectedVoiceId, aspect, projectName, emotion, voiceSpeed } = state;
+
+  // Keep the Rust MCP server's snapshot in sync so the embedded agent can
+  // answer `list_blocks` / `read_block` without a roundtrip back to React.
+  useAgentSnapshotPublisher(state, projectName);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
 
   const [scriptOpen, setScriptOpen] = useState(true);
-  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [vibeExpanded, setVibeExpanded] = useState(false);
+  const [audioSectionExpanded, setAudioSectionExpanded] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   // 'new' = positive framing ("começar projeto novo"), 'clear' = destructive
   // ("limpar tudo"). Both run the same wipe; only the dialog copy changes.
@@ -85,11 +96,10 @@ export const ReelsStudio: React.FC = () => {
   const [clearing, setClearing] = useState(false);
   const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [saveVoiceModalOpen, setSaveVoiceModalOpen] = useState(false);
-  const [importModalOpen, setImportModalOpen] = useState(false);
-  const [videoRefModalOpen, setVideoRefModalOpen] = useState(false);
   const [referencesModalOpen, setReferencesModalOpen] = useState(false);
   const [reanalyzeMeta, setReanalyzeMeta] = useState<import('./reelsStudio/referenceVideoStore').ReferenceMeta | null>(null);
   /**
@@ -122,6 +132,10 @@ export const ReelsStudio: React.FC = () => {
   const [savedProjects, setSavedProjects] = useState<NamedProjectMeta[]>([]);
   const [savingNamed, setSavingNamed] = useState(false);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
+  const [carouselExportStatus, setCarouselExportStatus] = useState<string | null>(null);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardInitialFormat, setWizardInitialFormat] = useState<'reel' | 'carousel' | undefined>(undefined);
+  const [carouselPreviewId, setCarouselPreviewId] = useState<string | null>(null);
 
   // Drag-to-reorder timeline blocks (by id). dragOverIndex = where to drop in
   // the avatar+broll combined sequence. Both null when not dragging.
@@ -210,6 +224,121 @@ export const ReelsStudio: React.FC = () => {
     }
   };
 
+  const handleCarouselExport = async () => {
+    if (blocks.length === 0) { alert('Adicione blocos antes de exportar o carrossel.'); return; }
+    setExportMenuOpen(false);
+    setCarouselExportStatus('Preparando...');
+    try {
+      // Resolve audio blob — same priority order as ExportRenderModal.
+      const { getCutSession } = await import('./reelsStudio/cutSession');
+      const cutSession = getCutSession();
+      const { loadAudioBlob } = await import('./reelsStudio/persistence');
+      let audioBlob: Blob | null = null;
+      if (cutSession) {
+        audioBlob = cutSession.audioBlob;
+      } else if (state.audio.url) {
+        try { audioBlob = await fetch(state.audio.url).then(r => r.blob()); } catch { /* fall through */ }
+      }
+      if (!audioBlob) audioBlob = await loadAudioBlob();
+      if (!audioBlob && state.audio.url) {
+        try { audioBlob = await fetch(state.audio.url).then(r => r.blob()); } catch { /* ignore */ }
+      }
+
+      const effectiveBlocks = cutSession ? cutSession.blocks : state.blocks;
+      const activeTake = state.takes.find(t => t.id === state.activeTakeId) ?? null;
+
+      // Pre-slice audio into per-block WAV blobs using the existing audioSlicer utility.
+      let audioSlices: import('./reelsStudio/audioSlicer').AudioSlice[] = [];
+      if (audioBlob) {
+        try {
+          const { sliceAudioByBlocks: sliceAudio } = await import('./reelsStudio/audioSlicer');
+          audioSlices = await sliceAudio(
+            audioBlob,
+            effectiveBlocks.map(b => ({ blockId: b.id, start: b.start, end: b.end })),
+          );
+        } catch { /* render without per-block audio if slice fails */ }
+      }
+
+      const zip = new JSZip();
+      const { invoke: tauriInvoke } = await import('@tauri-apps/api/core');
+
+      const arrayBufferToBase64 = (buf: Uint8Array): string => {
+        let binary = '';
+        for (let b = 0; b < buf.length; b++) binary += String.fromCharCode(buf[b]);
+        return btoa(binary);
+      };
+      const CHUNK = 1024 * 1024;
+
+      const writeFile = async (path: string, blob: Blob) => {
+        await tauriInvoke('truncate_file', { targetPath: path });
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        for (let off = 0; off < bytes.length; off += CHUNK) {
+          await tauriInvoke('append_chunk_to_file', { targetPath: path, base64Chunk: arrayBufferToBase64(bytes.subarray(off, Math.min(bytes.length, off + CHUNK))) });
+        }
+      };
+
+      for (let i = 0; i < effectiveBlocks.length; i++) {
+        const block = effectiveBlocks[i];
+        const blockDuration = block.end - block.start;
+        if (blockDuration <= 0) continue;
+
+        setCarouselExportStatus(`Renderizando slide ${i + 1}/${effectiveBlocks.length}...`);
+
+        // Remap block to start at 0 for the renderer.
+        const singleBlock = { ...block, start: 0, end: blockDuration };
+        const blockAudioBlob = audioSlices.find(s => s.blockId === block.id)?.blob ?? audioBlob;
+
+        const handle = renderMp4(
+          {
+            blocks: [singleBlock],
+            avatarClips: state.avatarClips,
+            activeTake,
+            audioBlob: blockAudioBlob ?? new Blob(),
+            duration: blockDuration,
+            aspect: 'carousel',
+            quality: 'high',
+            videoOnly: true,
+          },
+          () => {},
+        );
+        const silentBlob = await handle.promise;
+
+        const slideNum = String(i + 1).padStart(2, '0');
+        const tmpBase = `/tmp/carousel_${Date.now()}_s${i}`;
+        const videoPath = `${tmpBase}_video.mp4`;
+        const audioPath = `${tmpBase}_audio.wav`;
+        const outputPath = `${tmpBase}_final.mp4`;
+
+        await writeFile(videoPath, silentBlob);
+
+        if (blockAudioBlob) {
+          await writeFile(audioPath, blockAudioBlob);
+          await tauriInvoke('mux_video_audio_ffmpeg', { videoPath, audioPath, outputPath });
+          const muxedBytes: number[] = await tauriInvoke('read_reference_bytes', { referencePath: outputPath });
+          zip.file(`slide_${slideNum}.mp4`, new Uint8Array(muxedBytes));
+        } else {
+          zip.file(`slide_${slideNum}.mp4`, silentBlob);
+        }
+      }
+
+      setCarouselExportStatus('Comprimindo zip...');
+      const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 1 } });
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${state.projectName || 'carrossel'}_slides.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setCarouselExportStatus(`✓ ${effectiveBlocks.length} slides baixados`);
+      setTimeout(() => setCarouselExportStatus(null), 5000);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao exportar carrossel';
+      console.error('[reels/carousel-export]', err);
+      setCarouselExportStatus(`⚠ ${msg}`);
+      setTimeout(() => setCarouselExportStatus(null), 8000);
+    }
+  };
+
   const handleNewTake = (take: ScreenTake) => {
     dispatch({ type: 'add-take', take });
     // Auto-open the review modal so the user can trim + cut silence right away.
@@ -292,6 +421,8 @@ export const ReelsStudio: React.FC = () => {
         emotion: snapshot.emotion ?? 'neutral',
         voiceSpeed: snapshot.voiceSpeed ?? 1.0,
         analyses: snapshot.analyses ?? (snapshot.lastAnalysis ? [snapshot.lastAnalysis] : []),
+        motionColorMode: (snapshot as unknown as ReelsState).motionColorMode ?? 'dark',
+        appTheme: (snapshot as unknown as ReelsState).appTheme ?? 'dark',
       };
       dispatch({ type: 'hydrate', state: restoredState });
       setProjectsOpen(false);
@@ -507,7 +638,13 @@ export const ReelsStudio: React.FC = () => {
             originalDuration,
             originalPeaks,
           });
-          appliedKeepRef.current = protectedKeep.map(k => ({ ...k }));
+          // Track the ORIGINAL detected segments (not `protectedKeep`).
+          // `applyLipsyncRule` may add extra ranges to preserve speech rhythm
+          // inside avatar blocks, so `protectedKeep.length` ≠ `keepSegments.length`.
+          // If we stored the expanded set, the next effect run would always
+          // see `segsChanged=true` (length mismatch) and trigger a revert
+          // → re-detect → re-apply loop that flashes the timeline.
+          appliedKeepRef.current = a.keepSegments.map(k => ({ ...k }));
           // Module-level singleton — survives HMR remounts and reducer races
           // that would blank a useRef on the component instance.
           setCutSession({ audioBlob: cutBlob, blocks: remappedBlocks, duration: cutDuration });
@@ -823,13 +960,16 @@ export const ReelsStudio: React.FC = () => {
       }
       const hasPinnedAssets = pinnedAssets.length > 0;
 
-      // Layer choice when assets are attached:
-      //   - Avatar block: split-top (assets on the top half, avatar fills bottom)
-      //   - B-roll block: replace (no avatar exists, so motion + assets fill
-      //     the entire 1080×1920 frame; otherwise the bottom half would be black).
-      const effectiveLayer = hasPinnedAssets
-        ? (block.kind === 'broll' ? 'replace' : 'split-top')
-        : seed.layer;
+      // Carousel slides have no avatar — always use 'replace' (full-frame motion).
+      // Reel blocks: split-top when assets attached (assets top, avatar bottom);
+      // broll replace; otherwise seed default.
+      const isCarousel = aspect === 'carousel';
+      const effectiveLayer = isCarousel
+        ? 'replace'
+        : hasPinnedAssets
+          ? (block.kind === 'broll' ? 'replace' : 'split-top')
+          : seed.layer;
+      const canvasAspect: '9:16' | '4:5' = isCarousel ? '4:5' : '9:16';
 
       // Universal asset list: only forward it to Gemini if NO block in the reel
       // has explicit pinned assets. Otherwise the model may "borrow" assets
@@ -843,6 +983,7 @@ export const ReelsStudio: React.FC = () => {
         durationSec: seed.durationSec,
         compositionId: seed.id,
         motionLayer: effectiveLayer,
+        canvasAspect,
         projectAssets: hasPinnedAssets ? undefined : universalAssetsToSend,
         pinnedAssets: hasPinnedAssets ? pinnedAssets : undefined,
         reelContext: {
@@ -858,6 +999,7 @@ export const ReelsStudio: React.FC = () => {
         },
         // Reuse the reel's brand identity so all motions stay visually consistent.
         existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
+        motionColorMode: state.motionColorMode ?? 'dark',
         // Match motion text language to the script language (TTS override wins
         // over the active voice profile, same precedence used for audio).
         outputLanguage: (() => {
@@ -883,6 +1025,7 @@ export const ReelsStudio: React.FC = () => {
         html: sanitizedHtml,
         status: 'rendering',
         generatedAt: Date.now(),
+        canvasAspect,
         // Snapshot the carousel at generation time — used later to detect
         // staleness (user added/removed/reordered/swapped an asset).
         assetSnapshots: hasPinnedAssets
@@ -892,7 +1035,7 @@ export const ReelsStudio: React.FC = () => {
       dispatch({ type: 'set-block-motion', id: blockId, motion: generated });
 
       setBusy('Renderizando…');
-      const fullHtml = buildFullHtmlDoc(generated);
+      const fullHtml = buildFullHtmlDoc(generated, canvasAspect, state.motionColorMode ?? 'dark');
       await invoke('save_motion_html', { motionId: generated.id, html: fullHtml });
       const rendered = await invoke<{ mp4_path: string; size_bytes: number }>(
         'render_motion', { motionId: generated.id },
@@ -938,7 +1081,7 @@ export const ReelsStudio: React.FC = () => {
         ...motion,
         html: motion.html.replace(/repeat\s*:\s*-1/g, () => `repeat: Math.floor(${motion.durationSec} / 0.8) - 1`),
       };
-      const fullHtml = buildFullHtmlDoc(sanitizedMotion);
+      const fullHtml = buildFullHtmlDoc(sanitizedMotion, motion.canvasAspect, state.motionColorMode ?? 'dark');
       await invoke('save_motion_html', { motionId: motion.id, html: fullHtml });
       const rendered = await invoke<{ mp4_path: string; size_bytes: number }>(
         'render_motion', { motionId: motion.id },
@@ -978,6 +1121,60 @@ export const ReelsStudio: React.FC = () => {
       }
     }
   }, [blocks, motionBusyByBlock, handleAutoMotion, handleRenderMotionMp4]);
+
+  /// Batch motion pipeline — called by the agent's
+  /// `generate_motion_for_blocks` tool. Runs each block in sequence so:
+  /// (a) only one Chromium spawns at a time (the bottleneck), and
+  /// (b) Gemini Pro rate-limits stay happy.
+  ///
+  /// For blocks that already have HTML set (Claude-mode passthrough already
+  /// dispatched set-block-motion with html before this runs), we skip the
+  /// Gemini step via handleRenderMotionMp4. Blocks without HTML go through
+  /// the full handleAutoMotion pipeline.
+  ///
+  /// Returns `{ ok, failed, failedIds }` so the agent can summarize.
+  const handleAutoMotionMany = useCallback(
+    async (
+      ids: string[],
+    ): Promise<{ ok: number; failed: number; failedIds: string[] }> => {
+      let ok = 0;
+      let failed = 0;
+      const failedIds: string[] = [];
+
+      for (const id of ids) {
+        try {
+          // Each block processed in sequence. handleAutoMotion / handle-
+          // RenderMotionMp4 read `blocks` from their own captured closure,
+          // which is fine because they're dispatched-via-reducer and the
+          // reducer state at the time of the next iteration reflects the
+          // previous one's dispatch.
+          const target = blocks.find(b => b.id === id);
+          if (!target) {
+            failed += 1;
+            failedIds.push(id);
+            continue;
+          }
+          if (motionBusyByBlock[id]) {
+            // Already in-flight (e.g. user clicked Motion on this block
+            // manually right before the batch). Skip silently.
+            continue;
+          }
+          if (target.motion?.html) {
+            await handleRenderMotionMp4(id);
+          } else {
+            await handleAutoMotion(id);
+          }
+          ok += 1;
+        } catch (e) {
+          console.warn('[batch-motion] block', id, 'failed:', e);
+          failed += 1;
+          failedIds.push(id);
+        }
+      }
+      return { ok, failed, failedIds };
+    },
+    [blocks, motionBusyByBlock, handleAutoMotion, handleRenderMotionMp4],
+  );
 
   const handleGenerateClips = useCallback(async (photoId: string, model: 'avatar3' | 'avatar4') => {
     if (!audio.url || avatarBlocks.length === 0) return;
@@ -1046,6 +1243,31 @@ export const ReelsStudio: React.FC = () => {
       setGeneratingClips(false);
     }
   }, [avatarBlocks]);
+
+  // Bridge MCP tool calls from the Rust side into reducer dispatches +
+  // service calls. Mounted once after all handlers are declared so the
+  // bridge can wire each agent capability to its underlying handler.
+  useAgentToolBridge({
+    state,
+    dispatch,
+    onGenerateAudio: handleGenerate,
+    onGenerateMotionForBlock: handleAutoMotion,
+    onGenerateMotionForBlocks: handleAutoMotionMany,
+    onRenderAllMotions: handleRenderAllMotions,
+    onGenerateAvatarClips: async (mock: boolean) => {
+      if (mock) {
+        await handleGenerateMockClips();
+        return;
+      }
+      if (state.selectedPhotoId) {
+        await handleGenerateClips(state.selectedPhotoId, state.avatarModel);
+      }
+    },
+    onApplyCaption: (caption, opts) => {
+      setCaptionText(caption);
+      if (opts?.openModal) setCaptionOpen(true);
+    },
+  });
 
   // ─── Audio playback sync ──────────────────────────────────────────────
   useEffect(() => {
@@ -1350,7 +1572,7 @@ export const ReelsStudio: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoom, playheadPct]);
 
-  const aspectClass = aspect === '9:16' ? 'aspect-[9/16] h-full' : aspect === '16:9' ? 'aspect-video w-full max-w-3xl' : 'aspect-square h-full';
+  const aspectClass = aspect === '9:16' ? 'aspect-[9/16] h-full' : aspect === '16:9' ? 'aspect-video w-full max-w-3xl' : aspect === 'carousel' ? 'aspect-[4/5] h-full' : 'aspect-square h-full';
 
   const layoutHit = hitTest(layout, playhead);
   const currentBlock = layoutHit.kind === 'block'
@@ -1378,6 +1600,12 @@ export const ReelsStudio: React.FC = () => {
   useEffect(() => {
     setPreviewVideoError(null);
   }, [currentClip?.videoUrl]);
+
+  // Keep carousel preview pointing at the first slide after blocks are replaced.
+  useEffect(() => {
+    if (aspect === 'carousel') setCarouselPreviewId(blocks[0]?.id ?? null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aspect, blocks[0]?.id]);
 
   // ─── Global keyboard shortcuts (CapCut-style) ─────────────────────────
   // Refs keep the handler stable across renders without exhaustive-deps churn.
@@ -1421,6 +1649,13 @@ export const ReelsStudio: React.FC = () => {
 
       const r = shortcutRefs.current;
       const mod = e.metaKey || e.ctrlKey;
+
+      // ⌘L / Ctrl+L — toggle the embedded agent panel. Works from anywhere.
+      if (mod && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault();
+        setAgentPanelOpen(o => !o);
+        return;
+      }
 
       // Undo / Redo — works even inside inputs (browsers usually do this anyway,
       // but our reducer-history is the source of truth here).
@@ -1530,215 +1765,468 @@ export const ReelsStudio: React.FC = () => {
   }, [playhead, playing, currentBlock, currentClip, slotById]);
 
   const statusPill = (() => {
-    if (audio.status === 'generating') return { dot: 'bg-violet-400 animate-pulse', cls: 'bg-violet-500/10 text-violet-300 border-violet-500/20', text: 'Gerando áudio...' };
+    if (audio.status === 'generating') return { dotColor: 'warn' as const, pulse: true, text: 'Gerando áudio...' };
     if (audio.status === 'ready') {
       const cutSuffix = state.audio.silenceCut && state.audio.detectedSilenceSec >= 0.1
         ? ` · ✂ ${formatTime(audioEffectiveDuration)}`
         : '';
-      return { dot: 'bg-emerald-400 animate-pulse', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20', text: `Áudio pronto · ${formatTime(audio.duration)}${cutSuffix} · ${selectedVoiceLabel.label}` };
+      return { dotColor: 'ok' as const, pulse: true, text: `Áudio pronto · ${formatTime(audio.duration)}${cutSuffix} · ${selectedVoiceLabel.label}` };
     }
-    if (audio.status === 'error')      return { dot: 'bg-red-400', cls: 'bg-red-500/10 text-red-400 border-red-500/20', text: audio.error ?? 'Erro' };
-    return { dot: 'bg-zinc-500', cls: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20', text: 'Sem áudio · gere pra começar' };
+    if (audio.status === 'error')      return { dotColor: 'err' as const, pulse: false, text: audio.error ?? 'Erro' };
+    return { dotColor: 'pending' as const, pulse: false, text: 'Sem áudio · gere pra começar' };
   })();
 
+  const tokens = useTheme(state.appTheme);
+  const isLight = (state.appTheme ?? 'dark') === 'light';
+
+  // Sync data-theme attribute on <body> so global CSS variables in index.html
+  // resolve correctly. Affects scrollbars, default form colors, and any class
+  // that uses `bg-surface`/`text-primary` etc.
+  useEffect(() => {
+    document.body.setAttribute('data-theme', state.appTheme ?? 'dark');
+  }, [state.appTheme]);
+  const exportEnabled = audio.status === 'ready' && blocks.length > 0;
+
   return (
-    <div className="flex flex-col h-full bg-[#0A0A0B] text-zinc-50" style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", system-ui, sans-serif' }}>
+    <div
+      className="flex flex-row h-full"
+      style={{
+        backgroundColor: tokens.bg.canvas,
+        color: tokens.text.primary,
+        fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
+      }}
+    >
+      {/* Main editor column — shrinks when the agent panel opens. */}
+      <div className="flex flex-col min-w-0 flex-1 h-full">
       {/* ─── TOP BAR ─────────────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-5 h-14 border-b border-white/5 bg-[#141416]/60 backdrop-blur-xl shrink-0">
-        <div className="flex items-center gap-3">
-          <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-violet-500 to-violet-700 flex items-center justify-center shadow-[0_0_20px_rgba(124,58,237,0.4)]">
-            <svg className="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.069A1 1 0 0121 8.867V15.133a1 1 0 01-1.447.902L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </div>
+      <div
+        className="flex items-center justify-between px-5 h-14 shrink-0"
+        style={{
+          backgroundColor: tokens.bg.surface,
+          borderBottom: `1px solid ${tokens.border.subtle}`,
+        }}
+      >
+        {/* Left: project name */}
+        <div className="flex items-center min-w-0">
           <input
             value={projectName}
             onChange={e => dispatch({ type: 'set-name', name: e.target.value })}
-            className="bg-transparent text-sm font-semibold text-zinc-100 outline-none focus:bg-white/5 px-2 py-1 rounded-md transition-colors w-48"
+            className="bg-transparent text-sm font-semibold outline-none px-2 py-1 rounded-md transition-colors w-56 truncate"
+            style={{ color: tokens.text.primary }}
+            onFocus={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+            onBlur={e => e.currentTarget.style.backgroundColor = 'transparent'}
+            placeholder="Projeto sem nome"
           />
         </div>
 
-        <div className="flex items-center gap-2 text-xs">
-          <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border ${statusPill.cls}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${statusPill.dot}`}></span>
-            {statusPill.text}
-          </span>
+        {/* Center: status pill (dot + text, no background) */}
+        <div className="flex items-center gap-1.5 text-xs" style={{ color: tokens.text.secondary }}>
+          <span
+            className={`w-1.5 h-1.5 rounded-full ${statusPill.pulse ? 'animate-pulse' : ''}`}
+            style={{ backgroundColor: tokens.status[statusPill.dotColor] }}
+          />
+          <span className="tabular-nums">{statusPill.text}</span>
+          {saving && (
+            <span className="ml-2" style={{ color: tokens.text.tertiary }}>· salvando…</span>
+          )}
+          {!saving && savedAt && (
+            <span className="ml-2" style={{ color: tokens.text.tertiary }}>· salvo {formatRelativeTime(savedAt)}</span>
+          )}
         </div>
 
+        {/* Right: aspect, overflow menu, export */}
         <div className="flex items-center gap-2">
+          {/* Aspect switcher — icon only */}
           <div className="relative">
-            <button onClick={() => setAspectMenuOpen(o => !o)} className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-medium text-zinc-300 flex items-center gap-1.5 transition-colors">
-              {aspect}
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+            <button
+              onClick={() => setAspectMenuOpen(o => !o)}
+              className="h-9 min-w-9 px-2.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors"
+              style={{ color: tokens.text.secondary, backgroundColor: aspectMenuOpen ? tokens.bg.active : 'transparent' }}
+              onMouseEnter={e => { if (!aspectMenuOpen) e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
+              onMouseLeave={e => { if (!aspectMenuOpen) e.currentTarget.style.backgroundColor = 'transparent'; }}
+              title={`Proporção: ${aspect === 'carousel' ? '4:5 Carrossel' : aspect}`}
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                <rect x="6" y="3" width="12" height="18" rx="2" />
+              </svg>
+              <span>{aspect === 'carousel' ? '4:5' : aspect}</span>
             </button>
             {aspectMenuOpen && (
-              <div className="absolute right-0 top-full mt-1 bg-[#1C1C1F] border border-white/10 rounded-lg shadow-2xl py-1 min-w-[100px] z-50">
+              <div
+                className="absolute right-0 top-full mt-1 rounded-lg shadow-2xl py-1 min-w-[160px] z-50"
+                style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}` }}
+              >
                 {(['9:16','16:9','1:1'] as const).map(a => (
-                  <button key={a} onClick={() => { dispatch({ type: 'set-aspect', aspect: a }); setAspectMenuOpen(false); }} className={`w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 ${aspect === a ? 'text-violet-400' : 'text-zinc-300'}`}>{a}</button>
+                  <button
+                    key={a}
+                    onClick={() => { dispatch({ type: 'set-aspect', aspect: a }); setAspectMenuOpen(false); }}
+                    className="w-full text-left px-3 py-1.5 text-xs transition-colors"
+                    style={{ color: aspect === a ? tokens.accent.focus : tokens.text.secondary }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >{a}</button>
                 ))}
+                <div className="my-1" style={{ borderTop: `1px solid ${tokens.border.subtle}` }} />
+                <button
+                  onClick={() => {
+                    dispatch({ type: 'set-aspect', aspect: 'carousel' });
+                    setAspectMenuOpen(false);
+                    // Empty project + carousel → open wizard with carousel preselected,
+                    // skipping the format step entirely.
+                    if (blocks.length === 0) {
+                      setWizardInitialFormat('carousel');
+                      setWizardOpen(true);
+                    }
+                  }}
+                  className="w-full text-left px-3 py-1.5 text-xs transition-colors flex items-center gap-2"
+                  style={{ color: aspect === 'carousel' ? tokens.accent.focus : tokens.text.secondary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <span>4:5</span>
+                  <span className="text-[10px]" style={{ color: tokens.text.tertiary }}>Carrossel</span>
+                </button>
               </div>
             )}
           </div>
 
-          {capcutExportStatus && (
-            <span className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-xs font-medium text-emerald-200 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              {capcutExportStatus}
-            </span>
-          )}
-
-          <span
-            className="px-3 py-1.5 rounded-lg bg-white/5 text-xs font-medium text-zinc-400 flex items-center gap-1.5"
-            title={savedAt ? new Date(savedAt).toLocaleString() : 'Ainda não salvo'}
-          >
-            {saving ? (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse"></span>
-                Salvando...
-              </>
-            ) : savedAt ? (
-              <>
-                <svg className="w-3 h-3 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                </svg>
-                Salvo · {formatRelativeTime(savedAt)}
-              </>
-            ) : (
-              <>
-                <span className="w-1.5 h-1.5 rounded-full bg-zinc-600"></span>
-                Não salvo
-              </>
-            )}
-          </span>
-          <button
-            onClick={() => setReferencesModalOpen(true)}
-            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-violet-500/20 hover:text-violet-300 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5"
-            title="Referências analisadas"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
-            </svg>
-            {state.analyses.length > 0 && (
-              <span className="text-[9px] font-mono text-zinc-500">{state.analyses.length}</span>
-            )}
-          </button>
-          <button
-            onClick={handleSaveNamed}
-            disabled={savingNamed}
-            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/20 hover:text-emerald-300 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5 disabled:opacity-50"
-            title="Salvar projeto na lista"
-          >
-            {savingNamed ? (
-              <span className="w-3.5 h-3.5 border border-zinc-400 border-t-transparent rounded-full animate-spin" />
-            ) : (
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-              </svg>
-            )}
-            <span>Salvar</span>
-          </button>
-          <button
-            onClick={handleOpenProjects}
-            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-violet-500/20 hover:text-violet-300 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5"
-            title="Meus projetos salvos"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
-            </svg>
-            <span>Projetos</span>
-          </button>
-          <button
-            onClick={() => { setConfirmClearMode('new'); setConfirmClearOpen(true); }}
-            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-violet-500/20 hover:text-violet-200 text-xs font-medium text-zinc-400 transition-colors flex items-center gap-1.5"
-            title="Começar um novo projeto"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            <span>Novo</span>
-          </button>
-          <button
-            onClick={() => { setConfirmClearMode('clear'); setConfirmClearOpen(true); }}
-            className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-300 text-xs font-medium text-zinc-400 transition-colors"
-            title="Limpar tudo (destrutivo)"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
-            </svg>
-          </button>
-
+          {/* Overflow menu (···) — consolidates Salvar / Projetos / Novo / Referências / Importar / Tema / Settings / Limpar */}
           <div className="relative">
-            <button onClick={() => setExportMenuOpen(o => !o)} className="px-4 py-1.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white flex items-center gap-1.5 shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-all">
+            <button
+              onClick={() => setOverflowMenuOpen(o => !o)}
+              className="h-9 w-9 rounded-lg flex items-center justify-center transition-colors"
+              style={{ color: tokens.text.secondary, backgroundColor: overflowMenuOpen ? tokens.bg.active : 'transparent' }}
+              onMouseEnter={e => { if (!overflowMenuOpen) e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
+              onMouseLeave={e => { if (!overflowMenuOpen) e.currentTarget.style.backgroundColor = 'transparent'; }}
+              title="Mais opções"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <circle cx="5" cy="12" r="1" />
+                <circle cx="12" cy="12" r="1" />
+                <circle cx="19" cy="12" r="1" />
+              </svg>
+            </button>
+            {overflowMenuOpen && (
+              <div
+                className="absolute right-0 top-full mt-1 rounded-lg shadow-2xl py-1.5 min-w-[260px] z-50 max-h-[80vh] overflow-y-auto"
+                style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}` }}
+                onMouseLeave={() => setOverflowMenuOpen(false)}
+              >
+                {/* Group: Project */}
+                <div className="px-3 pb-1 text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>Projeto</div>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); handleSaveNamed(); }}
+                  disabled={savingNamed}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors disabled:opacity-50"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
+                  </svg>
+                  <span>Salvar projeto</span>
+                </button>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); handleOpenProjects(); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 19a2 2 0 01-2-2V7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v1M5 19h14a2 2 0 002-2v-5a2 2 0 00-2-2H9a2 2 0 00-2 2v5a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>Meus projetos</span>
+                </button>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); setConfirmClearMode('new'); setConfirmClearOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  <span>Novo projeto</span>
+                </button>
+
+                <div className="my-1.5" style={{ borderTop: `1px solid ${tokens.border.subtle}` }} />
+
+                {/* Group: Content */}
+                <div className="px-3 pb-1 text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>Conteúdo</div>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); setReferencesModalOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                  </svg>
+                  <span className="flex-1">Referências analisadas</span>
+                  {state.analyses.length > 0 && (
+                    <span className="text-[10px] tabular-nums" style={{ color: tokens.text.tertiary }}>{state.analyses.length}</span>
+                  )}
+                </button>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); setWizardInitialFormat(undefined); setWizardOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+                  </svg>
+                  <span>Criar com IA</span>
+                </button>
+                <div className="my-1.5" style={{ borderTop: `1px solid ${tokens.border.subtle}` }} />
+
+                {/* Group: System */}
+                <div className="px-3 pb-1 text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>Sistema</div>
+                {/* App theme segmented control */}
+                <div className="px-3 py-1.5">
+                  <div className="text-[10px] mb-1" style={{ color: tokens.text.secondary }}>Tema do app</div>
+                  <div className="flex rounded-md p-0.5" style={{ backgroundColor: tokens.bg.hover }}>
+                    <button
+                      onClick={() => dispatch({ type: 'set-app-theme', theme: 'light' })}
+                      className="flex-1 px-2 py-1 rounded text-[11px] flex items-center justify-center gap-1 transition-colors"
+                      style={{
+                        backgroundColor: isLight ? tokens.bg.surface : 'transparent',
+                        color: isLight ? tokens.text.primary : tokens.text.secondary,
+                      }}
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <circle cx="12" cy="12" r="4" />
+                        <path strokeLinecap="round" d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4L7 17M17 7l1.4-1.4" />
+                      </svg>
+                      Claro
+                    </button>
+                    <button
+                      onClick={() => dispatch({ type: 'set-app-theme', theme: 'dark' })}
+                      className="flex-1 px-2 py-1 rounded text-[11px] flex items-center justify-center gap-1 transition-colors"
+                      style={{
+                        backgroundColor: !isLight ? tokens.bg.surface : 'transparent',
+                        color: !isLight ? tokens.text.primary : tokens.text.secondary,
+                      }}
+                    >
+                      <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
+                      </svg>
+                      Escuro
+                    </button>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); setSettingsOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span>Configurações</span>
+                </button>
+
+                <div className="my-1.5" style={{ borderTop: `1px solid ${tokens.border.subtle}` }} />
+
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); setConfirmClearMode('clear'); setConfirmClearOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.status.err }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
+                  </svg>
+                  <span>Limpar tudo</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Agents — toggles the embedded Claude Code chat panel. */}
+          <button
+            onClick={() => setAgentPanelOpen(o => !o)}
+            className="h-9 px-3 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all"
+            style={{
+              backgroundColor: agentPanelOpen ? tokens.accent.bg : tokens.bg.elevated,
+              color: agentPanelOpen ? tokens.accent.fg : tokens.text.primary,
+              border: `1px solid ${agentPanelOpen ? tokens.accent.bg : tokens.border.subtle}`,
+            }}
+            title="Abrir chat do agente (⌘L)"
+          >
+            <span>✨</span>
+            Agents
+          </button>
+
+          {/* Export — single primary CTA. Dim until actionable. */}
+          <div className="relative">
+            <button
+              onClick={() => setExportMenuOpen(o => !o)}
+              disabled={!exportEnabled}
+              className="h-9 px-4 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-all disabled:cursor-not-allowed"
+              style={{
+                backgroundColor: tokens.accent.bg,
+                color: tokens.accent.fg,
+                opacity: exportEnabled ? 1 : 0.4,
+              }}
+              onMouseEnter={e => { if (exportEnabled) e.currentTarget.style.opacity = '0.9'; }}
+              onMouseLeave={e => { if (exportEnabled) e.currentTarget.style.opacity = '1'; }}
+              title={exportEnabled ? 'Exportar projeto' : 'Gere áudio e adicione blocos antes de exportar'}
+            >
               Exportar
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
             </button>
             {exportMenuOpen && (
-              <div className="absolute right-0 top-full mt-1 bg-[#1C1C1F] border border-white/10 rounded-lg shadow-2xl py-1 min-w-[260px] z-50">
-                <button
-                  onClick={() => { setExportMenuOpen(false); setExportOpen(true); }}
-                  className="w-full text-left px-3 py-2 hover:bg-violet-500/10 transition-colors flex items-center gap-2"
-                >
-                  <span className="w-7 h-7 rounded-md bg-violet-500/20 flex items-center justify-center text-violet-300">
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                  </span>
-                  <div className="flex-1">
-                    <div className="text-xs text-zinc-100 font-semibold">MP4 Final · renderizar agora</div>
-                    <div className="text-[10px] text-zinc-500">WebCodecs · pronto pra postar</div>
-                  </div>
-                </button>
-                <button disabled className="w-full text-left px-3 py-2 opacity-40 cursor-not-allowed flex items-center gap-2">
-                  <span className="w-7 h-7 rounded-md bg-white/5 flex items-center justify-center text-zinc-500">📦</span>
-                  <div className="flex-1">
-                    <div className="text-xs text-zinc-300 font-medium">Pacote de assets (.zip)</div>
-                    <div className="text-[10px] text-zinc-500">Em breve</div>
-                  </div>
-                </button>
-                <button
-                  onClick={handleCapcutExport}
-                  disabled={audio.status !== 'ready'}
-                  className="w-full text-left px-3 py-2 hover:bg-emerald-500/10 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <span className="w-7 h-7 rounded-md bg-emerald-500/20 flex items-center justify-center text-emerald-300">🎞️</span>
-                  <div className="flex-1">
-                    <div className="text-xs text-zinc-100 font-semibold">Enviar pro CapCut</div>
-                    <div className="text-[10px] text-zinc-500">Aparece em "Recentes" · timeline montada</div>
-                  </div>
-                </button>
-                <button
-                  onClick={handleCapcutDownloadZip}
-                  disabled={audio.status !== 'ready'}
-                  className="w-full text-left px-3 py-2 hover:bg-white/5 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  <span className="w-7 h-7 rounded-md bg-white/5 flex items-center justify-center text-zinc-400">📦</span>
-                  <div className="flex-1">
-                    <div className="text-xs text-zinc-300 font-medium">Baixar pacote (.zip)</div>
-                    <div className="text-[10px] text-zinc-500">FCPXML + mídias · pra outros editores</div>
-                  </div>
-                </button>
+              <div
+                className="absolute right-0 top-full mt-1 rounded-lg shadow-2xl py-1 min-w-[260px] z-50"
+                style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}` }}
+              >
+                {aspect === 'carousel' ? (
+                  <button
+                    onClick={handleCarouselExport}
+                    disabled={blocks.length === 0 || !!carouselExportStatus}
+                    className="w-full text-left px-3 py-2 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ color: tokens.text.primary }}
+                    onMouseEnter={e => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  >
+                    <span className="w-7 h-7 rounded-md flex items-center justify-center" style={{ backgroundColor: tokens.bg.hover, color: tokens.text.secondary }}>
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 10h16M4 14h16M4 18h16" />
+                      </svg>
+                    </span>
+                    <div className="flex-1">
+                      <div className="text-xs font-semibold">Exportar carrossel</div>
+                      <div className="text-[10px]" style={{ color: tokens.text.tertiary }}>{blocks.length} slide{blocks.length !== 1 ? 's' : ''} · MP4 individuais em .zip</div>
+                    </div>
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={() => { setExportMenuOpen(false); setExportOpen(true); }}
+                      className="w-full text-left px-3 py-2 transition-colors flex items-center gap-2"
+                      style={{ color: tokens.text.primary }}
+                      onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                      onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      <span className="w-7 h-7 rounded-md flex items-center justify-center" style={{ backgroundColor: tokens.bg.hover, color: tokens.text.secondary }}>
+                        <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                      </span>
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold">MP4 final · renderizar agora</div>
+                        <div className="text-[10px]" style={{ color: tokens.text.tertiary }}>WebCodecs · pronto pra postar</div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={handleCapcutExport}
+                      disabled={audio.status !== 'ready'}
+                      className="w-full text-left px-3 py-2 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{ color: tokens.text.primary }}
+                      onMouseEnter={e => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
+                      onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      <span className="w-7 h-7 rounded-md flex items-center justify-center" style={{ backgroundColor: tokens.bg.hover, color: tokens.text.secondary }}>🎞️</span>
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold">Enviar pro CapCut</div>
+                        <div className="text-[10px]" style={{ color: tokens.text.tertiary }}>Aparece em "Recentes" · timeline montada</div>
+                      </div>
+                    </button>
+                    <button
+                      onClick={handleCapcutDownloadZip}
+                      disabled={audio.status !== 'ready'}
+                      className="w-full text-left px-3 py-2 transition-colors flex items-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{ color: tokens.text.primary }}
+                      onMouseEnter={e => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
+                      onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                    >
+                      <span className="w-7 h-7 rounded-md flex items-center justify-center" style={{ backgroundColor: tokens.bg.hover, color: tokens.text.secondary }}>📦</span>
+                      <div className="flex-1">
+                        <div className="text-xs font-semibold">Baixar pacote (.zip)</div>
+                        <div className="text-[10px]" style={{ color: tokens.text.tertiary }}>FCPXML + mídias · pra outros editores</div>
+                      </div>
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
 
+          {/* Script editor toggle — borderless icon on far right */}
           <button
-            onClick={() => setSettingsOpen(true)}
-            className="p-2 rounded-lg bg-white/5 text-zinc-400 hover:text-zinc-200 transition-colors"
-            title="Configurações · chaves de API"
+            onClick={() => setScriptOpen(o => !o)}
+            className="h-9 w-9 rounded-lg flex items-center justify-center transition-colors"
+            style={{
+              color: scriptOpen ? tokens.text.primary : tokens.text.secondary,
+              backgroundColor: scriptOpen ? tokens.bg.active : 'transparent',
+            }}
+            onMouseEnter={e => { if (!scriptOpen) e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
+            onMouseLeave={e => { if (!scriptOpen) e.currentTarget.style.backgroundColor = 'transparent'; }}
+            title={scriptOpen ? 'Ocultar editor' : 'Mostrar editor'}
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" />
             </svg>
-          </button>
-          <button onClick={() => setScriptOpen(o => !o)} className={`p-2 rounded-lg transition-colors ${scriptOpen ? 'bg-violet-500/20 text-violet-300' : 'bg-white/5 text-zinc-400 hover:text-zinc-200'}`} title="Toggle Script Editor">
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h7" /></svg>
           </button>
         </div>
       </div>
 
+      {/* Transient export status — floating toast strip below the top bar, no longer in toolbar */}
+      {(capcutExportStatus || carouselExportStatus) && (
+        <div
+          className="absolute top-14 left-1/2 -translate-x-1/2 z-40 mt-2 px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 shadow-lg"
+          style={{
+            backgroundColor: tokens.bg.elevated,
+            color: tokens.text.primary,
+            border: `1px solid ${tokens.border.subtle}`,
+          }}
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full animate-pulse"
+            style={{ backgroundColor: tokens.status.ok }}
+          />
+          {capcutExportStatus || carouselExportStatus}
+        </div>
+      )}
+
       {/* ─── PREVIEW + SCRIPT ───────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
-        <div className="flex-1 flex flex-col items-center justify-center p-6 bg-gradient-to-b from-[#0A0A0B] to-[#0F0F12] overflow-hidden">
-          <div className={`relative ${aspectClass} bg-black rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] overflow-hidden border border-white/5`}>
+        <div
+          className="flex-1 flex flex-col items-center justify-center p-6 overflow-hidden"
+          style={{ backgroundColor: tokens.bg.canvas }}
+        >
+          <div
+            className={`relative ${aspectClass} bg-black rounded-2xl overflow-hidden`}
+            style={{
+              boxShadow: isLight ? '0 12px 40px rgba(0,0,0,0.18)' : '0 30px 80px rgba(0,0,0,0.8)',
+              border: `1px solid ${tokens.border.subtle}`,
+            }}
+          >
+            {aspect === 'carousel' ? (
+              <CarouselCanvasPreview
+                block={blocks.find(b => b.id === carouselPreviewId) ?? blocks[0] ?? null}
+                index={Math.max(0, blocks.findIndex(b => b.id === carouselPreviewId))}
+                total={blocks.length}
+                onPrev={() => {
+                  const idx = blocks.findIndex(b => b.id === carouselPreviewId);
+                  if (idx > 0) setCarouselPreviewId(blocks[idx - 1].id);
+                }}
+                onNext={() => {
+                  const idx = blocks.findIndex(b => b.id === carouselPreviewId);
+                  if (idx < blocks.length - 1) setCarouselPreviewId(blocks[idx + 1].id);
+                }}
+              />
+            ) : (<>
             {/* Black background — fills the whole canvas (any unfilled layout area stays black). */}
             <div className="absolute inset-0 bg-black z-0" />
 
@@ -1910,9 +2398,10 @@ export const ReelsStudio: React.FC = () => {
                 </div>
               );
             })()}
+            </>)}
           </div>
 
-          <div className="flex items-center gap-3 mt-4">
+          <div className={`flex items-center gap-3 mt-4 ${aspect === 'carousel' ? 'hidden' : ''}`}>
             <button onClick={() => seekTo(0)} className="p-2 rounded-lg hover:bg-white/5 text-zinc-400 transition-colors" title="Início (Home)">
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg>
             </button>
@@ -1956,74 +2445,69 @@ export const ReelsStudio: React.FC = () => {
 
         {/* ─── SCRIPT EDITOR ────────────────────────────────────────────── */}
         {scriptOpen && (
-          <div className="min-w-[320px] w-[min(420px,40vw)] border-l border-white/5 bg-[#0E0E10] flex flex-col shrink-0">
-            <div className="px-5 py-4 border-b border-white/5 flex items-center justify-between">
+          <div
+            className="min-w-[320px] w-[min(420px,40vw)] flex flex-col shrink-0"
+            style={{
+              backgroundColor: tokens.bg.surface,
+              borderLeft: `1px solid ${tokens.border.subtle}`,
+              color: tokens.text.primary,
+            }}
+          >
+            <div
+              className="px-5 py-4 flex items-center justify-between"
+              style={{ borderBottom: `1px solid ${tokens.border.subtle}` }}
+            >
               <div>
-                <div className="text-sm font-semibold text-zinc-100">Script</div>
-                <div className="text-[11px] text-zinc-500">{blocks.length} blocos · {formatTime(totalDuration)}</div>
+                <div className="text-sm font-semibold" style={{ color: tokens.text.primary }}>{aspect === 'carousel' ? 'Slides' : 'Script'}</div>
+                <div className="text-[11px]" style={{ color: tokens.text.tertiary }}>
+                  {aspect === 'carousel'
+                    ? `${blocks.length} slide${blocks.length !== 1 ? 's' : ''} · Cover + ${Math.max(0, blocks.length - 2)} body + CTA`
+                    : `${blocks.length} blocos · ${formatTime(totalDuration)}`}
+                </div>
               </div>
               <div className="flex items-center gap-1.5">
+                {aspect === 'carousel' && blocks.length > 0 && (
+                  <button
+                    onClick={() => {
+                      for (const b of blocks) {
+                        const m = b.motion;
+                        const isStale = isMotionAssetsStale(m, b.attachedAssets);
+                        if (!motionBusyByBlock[b.id] && (!m?.html || isStale)) {
+                          void handleAutoMotion(b.id);
+                        }
+                      }
+                    }}
+                    className="text-[11px] px-2 py-1 rounded-md bg-fuchsia-500/15 hover:bg-fuchsia-500/25 text-fuchsia-300 border border-fuchsia-500/30 transition-colors flex items-center gap-1"
+                    title="Gerar motion para todos os slides que ainda não têm"
+                  >
+                    <span>🎨</span> Gerar todos
+                  </button>
+                )}
                 <button
                   onClick={() => dispatch({ type: 'add-block' })}
                   className="text-[11px] px-2 py-1 rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 transition-colors"
-                  title="Adicionar bloco vazio"
+                  title={aspect === 'carousel' ? 'Adicionar slide' : 'Adicionar bloco vazio'}
                 >
-                  + Bloco
+                  {aspect === 'carousel' ? '+ Slide' : '+ Bloco'}
                 </button>
-                <div className="relative">
+                {state.lastAnalysis && (
                   <button
-                    onClick={() => setMoreMenuOpen(o => !o)}
-                    className="text-[11px] w-7 h-7 inline-flex items-center justify-center rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 transition-colors"
-                    title="Mais ações"
+                    onClick={() => setPlanModalOpen(true)}
+                    className="h-7 px-2.5 inline-flex items-center gap-1 rounded-md text-[11px] transition-colors"
+                    style={{ color: tokens.text.secondary, backgroundColor: tokens.bg.hover }}
+                    title="Ver plano de gravação"
                   >
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+                    <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                    </svg>
+                    <span>Plano</span>
                   </button>
-                  {moreMenuOpen && (
-                    <>
-                      <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)} />
-                      <div className="absolute right-0 top-full mt-1 z-50 min-w-[200px] rounded-lg bg-[#1C1C1F] border border-white/10 shadow-2xl py-1">
-                        <button
-                          onClick={() => { setImportModalOpen(true); setMoreMenuOpen(false); }}
-                          className="w-full text-left px-3 py-2 text-[11px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
-                        >
-                          <span className="text-violet-300">📋</span>
-                          <span className="flex-1">Importar roteiro com IA</span>
-                        </button>
-                        <button
-                          onClick={() => { setVideoRefModalOpen(true); setMoreMenuOpen(false); }}
-                          className="w-full text-left px-3 py-2 text-[11px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
-                        >
-                          <span className="text-emerald-300">🎬</span>
-                          <span className="flex-1">Importar de vídeo (IG/TikTok/MP4)</span>
-                        </button>
-                        <button
-                          onClick={() => { setReferencesModalOpen(true); setMoreMenuOpen(false); }}
-                          className="w-full text-left px-3 py-2 text-[11px] text-zinc-200 hover:bg-white/5 flex items-center gap-2 border-t border-white/5"
-                        >
-                          <span className="text-violet-300">📁</span>
-                          <span className="flex-1">Referências analisadas</span>
-                          {state.analyses.length > 0 && (
-                            <span className="text-[9px] font-mono text-zinc-500">{state.analyses.length}</span>
-                          )}
-                        </button>
-                        {state.lastAnalysis && (
-                          <button
-                            onClick={() => { setPlanModalOpen(true); setMoreMenuOpen(false); }}
-                            className="w-full text-left px-3 py-2 text-[11px] text-zinc-200 hover:bg-white/5 flex items-center gap-2 border-t border-white/5"
-                          >
-                            <span className="text-amber-300">📋</span>
-                            <span className="flex-1">Ver plano de gravação</span>
-                          </button>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
+                )}
               </div>
             </div>
 
-            {/* Voice + Vibe — unified collapsed row */}
-            {(() => {
+            {/* Voice + Vibe — reel mode only, not needed for carousel */}
+            {aspect !== 'carousel' && (() => {
               const VIBE_OPTS = [
                 { id: 'neutral',   emoji: '😐', label: 'Neutro' },
                 { id: 'happy',     emoji: '😊', label: 'Animado' },
@@ -2033,21 +2517,18 @@ export const ReelsStudio: React.FC = () => {
                 { id: 'fearful',   emoji: '😰', label: 'Ansioso' },
               ] as const;
               const currentVibe = VIBE_OPTS.find(v => v.id === emotion) ?? VIBE_OPTS[0];
-              const ready = audio.status === 'ready';
-              const isOpen = voicePickerOpen || vibeExpanded || !ready;
+              const isOpen = voicePickerOpen || vibeExpanded;
               return (
                 <div className="border-b border-white/5">
                   {/* Collapsed header row */}
                   <button
                     onClick={() => {
-                      if (ready) {
-                        const next = !isOpen;
-                        setVoicePickerOpen(false);
-                        setVibeExpanded(next);
-                      }
+                      const next = !isOpen;
+                      setVoicePickerOpen(false);
+                      setVibeExpanded(next);
                     }}
                     className="w-full px-4 py-2.5 flex items-center gap-2 text-left group hover:bg-white/[0.02] transition-colors"
-                    title={ready ? (isOpen ? 'Recolher' : 'Expandir voz e vibe') : undefined}
+                    title={isOpen ? 'Recolher' : 'Expandir voz e vibe'}
                   >
                     <div className={`w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-violet-400 to-violet-600' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
                       {selectedVoiceLabel.label.slice(0, 1).toUpperCase()}
@@ -2187,7 +2668,7 @@ export const ReelsStudio: React.FC = () => {
                         />
                         <span className="text-[11px] text-zinc-300 font-mono tabular-nums w-10 text-right">{voiceSpeed.toFixed(2)}×</span>
                       </div>
-                      {ready && (
+                      {audio.status === 'ready' && (
                         <button
                           onClick={() => setConfirmOpen(true)}
                           className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.35)] transition-all flex items-center justify-center gap-1.5"
@@ -2215,148 +2696,236 @@ export const ReelsStudio: React.FC = () => {
             })()}
 
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2.5">
-              {(() => {
-                const cardProps = (b: ScriptBlock, idx: number, isCompact?: boolean) => ({
-                  block: b,
-                  index: idx,
-                  total: blocks.length,
-                  wordCount: wordsByBlock.get(b.id)?.length ?? 0,
-                  audioReady: audio.status === 'ready',
-                  onToggleKind: () => dispatch({ type: 'toggle-block-kind', id: b.id }),
-                  onUpdateText: (t: string) => dispatch({ type: 'update-block-text', id: b.id, text: t }),
-                  onRemove: () => { dispatch({ type: 'remove-block', id: b.id }); if (selectedBlockId === b.id) setSelectedBlockId(null); },
-                  onMoveUp: () => dispatch({ type: 'move-block', id: b.id, direction: 'up' as const }),
-                  onMoveDown: () => dispatch({ type: 'move-block', id: b.id, direction: 'down' as const }),
-                  onSetAvatarVisibleSec: (sec: number | undefined) => dispatch({ type: 'set-avatar-visible-sec', id: b.id, sec }),
-                  onSetLayout: (layout: BlockLayout) => dispatch({ type: 'set-block-layout', id: b.id, layout }),
-                  onSetAvatarZoom: (zoom: number) => dispatch({ type: 'set-avatar-zoom', id: b.id, zoom }),
-                  onSetAvatarOffsetY: (offsetY: number) => dispatch({ type: 'set-avatar-offset-y', id: b.id, offsetY }),
-                  defaultZoom: defaultAvatarZoom(state.aspect, b.layout),
-                  isCurrent: currentBlock?.id === b.id,
-                  isSelected: selectedBlockId === b.id,
-                  compact: isCompact,
-                  onSelect: () => selectAndSeekBlock(b.id),
-                  onJumpTo: () => selectAndSeekBlock(b.id),
-                  onOpenMotion: () => {
-                    // Smart click:
-                    // - no motion → auto-generate
-                    // - motion stale (asset added/removed/swapped) → regenerate, don't open editor
-                    // - motion fresh → open advanced editor
-                    const m = b.motion;
-                    const isStale = isMotionAssetsStale(m, b.attachedAssets);
-                    if (m && m.html && !isStale) {
-                      setMotionPickerBlockId(b.id);
-                    } else {
-                      void handleAutoMotion(b.id);
-                    }
-                  },
-                  onOpenMotionAdvanced: () => setMotionPickerBlockId(b.id),
-                  onOpenAssetPicker: () => setAssetPickerBlockId(b.id),
-                  onSetStylePreset: (preset: StylePresetId | undefined) => dispatch({ type: 'set-block-style-preset-cascade', id: b.id, preset }),
-                  onDuplicate: () => dispatch({ type: 'duplicate-block', id: b.id }),
-                  motionBusyMessage: motionBusyByBlock[b.id] ?? null,
-                });
+              {aspect === 'carousel' ? (
 
-                const selectedIdx = selectedBlockId ? blocks.findIndex(b => b.id === selectedBlockId) : -1;
+                // ── CAROUSEL MODE: dedicated CarouselSlideCard, no avatar/layout/audio ──
+                blocks.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-center gap-4">
+                    <div className="text-sm font-semibold" style={{ color: tokens.text.primary }}>Comece seu carrossel</div>
+                    <button
+                      onClick={() => { setWizardInitialFormat('carousel'); setWizardOpen(true); }}
+                      className="px-4 py-2 rounded-lg text-xs font-semibold transition-opacity"
+                      style={{ backgroundColor: tokens.accent.bg, color: tokens.accent.fg }}
+                      onMouseEnter={e => e.currentTarget.style.opacity = '0.9'}
+                      onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                    >
+                      + Criar com IA
+                    </button>
+                    <div className="text-[11px]" style={{ color: tokens.text.tertiary }}>ou adicione slides manualmente</div>
+                  </div>
+                ) : (
+                  blocks.map((b, idx) => {
+                    const isCover = idx === 0;
+                    const isCta   = idx === blocks.length - 1;
+                    const role: 'cover' | 'body' | 'cta' = isCover ? 'cover' : isCta ? 'cta' : 'body';
+                    return (
+                      <CarouselSlideCard
+                        key={b.id}
+                        block={b}
+                        index={idx}
+                        total={blocks.length}
+                        role={role}
+                        motionBusyMessage={motionBusyByBlock[b.id] ?? null}
+                        isSelected={b.id === carouselPreviewId}
+                        onSelect={() => setCarouselPreviewId(b.id)}
+                        onUpdateText={(t) => dispatch({ type: 'update-block-text', id: b.id, text: t })}
+                        onRemove={() => dispatch({ type: 'remove-block', id: b.id })}
+                        onMoveUp={() => dispatch({ type: 'move-block', id: b.id, direction: 'up' as const })}
+                        onMoveDown={() => dispatch({ type: 'move-block', id: b.id, direction: 'down' as const })}
+                        onDuplicate={() => dispatch({ type: 'duplicate-block', id: b.id })}
+                        onOpenMotion={() => {
+                          const m = b.motion;
+                          const isStale = isMotionAssetsStale(m, b.attachedAssets);
+                          if (m && m.html && !isStale) {
+                            setMotionPickerBlockId(b.id);
+                          } else {
+                            void handleAutoMotion(b.id);
+                          }
+                        }}
+                        onOpenMotionAdvanced={() => setMotionPickerBlockId(b.id)}
+                        onOpenAssetPicker={() => setAssetPickerBlockId(b.id)}
+                        onSetStylePreset={(preset) => dispatch({ type: 'set-block-style-preset-cascade', id: b.id, preset })}
+                      />
+                    );
+                  })
+                )
+              ) : blocks.length === 0 && hydrated ? (
+                // ── REEL MODE empty state ──
+                <div className="flex flex-col items-center justify-center py-16 text-center gap-4">
+                  <div className="text-sm font-semibold" style={{ color: tokens.text.primary }}>Comece seu reel</div>
+                  <button
+                    onClick={() => { setWizardInitialFormat(undefined); setWizardOpen(true); }}
+                    className="px-4 py-2 rounded-lg text-xs font-semibold transition-opacity"
+                    style={{ backgroundColor: tokens.accent.bg, color: tokens.accent.fg }}
+                    onMouseEnter={e => e.currentTarget.style.opacity = '0.9'}
+                    onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                  >
+                    + Criar com IA
+                  </button>
+                  <div className="text-[11px]" style={{ color: tokens.text.tertiary }}>ou adicione um bloco manualmente abaixo</div>
+                </div>
+              ) : (
+                // ── REEL MODE: full ScriptBlockCard with avatar/broll/motion controls ──
+                (() => {
+                  const cardProps = (b: ScriptBlock, idx: number, isCompact?: boolean) => ({
+                    block: b,
+                    index: idx,
+                    total: blocks.length,
+                    wordCount: wordsByBlock.get(b.id)?.length ?? 0,
+                    audioReady: audio.status === 'ready',
+                    onToggleKind: () => dispatch({ type: 'toggle-block-kind', id: b.id }),
+                    onUpdateText: (t: string) => dispatch({ type: 'update-block-text', id: b.id, text: t }),
+                    onRemove: () => { dispatch({ type: 'remove-block', id: b.id }); if (selectedBlockId === b.id) setSelectedBlockId(null); },
+                    onMoveUp: () => dispatch({ type: 'move-block', id: b.id, direction: 'up' as const }),
+                    onMoveDown: () => dispatch({ type: 'move-block', id: b.id, direction: 'down' as const }),
+                    onSetAvatarVisibleSec: (sec: number | undefined) => dispatch({ type: 'set-avatar-visible-sec', id: b.id, sec }),
+                    onSetLayout: (layout: BlockLayout) => dispatch({ type: 'set-block-layout', id: b.id, layout }),
+                    onSetAvatarZoom: (zoom: number) => dispatch({ type: 'set-avatar-zoom', id: b.id, zoom }),
+                    onSetAvatarOffsetY: (offsetY: number) => dispatch({ type: 'set-avatar-offset-y', id: b.id, offsetY }),
+                    defaultZoom: defaultAvatarZoom(state.aspect, b.layout),
+                    isCurrent: currentBlock?.id === b.id,
+                    isSelected: selectedBlockId === b.id,
+                    compact: isCompact,
+                    onSelect: () => selectAndSeekBlock(b.id),
+                    onJumpTo: () => selectAndSeekBlock(b.id),
+                    onOpenMotion: () => {
+                      const m = b.motion;
+                      const isStale = isMotionAssetsStale(m, b.attachedAssets);
+                      if (m && m.html && !isStale) {
+                        setMotionPickerBlockId(b.id);
+                      } else {
+                        void handleAutoMotion(b.id);
+                      }
+                    },
+                    onOpenMotionAdvanced: () => setMotionPickerBlockId(b.id),
+                    onOpenAssetPicker: () => setAssetPickerBlockId(b.id),
+                    onSetStylePreset: (preset: StylePresetId | undefined) => dispatch({ type: 'set-block-style-preset-cascade', id: b.id, preset }),
+                    onDuplicate: () => dispatch({ type: 'duplicate-block', id: b.id }),
+                    motionBusyMessage: motionBusyByBlock[b.id] ?? null,
+                    carouselRole: undefined,
+                  });
 
-                // No selection → show all blocks expanded (legacy behavior).
-                if (selectedIdx < 0) {
-                  return blocks.map((b, idx) => <ScriptBlockCard key={b.id} {...cardProps(b, idx)} />);
-                }
-
-                // Selection → expanded card pinned at top, others compact below as a navigator.
-                const selected = blocks[selectedIdx];
-                return (
-                  <>
-                    <ScriptBlockCard key={selected.id} {...cardProps(selected, selectedIdx)} />
-                    {blocks.length > 1 && (
-                      <div className="pt-3 mt-1 border-t border-white/5 space-y-1.5">
-                        <div className="text-[9px] uppercase tracking-[0.18em] text-zinc-500 px-1 mb-1.5 flex items-center justify-between">
-                          <span>Outros blocos</span>
-                          <button
-                            onClick={() => setSelectedBlockId(null)}
-                            className="text-[9px] text-zinc-500 hover:text-zinc-300 normal-case tracking-normal"
-                            title="Fechar inspetor (Esc)"
-                          >
-                            mostrar todos
-                          </button>
+                  const selectedIdx = selectedBlockId ? blocks.findIndex(b => b.id === selectedBlockId) : -1;
+                  if (selectedIdx < 0) {
+                    return blocks.map((b, idx) => <ScriptBlockCard key={b.id} {...cardProps(b, idx)} />);
+                  }
+                  const selected = blocks[selectedIdx];
+                  return (
+                    <>
+                      <ScriptBlockCard key={selected.id} {...cardProps(selected, selectedIdx)} />
+                      {blocks.length > 1 && (
+                        <div className="pt-3 mt-1 border-t border-white/5 space-y-1.5">
+                          <div className="text-[9px] uppercase tracking-[0.18em] text-zinc-500 px-1 mb-1.5 flex items-center justify-between">
+                            <span>Outros blocos</span>
+                            <button
+                              onClick={() => setSelectedBlockId(null)}
+                              className="text-[9px] text-zinc-500 hover:text-zinc-300 normal-case tracking-normal"
+                            >
+                              mostrar todos
+                            </button>
+                          </div>
+                          {blocks.map((b, idx) => idx === selectedIdx ? null : <ScriptBlockCard key={b.id} {...cardProps(b, idx, true)} />)}
                         </div>
-                        {blocks.map((b, idx) => idx === selectedIdx ? null : <ScriptBlockCard key={b.id} {...cardProps(b, idx, true)} />)}
+                      )}
+                    </>
+                  );
+                })()
+              )}
+            </div>
+
+            {aspect !== 'carousel' && (
+              <div className="border-t border-white/5 bg-[#0A0A0B]/50">
+                {/* Collapsible header */}
+                <button
+                  onClick={() => setAudioSectionExpanded(v => !v)}
+                  className="w-full px-5 py-2.5 flex items-center gap-2 text-left group hover:bg-white/[0.02] transition-colors"
+                  title={audioSectionExpanded ? 'Recolher' : 'Expandir áudio'}
+                >
+                  <span className="text-[11px] font-medium text-zinc-300">Áudio</span>
+                  <span className="text-zinc-600 shrink-0">·</span>
+                  <span className="text-[11px] text-zinc-400 truncate">
+                    {audio.status === 'ready'
+                      ? hasDirtyBlocks
+                        ? 'Texto alterado · regenere'
+                        : `Pronto · ${formatTime(audio.duration)}`
+                      : audio.status === 'generating'
+                        ? 'Gerando…'
+                        : audio.status === 'error'
+                          ? 'Erro · tentar de novo'
+                          : `Estimado · $${estimatedTotalCost.toFixed(2)}`}
+                  </span>
+                  <svg
+                    className={`w-3 h-3 text-zinc-600 group-hover:text-zinc-400 transition-transform ml-auto shrink-0 ${audioSectionExpanded ? 'rotate-180' : ''}`}
+                    fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+
+                {/* Expanded body */}
+                {audioSectionExpanded && (
+                  <div className="px-5 pb-4">
+                    {audio.status === 'ready' && (
+                      <div className="mb-3">
+                        <SilenceCutControl
+                          enabled={state.audio.silenceCut}
+                          preset={state.audio.silencePreset}
+                          detecting={state.audio.detectingSilence}
+                          applying={!!state.audio.applyingCuts}
+                          detectedSilenceSec={state.audio.detectedSilenceSec}
+                          effectiveDuration={audioEffectiveDuration}
+                          rawDuration={state.audio.duration}
+                          onToggle={(on) => dispatch({ type: 'audio-silence-toggle', on })}
+                          onPresetChange={(preset) => dispatch({ type: 'audio-silence-preset', preset })}
+                        />
                       </div>
                     )}
-                  </>
-                );
-              })()}
-            </div>
 
-            <div className="px-5 py-4 border-t border-white/5 bg-[#0A0A0B]/50">
-              {audio.status === 'ready' && (
-                <div className="mb-3">
-                  <SilenceCutControl
-                    enabled={state.audio.silenceCut}
-                    preset={state.audio.silencePreset}
-                    detecting={state.audio.detectingSilence}
-                    applying={!!state.audio.applyingCuts}
-                    detectedSilenceSec={state.audio.detectedSilenceSec}
-                    effectiveDuration={audioEffectiveDuration}
-                    rawDuration={state.audio.duration}
-                    onToggle={(on) => dispatch({ type: 'audio-silence-toggle', on })}
-                    onPresetChange={(preset) => dispatch({ type: 'audio-silence-preset', preset })}
-                  />
-                </div>
-              )}
-
-              {showCostBreakdown && (
-                <>
-                  <div className="flex items-center justify-between text-[11px] mb-2">
-                    <span className="text-zinc-500">Áudio</span>
-                    <span className="text-zinc-300 font-mono">${estimatedAudioCost.toFixed(2)}</span>
+                    {showCostBreakdown && (
+                      <>
+                        <div className="flex items-center justify-between text-[11px] mb-2">
+                          <span className="text-zinc-500">Áudio</span>
+                          <span className="text-zinc-300 font-mono">${estimatedAudioCost.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] mb-3">
+                          <span className="text-zinc-500">Avatar ({avatarSeconds.toFixed(1)}s)</span>
+                          <span className="text-zinc-300 font-mono">${estimatedAvatarCost.toFixed(2)}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] mb-3 pt-2 border-t border-white/5">
+                          <span className="text-zinc-300 font-medium">Total estimado</span>
+                          <span className="text-zinc-100 font-bold">${estimatedTotalCost.toFixed(2)}</span>
+                        </div>
+                      </>
+                    )}
+                    {(audio.status === 'idle' || audio.status === 'generating' || audio.status === 'error' || (audio.status === 'ready' && hasDirtyBlocks)) && (
+                      <button
+                        onClick={() => setConfirmOpen(true)}
+                        disabled={audio.status === 'generating'}
+                        className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={`Custo estimado · $${estimatedTotalCost.toFixed(2)}`}
+                      >
+                        {audio.status === 'generating'
+                          ? '⏳ Gerando áudio...'
+                          : audio.status === 'error'
+                          ? '⚠️ Tentar novamente'
+                          : audio.status === 'ready'
+                          ? `🔄 Regenerar áudio · $${estimatedAudioCost.toFixed(2)}`
+                          : '🎙️ Gerar áudio'}
+                      </button>
+                    )}
+                    {audio.status === 'error' && <div className="mt-2 text-[10px] text-red-400">{audio.error}</div>}
                   </div>
-                  <div className="flex items-center justify-between text-[11px] mb-3">
-                    <span className="text-zinc-500">Avatar ({avatarSeconds.toFixed(1)}s)</span>
-                    <span className="text-zinc-300 font-mono">${estimatedAvatarCost.toFixed(2)}</span>
-                  </div>
-                  <div className="flex items-center justify-between text-[11px] mb-3 pt-2 border-t border-white/5">
-                    <span className="text-zinc-300 font-medium">Total estimado</span>
-                    <span className="text-zinc-100 font-bold">${estimatedTotalCost.toFixed(2)}</span>
-                  </div>
-                </>
-              )}
-              {(audio.status === 'idle' || audio.status === 'generating' || audio.status === 'error' || (audio.status === 'ready' && hasDirtyBlocks)) && (
-                <button
-                  onClick={() => setConfirmOpen(true)}
-                  disabled={audio.status === 'generating'}
-                  className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={`Custo estimado · $${estimatedTotalCost.toFixed(2)}`}
-                >
-                  {audio.status === 'generating'
-                    ? '⏳ Gerando áudio...'
-                    : audio.status === 'error'
-                    ? '⚠️ Tentar novamente'
-                    : audio.status === 'ready'
-                    ? `🔄 Regenerar áudio · $${estimatedAudioCost.toFixed(2)}`
-                    : '🎙️ Gerar áudio'}
-                </button>
-              )}
-              {audio.status === 'error' && <div className="mt-2 text-[10px] text-red-400">{audio.error}</div>}
-            </div>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      {/* ─── TIMELINE ─────────────────────────────────────────────────── */}
-      <div className="h-[300px] border-t border-white/5 bg-[#0C0C0E] flex flex-col shrink-0">
+      {/* ─── TIMELINE (hidden in carousel mode — no audio timeline concept) ── */}
+      <div className={`h-[300px] border-t border-white/5 bg-[#0C0C0E] flex flex-col shrink-0 ${aspect === 'carousel' ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between px-5 py-2 border-b border-white/5">
           <div className="flex items-center gap-2">
-            <button
-              onClick={() => setAddBrollOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-violet-500/20 hover:border-violet-400/40 hover:text-violet-200 text-zinc-300 border border-white/10 transition-colors"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              Adicionar B-roll
-            </button>
             <TakesPanel
               takes={state.takes}
               activeTakeId={state.activeTakeId}
@@ -2366,73 +2935,115 @@ export const ReelsStudio: React.FC = () => {
               onEditTake={(id) => setReviewTakeId(id)}
               onRecordNew={() => setAddBrollOpen(true)}
             />
-            <button
-              onClick={() => setConfirmOpen(true)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/10 transition-colors"
-              title="Gerar áudio do roteiro"
-            >
-              🎙️ Gerar Áudio
-            </button>
-            <button
-              onClick={() => setCaptionOpen(v => !v)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-pink-500/10 hover:bg-pink-500/20 text-pink-300 border border-pink-500/20 transition-colors"
-              title="Gerar descrição otimizada para Instagram"
-            >
-              📸 Descrição
-            </button>
-            <button
-              onClick={() => setAvatarsModalOpen(true)}
-              disabled={audio.status !== 'ready' || avatarBlocks.length === 0 || generatingClips}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-300 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              title={audio.status !== 'ready' ? 'Gere o áudio primeiro' : avatarBlocks.length === 0 ? 'Marque ao menos 1 bloco como Avatar' : 'Gerar clipes de avatar via HeyGen'}
-            >
-              {generatingClips ? '⏳ Gerando clipes...' : `✨ Gerar Clipes (${avatarBlocks.length})`}
-            </button>
-            {avatarBlocks.length > 0 && (
-              <button
-                onClick={handleGenerateMockClips}
-                disabled={generatingClips}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-400 border border-white/10 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Gera clips coloridos sintéticos para testar o export sem gastar créditos HeyGen"
-              >
-                🎨 Clip de Teste
-              </button>
-            )}
+
+            {/* Manual-action menu. The agent is the primary path; this menu
+                exists for the actions the agent can't (yet) trigger itself,
+                or for power users who prefer direct control. */}
             {(() => {
               const allMotions = blocks.filter(b => !!b.motion);
-              if (allMotions.length === 0) return null;
-              const pendingCount = allMotions.filter(b => {
+              const motionPendingCount = allMotions.filter(b => {
                 const m = b.motion!;
                 if (!m.html) return true;
                 if (!m.videoPath) return true;
                 if (m.generatedAt && m.renderedAt && m.generatedAt > m.renderedAt) return true;
                 return false;
               }).length;
-              const busyCount = Object.keys(motionBusyByBlock).length;
-              const isBusy = busyCount > 0;
-              const label = isBusy
-                ? `⏳ Renderizando… (${busyCount})`
-                : pendingCount > 0
-                  ? `🎨 Renderizar Motions (${pendingCount})`
-                  : `🎨 Motions prontos (${allMotions.length})`;
+              const motionBusyCount = Object.keys(motionBusyByBlock).length;
+              const motionBusy = motionBusyCount > 0;
+
+              const items: Array<{
+                key: string;
+                label: string;
+                hint?: string;
+                onClick: () => void;
+                disabled?: boolean;
+                disabledHint?: string;
+                visible?: boolean;
+                icon: string;
+              }> = [
+                {
+                  key: 'broll',
+                  icon: '➕',
+                  label: 'Adicionar B-roll',
+                  hint: 'Grave a tela ou suba um vídeo',
+                  onClick: () => setAddBrollOpen(true),
+                },
+                {
+                  key: 'audio',
+                  icon: '🎙',
+                  label: 'Gerar áudio',
+                  hint: 'TTS do roteiro com a voz ativa',
+                  onClick: () => setConfirmOpen(true),
+                },
+                {
+                  key: 'caption',
+                  icon: '📸',
+                  label: 'Descrição do Instagram',
+                  hint: 'Caption + hashtags via IA',
+                  onClick: () => setCaptionOpen(v => !v),
+                },
+                {
+                  key: 'avatars',
+                  icon: '✨',
+                  label: generatingClips
+                    ? 'Gerando clipes…'
+                    : `Gerar clipes de avatar (${avatarBlocks.length})`,
+                  hint: 'HeyGen renderiza um vídeo por bloco avatar',
+                  onClick: () => setAvatarsModalOpen(true),
+                  disabled: audio.status !== 'ready' || avatarBlocks.length === 0 || generatingClips,
+                  disabledHint:
+                    audio.status !== 'ready'
+                      ? 'Gere o áudio primeiro'
+                      : avatarBlocks.length === 0
+                      ? 'Marque ao menos 1 bloco como Avatar'
+                      : undefined,
+                },
+                {
+                  key: 'mock',
+                  icon: '🎨',
+                  label: 'Clipes de teste (mock)',
+                  hint: 'Clipes coloridos pra testar export sem gastar HeyGen',
+                  onClick: handleGenerateMockClips,
+                  disabled: generatingClips,
+                  visible: avatarBlocks.length > 0,
+                },
+                {
+                  key: 'motions',
+                  icon: '🎨',
+                  label: motionBusy
+                    ? `Renderizando motions… (${motionBusyCount})`
+                    : motionPendingCount > 0
+                    ? `Renderizar motions (${motionPendingCount})`
+                    : `Motions prontos (${allMotions.length})`,
+                  hint: 'HyperFrames → MP4 para cada motion do roteiro',
+                  onClick: () => {
+                    if (!motionBusy && motionPendingCount > 0) void handleRenderAllMotions();
+                  },
+                  disabled: motionBusy || motionPendingCount === 0,
+                  disabledHint: motionBusy
+                    ? 'Renderizando em andamento…'
+                    : motionPendingCount === 0
+                    ? 'Todos os motions já estão renderizados'
+                    : undefined,
+                  visible: allMotions.length > 0,
+                },
+                {
+                  key: 'assets',
+                  icon: '🖼',
+                  label: 'Abrir pasta de assets',
+                  hint: 'Coloque imagens e clipes pra usar no projeto',
+                  onClick: () => invoke('reveal_assets_dir', { projectName: state.projectName }),
+                },
+              ];
+
               return (
-                <button
-                  onClick={() => { if (!isBusy && pendingCount > 0) void handleRenderAllMotions(); }}
-                  disabled={isBusy || pendingCount === 0}
-                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-fuchsia-500/15 hover:bg-fuchsia-500/25 text-fuchsia-200 border border-fuchsia-500/30 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={isBusy ? 'Renderizando em andamento…' : pendingCount > 0 ? `Renderizar ${pendingCount} motion(s) pendente(s)` : 'Todos os motions estão renderizados'}
-                >
-                  {label}
-                </button>
+                <ActionsMenu
+                  items={items.filter(i => i.visible !== false)}
+                  tokens={tokens}
+                />
               );
             })()}
-            <button
-              onClick={() => invoke('reveal_assets_dir', { projectName: state.projectName })}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-zinc-200 border border-white/10 transition-colors"
-              title="Abrir pasta de assets do projeto — coloque screenshots aqui para usar nos motions"
-            >
-              🖼️ Assets
-            </button>
+
             <div className="ml-2 flex items-center gap-0.5 border-l border-white/10 pl-2">
               <button
                 onClick={() => history.undo()}
@@ -3109,16 +3720,86 @@ export const ReelsStudio: React.FC = () => {
         />
       )}
 
-      {importModalOpen && (
-        <ImportScriptModal
-          onClose={() => setImportModalOpen(false)}
-          onImported={(imported, languageOverride) => {
-            dispatch({ type: 'replace-blocks', blocks: imported });
-            // Persist per-generation language override for the upcoming TTS call.
-            setTtsLanguageOverride(languageOverride ? (languageOverride as OutputLanguage) : null);
-            setImportModalOpen(false);
-            setPlayhead(0);
-            setPlaying(false);
+      {wizardOpen && (
+        <CreationWizard
+          key={(reanalyzeMeta?.fileName ?? wizardInitialFormat) ?? 'fresh'}
+          open={wizardOpen}
+          existingBlockCount={blocks.length}
+          initialFormat={wizardInitialFormat}
+          initialReanalyzeMeta={reanalyzeMeta ?? undefined}
+          onClose={() => { setWizardOpen(false); setWizardInitialFormat(undefined); setReanalyzeMeta(null); }}
+          onConfirm={(newBlocks, format, extras) => {
+            const targetAspect = format === 'carousel' ? 'carousel' as const : '9:16' as const;
+            // Propagate per-generation language override to the upcoming TTS call.
+            if (extras?.languageOverride) {
+              setTtsLanguageOverride(extras.languageOverride as OutputLanguage);
+            }
+            // Build PersistedAnalysis from video source (preserves history + plan modal).
+            let analysisToPersist: PersistedAnalysis | undefined;
+            let emotionFromTone: 'happy' | 'sad' | 'angry' | 'surprised' | 'fearful' | null = null;
+            if (extras?.analysis && extras?.meta) {
+              const analysis = extras.analysis;
+              const meta = extras.meta;
+              analysisToPersist = {
+                language: analysis.language,
+                format: analysis.format,
+                hookStyle: analysis.hookStyle,
+                tone: analysis.tone,
+                durationSec: analysis.durationSec,
+                blockIds: newBlocks.map(b => b.id),
+                directions: analysis.directions.map(d => ({
+                  blockIndex: d.blockIndex,
+                  delivery: d.delivery,
+                  framing: d.framing,
+                  screenAction: d.screenAction,
+                  mood: d.mood,
+                })),
+                brollSuggestions: analysis.brollSuggestions,
+                production: {
+                  setup: analysis.production.setup,
+                  watchOuts: analysis.production.watchOuts,
+                  soundbed: analysis.production.soundbed,
+                },
+                originalTranscript: analysis.transcript ?? [],
+                originalBlocks: analysis.originalBlocks ?? [],
+                sourceFileName: meta.fileName,
+                sourceUrl: meta.sourceUrl,
+                createdAt: Date.now(),
+              };
+              // Auto-suggest emotion from detected tone tags.
+              const tones = (analysis.tone ?? []).map(t => t.toLowerCase());
+              emotionFromTone =
+                tones.some(t => /(happy|warm|playful|excited|energetic|hype|fun|friendly|bold|inspiring|motivational)/.test(t)) ? 'happy' :
+                tones.some(t => /(sad|melancholic|nostalgic|wistful)/.test(t)) ? 'sad' :
+                tones.some(t => /(angry|frustrated|aggressive)/.test(t)) ? 'angry' :
+                tones.some(t => /(surprised|shocked|astonished)/.test(t)) ? 'surprised' :
+                tones.some(t => /(fearful|anxious|nervous|tense)/.test(t)) ? 'fearful' :
+                null;
+            }
+            // Article payload (caption, hashtags, sourceUrl) — log for now; could persist later.
+            if (extras?.contentPayload) {
+              console.log('[content import]', {
+                caption: extras.contentPayload.caption,
+                hashtags: extras.contentPayload.hashtags,
+                framework: extras.contentPayload.frameworkUsed,
+                rationale: extras.contentPayload.rationale,
+                source: extras.contentPayload.sourceUrl ?? extras.contentPayload.sourceTitle,
+              });
+            }
+            // flushSync ensures all state updates are committed to the DOM
+            // before the wizard unmounts — prevents the wizard unmount from
+            // racing with the reducer dispatch in some WebView environments.
+            flushSync(() => {
+              dispatch({ type: 'replace-blocks', blocks: newBlocks, analysis: analysisToPersist });
+              dispatch({ type: 'set-aspect', aspect: targetAspect });
+              if (emotionFromTone) dispatch({ type: 'set-emotion', emotion: emotionFromTone });
+              setPlayhead(0);
+              setPlaying(false);
+              setScriptOpen(true);
+            });
+            setWizardOpen(false);
+            setWizardInitialFormat(undefined);
+            setReanalyzeMeta(null);
           }}
         />
       )}
@@ -3131,6 +3812,9 @@ export const ReelsStudio: React.FC = () => {
             block={block}
             brandIdentity={state.brandIdentity}
             onBrandLearned={(brand) => dispatch({ type: 'set-brand-identity', brand })}
+            motionColorMode={state.motionColorMode ?? 'dark'}
+            onSetMotionColorMode={(mode) => dispatch({ type: 'set-motion-color-mode', mode })}
+            appTheme={state.appTheme ?? 'dark'}
             onClose={() => setMotionPickerBlockId(null)}
             onSave={(motion) => {
               dispatch({ type: 'set-block-motion', id: block.id, motion });
@@ -3175,92 +3859,17 @@ export const ReelsStudio: React.FC = () => {
 
       {referencesModalOpen && (
         <ReferencesModal
+          appTheme={state.appTheme ?? 'dark'}
           analyses={state.analyses}
           onClose={() => setReferencesModalOpen(false)}
           onOpenPlan={(a) => setPlanAnalysis(a)}
           onRemoveAnalysis={(createdAt) => dispatch({ type: 'remove-analysis', createdAt })}
           onReanalyze={(meta) => {
+            // Open the wizard already in source 'video' / 'saved' sub-tab, auto-firing reanalysis.
             setReferencesModalOpen(false);
             setReanalyzeMeta(meta);
-            setVideoRefModalOpen(true);
-          }}
-        />
-      )}
-
-      {videoRefModalOpen && (
-        <VideoReferenceModal
-          initialReanalyzeMeta={reanalyzeMeta ?? undefined}
-          onClose={() => {
-            setVideoRefModalOpen(false);
-            setReanalyzeMeta(null);
-          }}
-          onImported={(imported, analysis, meta, languageOverride) => {
-            // Propagate the user's per-generation language pick (if any) to the TTS step.
-            setTtsLanguageOverride(languageOverride ? (languageOverride as OutputLanguage) : null);
-            const persisted = {
-              language: analysis.language,
-              format: analysis.format,
-              hookStyle: analysis.hookStyle,
-              tone: analysis.tone,
-              durationSec: analysis.durationSec,
-              blockIds: imported.map(b => b.id),
-              directions: analysis.directions.map(d => ({
-                blockIndex: d.blockIndex,
-                delivery: d.delivery,
-                framing: d.framing,
-                screenAction: d.screenAction,
-                mood: d.mood,
-              })),
-              brollSuggestions: analysis.brollSuggestions,
-              production: {
-                setup: analysis.production.setup,
-                watchOuts: analysis.production.watchOuts,
-                soundbed: analysis.production.soundbed,
-              },
-              originalTranscript: analysis.transcript ?? [],
-              originalBlocks: analysis.originalBlocks ?? [],
-              sourceFileName: meta.fileName,
-              sourceUrl: meta.sourceUrl,
-              createdAt: Date.now(),
-            };
-            dispatch({ type: 'replace-blocks', blocks: imported, analysis: persisted });
-            // Auto-suggest emotion from detected tone tags.
-            const tones = (analysis.tone ?? []).map(t => t.toLowerCase());
-            const suggested =
-              tones.some(t => /(happy|warm|playful|excited|energetic|hype|fun|friendly|bold|inspiring|motivational)/.test(t)) ? 'happy' :
-              tones.some(t => /(sad|melancholic|nostalgic|wistful)/.test(t)) ? 'sad' :
-              tones.some(t => /(angry|frustrated|aggressive)/.test(t)) ? 'angry' :
-              tones.some(t => /(surprised|shocked|astonished)/.test(t)) ? 'surprised' :
-              tones.some(t => /(fearful|anxious|nervous|tense)/.test(t)) ? 'fearful' :
-              null;
-            if (suggested) dispatch({ type: 'set-emotion', emotion: suggested });
-            setVideoRefModalOpen(false);
-            setReanalyzeMeta(null);
-            setPlayhead(0);
-            setPlaying(false);
-          }}
-          onContentImported={(imported, payload) => {
-            // No video analysis context — just replace blocks. Caption + hashtags + rationale
-            // are surfaced via console for now; could be persisted to a sibling store later.
-            console.log('[content import]', {
-              caption: payload.caption,
-              hashtags: payload.hashtags,
-              framework: payload.frameworkUsed,
-              rationale: payload.rationale,
-              source: payload.sourceUrl ?? payload.sourceTitle,
-            });
-            dispatch({ type: 'replace-blocks', blocks: imported });
-            setTtsLanguageOverride(payload.languageOverride ? (payload.languageOverride as OutputLanguage) : null);
-            setVideoRefModalOpen(false);
-            setReanalyzeMeta(null);
-            setPlayhead(0);
-            setPlaying(false);
-          }}
-          onOpenVoiceSettings={() => {
-            setVideoRefModalOpen(false);
-            setReanalyzeMeta(null);
-            setSettingsTab('voice');
-            setSettingsOpen(true);
+            setWizardInitialFormat(undefined);
+            setWizardOpen(true);
           }}
         />
       )}
@@ -3297,16 +3906,31 @@ export const ReelsStudio: React.FC = () => {
       />
 
       <SettingsModal
+        appTheme={state.appTheme ?? 'dark'}
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         onSave={() => setSettingsOpen(false)}
         initialTab={settingsTab}
+        onClonedVoicesChange={refreshClonedVoices}
       />
 
       {/* Projects modal */}
       {projectsOpen && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6" onClick={() => setProjectsOpen(false)}>
-          <div className="bg-[#141416] border border-violet-500/20 rounded-2xl shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]" onClick={e => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-[100] p-6"
+          style={{ backgroundColor: isLight ? 'rgba(0,0,0,0.4)' : 'rgba(0,0,0,0.7)' }}
+          onClick={() => setProjectsOpen(false)}
+        >
+          <div
+            className="rounded-2xl w-full max-w-lg flex flex-col max-h-[80vh]"
+            style={{
+              backgroundColor: tokens.bg.surface,
+              border: `1px solid ${tokens.border.subtle}`,
+              color: tokens.text.primary,
+              boxShadow: isLight ? '0 30px 80px rgba(0,0,0,0.18)' : '0 30px 80px rgba(0,0,0,0.8)',
+            }}
+            onClick={e => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between px-5 pt-5 pb-4 shrink-0">
               <div>
                 <div className="text-sm font-semibold text-zinc-100">Projetos salvos</div>
@@ -3478,6 +4102,121 @@ export const ReelsStudio: React.FC = () => {
       <style>{`
         @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
       `}</style>
+      </div>{/* /main editor column */}
+
+      <AgentPanel
+        open={agentPanelOpen}
+        onClose={() => setAgentPanelOpen(false)}
+        appTheme={state.appTheme}
+        projectKey={state.projectName || '_default'}
+      />
+    </div>
+  );
+};
+
+// ─── SUB-COMPONENT: ACTIONS MENU ─────────────────────────────────────────
+// Collapses what used to be 7 inline buttons (Add B-roll, Gerar Áudio,
+// Descrição, Gerar Clipes, Clip de Teste, Motions, Assets) into a single
+// "Ações" dropdown next to the timeline. With the chat agent as the
+// primary CTA, surfacing all of these in the toolbar is visual noise.
+interface ActionsMenuItem {
+  key: string;
+  icon: string;
+  label: string;
+  hint?: string;
+  onClick: () => void;
+  disabled?: boolean;
+  disabledHint?: string;
+}
+
+const ActionsMenu: React.FC<{
+  items: ActionsMenuItem[];
+  tokens: import('./reelsStudio/theme').ThemeTokens;
+}> = ({ items, tokens }) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpen(false);
+    }
+    window.addEventListener('mousedown', onClick);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onClick);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+        style={{
+          backgroundColor: open ? tokens.bg.active : tokens.bg.hover,
+          color: tokens.text.primary,
+          border: `1px solid ${tokens.border.subtle}`,
+        }}
+        title="Ações manuais (o agente cobre a maioria via chat)"
+      >
+        Ações
+        <svg
+          className="w-3 h-3 transition-transform"
+          style={{ transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={2.5}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div
+          className="absolute left-0 top-full mt-1.5 rounded-xl py-1.5 z-50 min-w-[260px]"
+          style={{
+            backgroundColor: tokens.bg.elevated,
+            border: `1px solid ${tokens.border.default}`,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.18)',
+          }}
+        >
+          {items.map(item => (
+            <button
+              key={item.key}
+              onClick={() => {
+                if (item.disabled) return;
+                setOpen(false);
+                item.onClick();
+              }}
+              disabled={item.disabled}
+              className="w-full px-3 py-2 text-left flex items-start gap-2.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title={item.disabled ? item.disabledHint : item.hint}
+              onMouseEnter={e => { if (!item.disabled) e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
+              onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+            >
+              <span className="text-[14px] leading-[1.2] shrink-0 mt-0.5">{item.icon}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] font-medium" style={{ color: tokens.text.primary }}>
+                  {item.label}
+                </div>
+                {item.hint && (
+                  <div className="text-[10.5px] mt-0.5 leading-snug" style={{ color: tokens.text.tertiary }}>
+                    {item.hint}
+                  </div>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
@@ -3510,7 +4249,322 @@ interface BlockCardProps {
   onSetStylePreset: (preset: StylePresetId | undefined) => void;
   onDuplicate: () => void;
   motionBusyMessage: string | null;
+  /** Shown as a badge in the card header when in carousel mode. */
+  carouselRole?: 'cover' | 'body' | 'cta';
 }
+
+// ── Carousel canvas preview — shows motion video or slide text fallback ────────
+const CarouselCanvasPreview: React.FC<{
+  block: ScriptBlock | null;
+  index: number;
+  total: number;
+  onPrev: () => void;
+  onNext: () => void;
+}> = ({ block, index, total, onPrev, onNext }) => {
+  const m = block?.motion;
+  const isReady = m?.status === 'ready' && !!m?.videoPath;
+  const isWorking = m?.status === 'generating' || m?.status === 'rendering';
+
+  return (
+    <div className="absolute inset-0 bg-black">
+      {isReady ? (
+        <MotionLayerOverlay
+          key={`cp-${m!.id}-${m!.renderedAt ?? 0}`}
+          motion={m!}
+          playing={true}
+          layer="replace"
+        />
+      ) : (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-8">
+          {block?.text ? (
+            <p className="text-zinc-200 text-center text-[15px] leading-relaxed font-medium">
+              {block.text}
+            </p>
+          ) : (
+            <p className="text-zinc-600 text-[12px] italic">Slide vazio</p>
+          )}
+          {isWorking ? (
+            <div className="flex items-center gap-2 text-fuchsia-400 text-[11px]">
+              <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25"/>
+                <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+              Gerando motion…
+            </div>
+          ) : (
+            <p className="text-zinc-600 text-[11px]">
+              {block ? 'Clique "Gerar motion" no slide →' : 'Selecione um slide'}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Label */}
+      <div className="absolute top-3 left-3 px-2 py-0.5 rounded-md bg-black/60 backdrop-blur text-[10px] font-medium text-zinc-400 z-40">
+        4:5 Carrossel
+      </div>
+
+      {/* Navigation arrows */}
+      {total > 1 && (
+        <>
+          <button
+            onClick={onPrev}
+            disabled={index === 0}
+            className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center text-white disabled:opacity-20 transition-all z-40"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7"/></svg>
+          </button>
+          <button
+            onClick={onNext}
+            disabled={index === total - 1}
+            className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/60 hover:bg-black/80 flex items-center justify-center text-white disabled:opacity-20 transition-all z-40"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7"/></svg>
+          </button>
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5 z-40">
+            {Array.from({ length: total }).map((_, i) => (
+              <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all ${i === index ? 'bg-white' : 'bg-white/25'}`}/>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ── Carousel-only slide card — no avatar, layout, zoom, or audio concepts ──────
+interface CarouselSlideCardProps {
+  block: ScriptBlock;
+  index: number;
+  total: number;
+  role: 'cover' | 'body' | 'cta';
+  motionBusyMessage: string | null;
+  isSelected?: boolean;
+  onSelect?: () => void;
+  onUpdateText: (t: string) => void;
+  onRemove: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onDuplicate: () => void;
+  onOpenMotion: () => void;
+  onOpenMotionAdvanced: () => void;
+  onOpenAssetPicker: () => void;
+  onSetStylePreset: (preset: StylePresetId | undefined) => void;
+}
+
+const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
+  block: b, index, total, role, motionBusyMessage, isSelected, onSelect,
+  onUpdateText, onRemove, onMoveUp, onMoveDown, onDuplicate,
+  onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset,
+}) => {
+  const [styleMenuOpen, setStyleMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const activePreset = findStylePreset(b.stylePresetOverride ?? 'glass-tech');
+
+  const isBusy = !!motionBusyMessage;
+  const m = b.motion;
+  const currentAssets = b.attachedAssets ?? [];
+  const isStale = !isBusy && isMotionAssetsStale(m, currentAssets);
+  const isReady = m?.status === 'ready' && !!m?.videoPath && !isStale;
+  const isError = m?.status === 'error';
+
+  const motionLabel = isBusy
+    ? motionBusyMessage
+    : isStale ? 'Regenerar'
+    : isReady ? 'Motion ✓'
+    : isError ? 'Motion ⚠'
+    : currentAssets.length > 0 ? `Gerar com ${currentAssets.length} asset${currentAssets.length > 1 ? 's' : ''}`
+    : 'Gerar motion';
+
+  const motionCls = isBusy
+    ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-200 cursor-progress'
+    : isStale ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
+    : isReady ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
+    : isError ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
+    : 'bg-fuchsia-500/[0.08] border-fuchsia-400/30 text-fuchsia-200 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/50';
+
+  const roleCls = role === 'cover'
+    ? 'bg-violet-500/30 text-violet-300'
+    : role === 'cta'
+    ? 'bg-emerald-500/20 text-emerald-300'
+    : 'bg-white/5 text-zinc-400';
+
+  const roleLabel = role === 'cover' ? 'Cover' : role === 'cta' ? 'CTA' : `Slide ${index + 1}`;
+
+  const placeholder = role === 'cover'
+    ? 'Frase de impacto que para o scroll…'
+    : role === 'cta'
+    ? 'Chamada para ação — o que o leitor deve fazer agora?'
+    : 'Texto do slide…';
+
+  const assetCount = currentAssets.length;
+  const assetLabel = assetCount === 0 ? 'Asset' : assetCount === 1 ? currentAssets[0].name : `${assetCount} slides`;
+
+  return (
+    <div
+      className={`rounded-xl border overflow-hidden transition-all cursor-pointer ${
+        isSelected
+          ? 'border-fuchsia-500/50 ring-1 ring-fuchsia-500/30 bg-fuchsia-500/[0.03]'
+          : 'border-white/8 bg-white/[0.02] hover:border-white/15'
+      }`}
+      onClick={onSelect}
+    >
+      {/* Header: role badge · motion · ⋯ */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-white/5">
+        <span className={`shrink-0 text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide ${roleCls}`}>
+          {roleLabel}
+        </span>
+
+        {/* Motion button — primary action */}
+        <button
+          onClick={() => { if (!isBusy) onOpenMotion(); }}
+          disabled={isBusy}
+          className={`flex-1 min-w-0 px-2 py-1 rounded-md text-[11px] font-medium border transition-colors flex items-center gap-1.5 ${motionCls}`}
+        >
+          {isBusy ? (
+            <svg className="w-3 h-3 animate-spin shrink-0" fill="none" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25"/>
+              <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+            </svg>
+          ) : (
+            <span className="text-[12px] leading-none shrink-0">🎨</span>
+          )}
+          <span className="truncate">{motionLabel}</span>
+        </button>
+
+        {/* Edit motion (only when html exists) */}
+        {m?.html && !isBusy && (
+          <button
+            onClick={onOpenMotionAdvanced}
+            className="p-1 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors shrink-0"
+            title="Editar motion"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+            </svg>
+          </button>
+        )}
+
+        {/* ⋯ menu */}
+        <div className="relative shrink-0">
+          <button
+            onClick={() => setMoreMenuOpen(o => !o)}
+            className="p-1 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>
+            </svg>
+          </button>
+          {moreMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMoreMenuOpen(false)}/>
+              <div className="absolute right-0 top-full mt-1 z-50 w-44 rounded-lg border border-white/10 bg-[#141416] shadow-[0_20px_60px_rgba(0,0,0,0.6)] py-1" onClick={e => e.stopPropagation()}>
+                <button onClick={() => { setMoreMenuOpen(false); onMoveUp(); }} disabled={index === 0}
+                  className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 disabled:opacity-30 flex items-center gap-2">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7"/></svg>
+                  Mover acima
+                </button>
+                <button onClick={() => { setMoreMenuOpen(false); onMoveDown(); }} disabled={index === total - 1}
+                  className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 disabled:opacity-30 flex items-center gap-2">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                  Mover abaixo
+                </button>
+                <button onClick={() => { setMoreMenuOpen(false); onDuplicate(); }}
+                  className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                  Duplicar
+                </button>
+                <div className="border-t border-white/5 my-1"/>
+                <button onClick={() => { setMoreMenuOpen(false); onRemove(); }}
+                  className="w-full text-left px-3 py-2 text-[12px] text-red-300 hover:bg-red-500/10 flex items-center gap-2">
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3"/></svg>
+                  Remover slide
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Motion preview thumbnail (when ready) */}
+      {isReady && m?.videoPath && (
+        <div className="px-3 pt-2.5">
+          <video
+            src={`asset-file://${m.videoPath}`}
+            className="w-full aspect-[4/5] rounded-lg object-cover bg-black"
+            autoPlay loop muted playsInline
+          />
+        </div>
+      )}
+
+      {/* Editable text */}
+      <textarea
+        value={b.text}
+        onChange={e => onUpdateText(e.target.value)}
+        rows={3}
+        placeholder={placeholder}
+        className="w-full bg-transparent px-3 py-2.5 text-[12px] text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:bg-white/[0.02] transition-colors"
+      />
+
+      {/* Footer: asset + style */}
+      <div className="px-3 py-2 border-t border-white/5 flex items-center gap-1.5">
+        <button
+          onClick={onOpenAssetPicker}
+          className={`px-2 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1 min-w-0 ${
+            assetCount > 0
+              ? 'bg-violet-500/20 border-violet-400/50 text-violet-100 hover:bg-violet-500/30'
+              : 'bg-violet-500/[0.06] border-violet-400/20 text-violet-300/80 hover:bg-violet-500/15 hover:text-violet-200 hover:border-violet-400/40'
+          }`}
+        >
+          <span>📎</span>
+          <span className="max-w-[120px] truncate">{assetLabel}</span>
+          {assetCount > 1 && <span className="ml-0.5 px-1 rounded bg-violet-300/20 text-[9px] font-bold text-violet-50">{assetCount}</span>}
+        </button>
+
+        <div className="relative">
+          <button
+            onClick={() => setStyleMenuOpen(o => !o)}
+            className={`px-2 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1 ${
+              b.stylePresetOverride
+                ? 'bg-amber-500/15 border-amber-400/40 text-amber-100 hover:bg-amber-500/25'
+                : 'bg-zinc-500/[0.06] border-zinc-400/20 text-zinc-300/80 hover:bg-zinc-500/15 hover:text-zinc-100 hover:border-zinc-400/40'
+            }`}
+          >
+            <span>{activePreset.emoji}</span>
+            <span className="max-w-[90px] truncate">{activePreset.label}</span>
+            <svg className="w-2.5 h-2.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+          </button>
+          {styleMenuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setStyleMenuOpen(false)}/>
+              <div className="absolute left-0 top-full mt-1 z-50 w-72 rounded-lg border border-white/10 bg-[#141416] shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden" onClick={e => e.stopPropagation()}>
+                <div className="px-3 py-2 border-b border-white/5 text-[10px] uppercase tracking-[0.18em] text-zinc-500">Estilo do motion</div>
+                <div className="max-h-[280px] overflow-y-auto">
+                  {STYLE_PRESETS.map(p => {
+                    const isActive = (b.stylePresetOverride ?? 'glass-tech') === p.id;
+                    return (
+                      <button key={p.id} onClick={() => { onSetStylePreset(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId)); setStyleMenuOpen(false); }}
+                        className={`w-full text-left px-3 py-2 flex items-start gap-2 transition-colors ${isActive ? 'bg-amber-500/10' : 'hover:bg-white/5'}`}>
+                        <span className="text-base shrink-0 mt-0.5">{p.emoji}</span>
+                        <div className="flex-1 min-w-0">
+                          <div className={`text-[11.5px] font-medium ${isActive ? 'text-amber-200' : 'text-zinc-100'}`}>
+                            {p.label}{isActive && <span className="ml-1.5 text-[9px] text-amber-300">●</span>}
+                          </div>
+                          <div className="text-[10px] text-zinc-500 leading-snug line-clamp-2">{p.bestFor}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({ layout, selected }) => {
   // Each thumbnail is a stylized 9:16-ish rectangle showing where avatar (amber) and media (emerald) sit.
@@ -3543,9 +4597,13 @@ const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({
   );
 };
 
-const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage }) => {
+const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, carouselRole }) => {
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  // Block "advanced" controls (asset, style picker, layout, sliders) live behind a
+  // disclosure toggle. Collapsed by default — the card shows just header + text + footer.
+  // Local state only — users rediscover on next session, which is the right tradeoff.
+  const [expanded, setExpanded] = useState(false);
   // Resolve current preset (override or seed default 'glass-tech').
   const activePreset = findStylePreset(b.stylePresetOverride ?? 'glass-tech');
   const isAvatar = b.kind === 'avatar';
@@ -3571,6 +4629,15 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
           isAvatar ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'
         }`}>{index + 1}</span>
         <span className="shrink-0 text-[10px]">{isAvatar ? '👤' : '🖥️'}</span>
+        {carouselRole && (
+          <span className={`shrink-0 text-[8px] px-1 py-0.5 rounded font-semibold uppercase ${
+            carouselRole === 'cover' ? 'bg-violet-500/30 text-violet-300' :
+            carouselRole === 'cta'   ? 'bg-emerald-500/20 text-emerald-300' :
+                                      'bg-white/5 text-zinc-500'
+          }`}>
+            {carouselRole === 'cover' ? 'Cover' : carouselRole === 'cta' ? 'CTA' : 'Slide'}
+          </span>
+        )}
         <span className="flex-1 min-w-0 text-[11.5px] text-zinc-300 truncate">{b.text || <span className="italic text-zinc-600">vazio</span>}</span>
         <span className="shrink-0 text-[9.5px] text-zinc-500 font-mono tabular-nums">{duration.toFixed(1)}s</span>
         {b.dirty && <span className="shrink-0 w-1.5 h-1.5 rounded-full bg-amber-400" title="Texto alterado · regenere o áudio"></span>}
@@ -3655,15 +4722,26 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
           <>
             {/* ── Primary header: kind toggle · motion · ⋯ ───────────────── */}
             <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-white/5">
-              <button
-                onClick={(e) => { e.stopPropagation(); onToggleKind(); }}
-                className={`flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 transition-colors shrink-0 ${
-                  isAvatar ? 'text-amber-300 bg-amber-500/10 hover:bg-amber-500/20' : 'text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
-                }`}
-                title={`Tipo: ${isAvatar ? 'avatar' : 'b-roll'} · clique pra alternar`}
-              >
-                {isAvatar ? '👤 Avatar' : '🖥️ B-roll'}
-              </button>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={(e) => { e.stopPropagation(); onToggleKind(); }}
+                  className={`flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 transition-colors ${
+                    isAvatar ? 'text-amber-300 bg-amber-500/10 hover:bg-amber-500/20' : 'text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
+                  }`}
+                  title={`Tipo: ${isAvatar ? 'avatar' : 'b-roll'} · clique pra alternar`}
+                >
+                  {isAvatar ? '👤 Avatar' : '🖥️ B-roll'}
+                </button>
+                {carouselRole && (
+                  <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide ${
+                    carouselRole === 'cover' ? 'bg-violet-500/30 text-violet-300' :
+                    carouselRole === 'cta'   ? 'bg-emerald-500/20 text-emerald-300' :
+                                              'bg-white/5 text-zinc-500'
+                  }`}>
+                    {carouselRole === 'cover' ? 'Cover' : carouselRole === 'cta' ? 'CTA' : `Slide ${index + 1}`}
+                  </span>
+                )}
+              </div>
 
               <div className="flex items-center gap-1 flex-1 min-w-0 justify-end">
                 <button
@@ -3681,19 +4759,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                   {!isBusy && <span className="text-[12px] leading-none">🎨</span>}
                   <span className="truncate">{motionLabel}</span>
                 </button>
-                {b.motion?.html && !isBusy && (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onOpenMotionAdvanced(); }}
-                    className="p-1 rounded-md text-zinc-500 hover:text-zinc-200 hover:bg-white/5 transition-colors shrink-0"
-                    title="Ajustar motion (avançado)"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                  </button>
-                )}
-                {/* ⋯ menu (move/jump/duplicate/delete) */}
+                {/* ⋯ menu (motion advanced · asset · jump/move/duplicate/delete) */}
                 <div className="relative shrink-0">
                   <button
                     onClick={(e) => { e.stopPropagation(); setMoreMenuOpen(o => !o); }}
@@ -3708,9 +4774,31 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                     <>
                       <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setMoreMenuOpen(false); }} />
                       <div
-                        className="absolute right-0 top-full mt-1 z-50 w-48 rounded-lg border border-white/10 bg-[#141416] shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden py-1"
+                        className="absolute right-0 top-full mt-1 z-50 w-52 rounded-lg border border-white/10 bg-[#141416] shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden py-1"
                         onClick={(e) => e.stopPropagation()}
                       >
+                        {b.motion?.html && (
+                          <button
+                            onClick={() => { setMoreMenuOpen(false); onOpenMotionAdvanced(); }}
+                            className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
+                          >
+                            <svg className="w-3.5 h-3.5 text-fuchsia-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                            Editar motion avançado
+                          </button>
+                        )}
+                        <button
+                          onClick={() => { setMoreMenuOpen(false); onOpenAssetPicker(); }}
+                          className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
+                        >
+                          <svg className="w-3.5 h-3.5 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                          </svg>
+                          Anexar asset…
+                        </button>
+                        <div className="border-t border-white/5 my-1" />
                         <button
                           onClick={() => { setMoreMenuOpen(false); onJumpTo(); }}
                           className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
@@ -3766,8 +4854,24 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         rows={3}
       />
 
-      {/* ── Inspector strip: secondary controls (asset · style) ─────────── */}
-      {(() => {
+      {/* ── Disclosure toggle: "Ajustes do bloco" ───────────────────────── */}
+      <button
+        onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
+        className="w-full px-3 py-1.5 border-t border-white/5 flex items-center justify-center gap-1.5 text-[10px] text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.02] transition-colors"
+        title={expanded ? 'Recolher ajustes' : 'Expandir ajustes'}
+      >
+        <span>Ajustes do bloco</span>
+        <svg
+          className="w-3 h-3 transition-transform"
+          style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {/* ── Inspector strip + layout + sliders — hidden by default ───── */}
+      {expanded && (() => {
         const currentAssets = b.attachedAssets ?? [];
         const assetCount = currentAssets.length;
         const assetLabel = assetCount === 0
@@ -3858,7 +4962,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         );
       })()}
 
-      {isAvatar && (
+      {expanded && isAvatar && (
         <div className="px-3 py-2 border-t border-white/5">
           <div className="text-[10px] text-zinc-400 mb-1.5">📐 Layout</div>
           <div className="grid grid-cols-4 gap-1.5">
@@ -3880,7 +4984,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         </div>
       )}
 
-      {isAvatar && audioReady && duration > 0.5 && (
+      {expanded && isAvatar && audioReady && duration > 0.5 && (
         <div className="px-3 py-2 border-t border-white/5 space-y-1.5">
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-zinc-400">⏱ Avatar visível</span>
@@ -3904,7 +5008,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         </div>
       )}
 
-      {isAvatar && (
+      {expanded && isAvatar && (
         <div className="px-3 py-2 border-t border-white/5 space-y-1.5">
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-zinc-400">🔍 Zoom do avatar</span>

@@ -6,7 +6,8 @@ import {
   referencesDir,
   type ReferenceMeta,
 } from './referenceVideoStore';
-import type { PersistedAnalysis } from './types';
+import type { PersistedAnalysis, AppTheme } from './types';
+import { useModalChrome } from './modalChrome';
 
 interface Props {
   analyses: PersistedAnalysis[];
@@ -15,6 +16,7 @@ interface Props {
   onRemoveAnalysis: (createdAt: number) => void;
   /** Trigger re-analysis of an existing reference file via the script preview pipeline. */
   onReanalyze?: (meta: ReferenceMeta) => void;
+  appTheme?: AppTheme;
 }
 
 const fmtSize = (b: number) =>
@@ -37,7 +39,8 @@ interface Row {
   key: string;
 }
 
-export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan, onRemoveAnalysis, onReanalyze }) => {
+export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan, onRemoveAnalysis, onReanalyze, appTheme }) => {
+  const chrome = useModalChrome(appTheme);
   const [refs, setRefs] = useState<ReferenceMeta[]>([]);
   const [folder, setFolder] = useState<string>('');
   const [loading, setLoading] = useState(true);
@@ -110,8 +113,8 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
   };
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6">
-      <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col">
+    <div className="fixed inset-0 backdrop-blur-sm flex items-center justify-center z-[100] p-6" style={chrome.backdrop}>
+      <div className="rounded-2xl max-w-3xl w-full max-h-[85vh] overflow-hidden flex flex-col" style={chrome.card}>
         {/* Header */}
         <div className="px-6 py-5 border-b border-white/5 flex items-start justify-between gap-4">
           <div>

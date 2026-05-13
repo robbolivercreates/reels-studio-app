@@ -62,7 +62,7 @@ const SYSTEM_PROMPT = `You are a senior motion designer at a top studio (Buck, O
 
 Your output is HyperFrames-compatible HTML — the BODY ONLY (everything inside the root container, plus the closing <script>). No <html>, <head>, <body>, no <div id="root"> wrapper.
 
-The piece you're making is 1080×1920, 30fps. It plays for the duration specified per block. There's a narrator speaking; auto-captions will be burned in later. Your motion is the visual layer that ELEVATES the words — sometimes it illustrates, sometimes it punctuates, sometimes it's pure atmosphere.
+The piece you're making is CANVAS_SIZE_PLACEHOLDER, 30fps. It plays for the duration specified per block. There's a narrator speaking; auto-captions will be burned in later. Your motion is the visual layer that ELEVATES the words — sometimes it illustrates, sometimes it punctuates, sometimes it's pure atmosphere.
 
 ═══════════════════════════════════════════════════════════
  PRINCIPLE 1 — DESIGN FROM THE IDEA, NOT FROM A TEMPLATE
@@ -325,7 +325,7 @@ Decorative atmosphere (gradient, particles) MAY extend to the bleed area. Center
 ═══════════════════════════════════════════════════════════
  GSAP TECHNIQUES — your toolkit
 ═══════════════════════════════════════════════════════════
-You're animating with GSAP 3.14 (already loaded). Build a single paused timeline registered on window.__timelines["{COMPOSITION_ID}"]. Combine these primitives:
+You're animating with GSAP 3.14 (already loaded). Build a single paused timeline registered on window.__timelines[compositionId] — where compositionId is the ID from the "--- COMPOSITION ID ---" section of your brief. Combine these primitives:
 
 A) STAGGERED ENTRANCE
    tl.from('.cluster > *', { y: 60, opacity: 0, scale: 0.92, stagger: 0.12, duration: 0.5, ease: 'back.out(1.4)' })
@@ -549,11 +549,11 @@ If the named app is completely unknown, build a generic-but-plausible shell:
  TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════
 1. Each element: class="clip", data-start, data-duration, data-track-index (0=back, higher=front), id="kebab-case-name" (REQUIRED — lint fails without an id on every timeline element). Media tags (<video src=…>, <img src=…>) ALSO need data-start + data-duration on the tag itself, in addition to being inside a .clip shell — without that the lint reports 'media_missing_data_start' and the render aborts.
-2. ONE <script> at the end:
+2. ONE <script> at the end. Use the actual composition ID from the "--- COMPOSITION ID ---" section of your brief (e.g. "motion-abc123"). Example structure:
    window.__timelines = window.__timelines || {}
    const tl = gsap.timeline({ paused: true })
-   window.__timelines["{COMPOSITION_ID}"] = tl
-   ({COMPOSITION_ID} is a literal placeholder — write it exactly)
+   window.__timelines["motion-abc123"] = tl   // ← replace "motion-abc123" with the real ID from your brief
+   CRITICAL: window.__timelines key MUST match the composition ID exactly — wrong key = silent black screen.
 3. All tweens fit within each element's data-start to data-start+data-duration window
 4. Canvas: 1080×1920px. Absolute positioning. Sizes in px.
 5. Fonts already loaded (use ONLY these — no other Google Fonts links):
@@ -635,6 +635,12 @@ export interface GenerateMotionInput {
   /** Motion layer mode — affects canvas dimensions and composition design. */
   motionLayer?: 'overlay' | 'replace' | 'split-bottom' | 'split-top';
   /**
+   * Output canvas aspect ratio. Defaults to '9:16' (1080×1920) for reels.
+   * Set to '4:5' (1080×1350) for carousel slides — HyperFrames renders at this
+   * size and the preview iframe adjusts accordingly.
+   */
+  canvasAspect?: '9:16' | '4:5';
+  /**
    * Brand identity from a previous motion in this reel. When provided, brand
    * research is SKIPPED and these colors are used as-is. This keeps every
    * motion in the same reel visually consistent (same palette, same style).
@@ -647,6 +653,12 @@ export interface GenerateMotionInput {
    * speaks English.
    */
   outputLanguage?: string;
+  /**
+   * Global color mode from the reel. When 'light', dark presets receive a
+   * forced override that swaps their background to white/light-neutral and
+   * their text to near-black. Light presets are unaffected.
+   */
+  motionColorMode?: 'dark' | 'light';
 }
 
 // ─── Step 1: Brand research via Google Search grounding ───────────────────────
@@ -861,7 +873,186 @@ const buildMotionLanguageSection = (lang: string): string => {
   ].join('\n');
 };
 
+// ─── Claude UI native preset (no Gemini call) ───────────────────────────────
+
+function _detectClaudeCommand(cmd: string, blockText: string): string {
+  const s = `${cmd} ${blockText}`.toLowerCase();
+  if (s.includes('ultraplan')) return 'ultraplan';
+  if (s.includes('powerup') || s.includes('power up')) return 'powerup';
+  if (s.includes('insight')) return 'insight';
+  return 'generic';
+}
+
+const _CLAUDE_RESPONSES: Record<string, { label: string; lines: Array<{ text: string; color?: string }> }> = {
+  ultraplan: {
+    label: 'Criando sub-agentes de pesquisa…',
+    lines: [
+      { text: '›  Agente de pesquisa ativo' },
+      { text: '›  Agente de análise ativo' },
+      { text: '›  Montando diagrama…' },
+      { text: '✓  Plano completo gerado', color: '#5ac47d' },
+    ],
+  },
+  powerup: {
+    label: '10 tutoriais feitos pra você:',
+    lines: [
+      { text: '1.  Prompts que economizam horas' },
+      { text: '2.  Fluxo de edição de vídeo com IA' },
+      { text: '3.  Roteiros de Reels em 3 minutos' },
+      { text: '4.  Análise de concorrentes automática' },
+      { text: '    + 6 tutoriais personalizados…', color: '#888' },
+    ],
+  },
+  insight: {
+    label: 'Relatório gerado com sucesso:',
+    lines: [
+      { text: '›  Taxa de engajamento: +34%' },
+      { text: '›  Melhor formato: Carrossel' },
+      { text: '›  Horário ideal: 18h–21h' },
+      { text: '✓  3 ações prioritárias listadas', color: '#5ac47d' },
+    ],
+  },
+  generic: {
+    label: 'Processando sua solicitação…',
+    lines: [
+      { text: '›  Analisando contexto' },
+      { text: '›  Gerando resposta' },
+      { text: '✓  Pronto', color: '#5ac47d' },
+    ],
+  },
+};
+
+const _CMD_TEXTS: Record<string, string> = {
+  ultraplan: 'Ultraplan: crie meu plano de conteúdo',
+  powerup: 'Powerup',
+  insight: 'Insight: analise meu canal',
+};
+
+function _buildClaudeUiHtml(input: GenerateMotionInput): GenerationOutput {
+  const compositionId = input.compositionId;
+  const DUR = input.durationSec;
+  const cmdType = _detectClaudeCommand(input.text ?? '', input.blockText);
+  const cmd = (input.text?.trim() || _CMD_TEXTS[cmdType] || 'Ultraplan').slice(0, 60);
+  const resp = _CLAUDE_RESPONSES[cmdType] ?? _CLAUDE_RESPONSES.generic;
+
+  const charDelay = cmd.length <= 12 ? 0.13 : 0.055;
+  const typeEnd = parseFloat((0.7 + cmd.length * charDelay).toFixed(3));
+  const lineDelay = 0.62;
+
+  const linesHtml = resp.lines.map((line, i) => {
+    const color = line.color ?? '#cccccc';
+    return `        <div id="rline${i}" class="font-body" style="color:${color};font-size:29px;line-height:1.35;display:flex;align-items:center;gap:12px;margin-bottom:14px;opacity:0;white-space:pre;">${line.text}</div>`;
+  }).join('\n');
+
+  const lineGsap = resp.lines.map((_, i) => {
+    const t = (typeEnd + 2.05 + i * lineDelay).toFixed(3);
+    const isLast = i === resp.lines.length - 1;
+    const ease = isLast ? "'back.out(1.4)'" : "'expo.out'";
+    const fromScale = isLast ? ', scale: 0.94' : '';
+    const toScale   = isLast ? ', scale: 1' : '';
+    return `  tl.fromTo('#rline${i}', { opacity: 0, x: -16${fromScale} }, { opacity: 1, x: 0${toScale}, duration: 0.4, ease: ${ease} }, ${t});`;
+  }).join('\n');
+
+  // ── Claude avatar SVG (reused 3×) ──────────────────────────────────────
+  const avatarSvg = `<svg width="20" height="20" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" fill="white" opacity=".9"/><circle cx="16" cy="16" r="4.5" fill="#c84040"/></svg>`;
+  const avatarDiv = `<div style="width:44px;height:44px;border-radius:50%;background:linear-gradient(135deg,#e07b54,#c84040);display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;">${avatarSvg}</div>`;
+
+  const htmlBody = `<!-- Background — track 0 -->
+<div id="bg-shell" class="clip" data-start="0" data-duration="${DUR}" data-track-index="0" style="position:absolute;inset:0;"><div id="bg-inner" style="position:absolute;inset:0;background:#1c1c1c;"></div></div>
+<div class="atmos-vignette" style="z-index:50;pointer-events:none;"></div>
+
+<!-- Top bar — track 1 -->
+<div id="topbar-shell" class="clip" data-start="0" data-duration="${DUR}" data-track-index="1" style="position:absolute;top:260px;left:80px;right:80px;overflow:visible;">
+  <div id="topbar-inner" style="display:flex;align-items:center;justify-content:space-between;opacity:0;">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <div style="width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,#e07b54,#c84040);display:flex;align-items:center;justify-content:center;flex-shrink:0;"><svg width="20" height="20" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="11" fill="white" opacity=".95"/><circle cx="16" cy="16" r="4.5" fill="#c84040"/></svg></div>
+      <span class="font-body" style="color:#e8e8e8;font-size:30px;font-weight:600;letter-spacing:-0.5px;">Claude</span>
+    </div>
+    <div style="background:#2a2a2a;border:1px solid #383838;border-radius:14px;padding:8px 18px;"><span class="font-body" style="color:#999;font-size:22px;font-weight:500;">claude opus 4</span></div>
+  </div>
+</div>
+
+<!-- Divider — track 2 -->
+<div id="divider-shell" class="clip" data-start="0" data-duration="${DUR}" data-track-index="2" style="position:absolute;top:356px;left:80px;right:80px;height:1px;"><div id="divider-inner" style="width:100%;height:100%;background:#2a2a2a;opacity:0;"></div></div>
+
+<!-- Chat area — track 3 -->
+<div id="chat-shell" class="clip" data-start="0" data-duration="${DUR}" data-track-index="3" style="position:absolute;top:380px;left:80px;right:80px;height:980px;overflow:hidden;">
+  <div id="chat-inner" style="opacity:0;">
+    <div id="user-row" style="display:flex;justify-content:flex-end;margin-bottom:44px;opacity:0;">
+      <div style="background:#2c2c2c;border:1px solid #3c3c3c;border-radius:22px 22px 6px 22px;padding:24px 30px;max-width:860px;">
+        <span id="utext" class="font-body" style="color:#f0f0f0;font-size:33px;line-height:1.4;font-weight:400;"></span><span id="ucursor" style="display:inline-block;width:2px;height:38px;background:#e07b54;vertical-align:middle;margin-left:3px;"></span>
+      </div>
+    </div>
+    <div id="thinking-row" style="display:flex;align-items:flex-start;gap:18px;margin-bottom:30px;opacity:0;">
+      ${avatarDiv}
+      <div>
+        <div class="font-body" style="color:#aaa;font-size:26px;font-weight:500;margin-bottom:14px;">Claude está pensando…</div>
+        <div style="display:flex;gap:9px;"><div id="dot1" style="width:9px;height:9px;border-radius:50%;background:#e07b54;"></div><div id="dot2" style="width:9px;height:9px;border-radius:50%;background:#e07b54;"></div><div id="dot3" style="width:9px;height:9px;border-radius:50%;background:#e07b54;"></div></div>
+      </div>
+    </div>
+    <div id="cresp-row" style="display:flex;align-items:flex-start;gap:18px;opacity:0;">
+      ${avatarDiv}
+      <div style="flex:1;">
+        <div id="clabel" class="font-body" style="color:#e07b54;font-size:26px;font-weight:600;margin-bottom:18px;opacity:0;">${resp.label}</div>
+${linesHtml}
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Input bar — track 4 -->
+<div id="input-shell" class="clip" data-start="0" data-duration="${DUR}" data-track-index="4" style="position:absolute;top:1480px;left:80px;right:80px;">
+  <div id="input-inner" style="background:#212121;border:1px solid #333;border-radius:30px;padding:24px 32px;display:flex;align-items:center;justify-content:space-between;opacity:0;">
+    <span class="font-body" style="color:#555;font-size:27px;">Como posso ajudar?</span>
+    <div style="width:48px;height:48px;border-radius:50%;background:#2d2d2d;border:1px solid #3a3a3a;display:flex;align-items:center;justify-content:center;"><svg width="22" height="22" viewBox="0 0 24 24" fill="#666"><path d="M2 21l21-9L2 3v7l15 2-15 2v7z"/></svg></div>
+  </div>
+</div>
+
+<!-- Progress bar — track 9 -->
+<div id="pb-shell" class="clip" data-start="0" data-duration="${DUR}" data-track-index="9" style="position:absolute;bottom:0;left:0;right:0;height:3px;"><div id="pb-inner" style="height:100%;width:0%;background:#e07b54;opacity:.8;"></div></div>
+
+<script>
+window.__timelines = window.__timelines || {};
+const tl = gsap.timeline({ paused: true });
+window.__timelines["${compositionId}"] = tl;
+const DUR = ${DUR};
+const cmd = ${JSON.stringify(cmd)};
+tl.to('#pb-inner', { width: '100%', duration: DUR, ease: 'none' }, 0);
+tl.fromTo('#topbar-inner', { opacity: 0, y: -12 }, { opacity: 1, y: 0, duration: 0.45, ease: 'expo.out' }, 0.1);
+tl.to('#divider-inner', { opacity: 1, duration: 0.3 }, 0.35);
+tl.fromTo('#chat-inner',  { opacity: 0 },        { opacity: 1, duration: 0.3 }, 0.35);
+tl.fromTo('#input-inner', { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: 'expo.out' }, 0.35);
+tl.to('#user-row', { opacity: 1, duration: 0.3 }, 0.6);
+const utextEl = document.getElementById('utext');
+for (let i = 0; i < cmd.length; i++) {
+  tl.call(() => { utextEl.textContent = cmd.slice(0, i + 1); }, null, 0.7 + i * ${charDelay});
+}
+tl.to('#ucursor', { opacity: 0, duration: 0.15, repeat: 3, yoyo: true }, ${typeEnd});
+tl.set('#ucursor', { opacity: 0 }, ${(typeEnd + 0.7).toFixed(3)});
+tl.fromTo('#thinking-row', { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out' }, ${(typeEnd + 0.3).toFixed(3)});
+tl.to(['#dot1','#dot2','#dot3'], { y: -7, duration: 0.28, stagger: 0.1, ease: 'power2.out', yoyo: true, repeat: 3 }, ${(typeEnd + 0.5).toFixed(3)});
+tl.to('#thinking-row', { opacity: 0, duration: 0.25 }, ${(typeEnd + 1.55).toFixed(3)});
+tl.fromTo('#cresp-row', { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.3, ease: 'power2.out' }, ${(typeEnd + 1.7).toFixed(3)});
+tl.to('#clabel', { opacity: 1, duration: 0.35 }, ${(typeEnd + 1.85).toFixed(3)});
+${lineGsap}
+<\/script>`;
+
+  return {
+    intent: `Interface do Claude com comando "${cmd}" sendo digitado e resposta aparecendo`,
+    text: cmd,
+    htmlBody,
+    rationale: `Preset claude-ui nativo: interface escura do Claude com digitação e resposta progressiva (${resp.lines.length} linhas).`,
+  };
+}
+
+// ─── Main HTML generator ────────────────────────────────────────────────────
+
 export const generateMotionHtml = async (input: GenerateMotionInput): Promise<GenerationOutput & { brand?: BrandResearch }> => {
+  // Claude UI preset — native HTML, no Gemini call needed.
+  if (input.presetId === 'claude-ui') {
+    return _buildClaudeUiHtml(input);
+  }
+
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
   const preset = findStylePreset(input.presetId);
 
@@ -984,6 +1175,37 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ].join('\n');
   })();
 
+  // ─── Light mode override ──────────────────────────────────────────────
+  // When the reel's motionColorMode is 'light' AND the chosen preset is dark,
+  // inject a mandatory override that forces a white/light background palette.
+  // Light presets (bgType !== 'dark') are intentionally skipped — they are
+  // already bright and don't need forcing.
+  const lightModeSection = (input.motionColorMode === 'light' && preset.bgType === 'dark') ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  ☀️  LIGHT MODE OVERRIDE — MANDATORY (user setting)`,
+    `╚══════════════════════════════════════════════════════╝`,
+    `The user has switched the reel to LIGHT MODE. Regardless of the brand colors`,
+    `or preset mood below, you MUST apply these background overrides:`,
+    ``,
+    `brandBackgroundColor: #ffffff   ← pure white (overrides ANY dark bg from brand)`,
+    `brandTextColor: #1d1d1f         ← near-black (high contrast on white)`,
+    ``,
+    `KEEP from the brand/preset:`,
+    `  • brandPrimaryColor  (accent, icons, glows — keep as-is)`,
+    `  • brandSecondaryColor, brandAccentColor`,
+    `  • All animation timing, easing, and motion grammar`,
+    ``,
+    `FORBIDDEN in light mode:`,
+    `  • Any background darker than #f0f0f0`,
+    `  • Dark vignettes (box-shadow: inset rgba(0,0,0,…)) — remove them entirely`,
+    `  • White text on white background — always check contrast`,
+    `  • The preset's dark atmosphere glows — skip them or reduce alpha to ≤ 0.06`,
+    ``,
+    `The composition must feel bright, airy, and clean — like an Apple.com product page`,
+    `or a well-lit editorial spread. Motion grammar stays the same; only the palette shifts.`,
+    '',
+  ].join('\n') : '';
+
   // ─── Brand chrome (persistent visual identity layer) ──────────────────
   // After the FIRST motion of a reel, every subsequent motion gets a small
   // section instructing Gemini to include a faint always-on chrome layer on
@@ -1058,7 +1280,8 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         return [
           `   <div id="${id}-shell" class="clip" data-start="${start.toFixed(3)}" data-duration="${slotDur.toFixed(3)}" data-track-index="3"`,
           `        style="position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);">`,
-          `     <img id="${id}" class="asset-anim" src="${u}" loading="eager"`,
+          `     <img id="${id}" class="clip asset-anim" src="${u}" loading="eager"`,
+          `          data-start="${start.toFixed(3)}" data-duration="${slotDur.toFixed(3)}" data-track-index="3"`,
           `          style="width:${slideSafeW}px; max-height:${slideSafeH}px; object-fit:contain; border-radius:24px; box-shadow:0 32px 80px rgba(0,0,0,0.6);" />`,
           `   </div>`,
         ].join('\n');
@@ -1285,6 +1508,31 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       ].join('\n');
     }
     if (layer === 'replace') {
+      if (input.canvasAspect === '4:5') {
+        return [
+          `╔══════════════════════════════════════════════════════╗`,
+          `  CANVAS SLOT — CAROUSEL SLIDE (4:5 · 1080×1350px)`,
+          `╚══════════════════════════════════════════════════════╝`,
+          `This is a CAROUSEL SLIDE. Canvas: 1080×1350px (4:5 aspect ratio). No avatar.`,
+          `This is ONE slide in a swipeable Instagram carousel. Design it as a standalone visual card.`,
+          ``,
+          `DESIGN PHILOSOPHY for carousel slides:`,
+          `• Each slide is a static poster that animates in — NOT a talking-head video supplement`,
+          `• Bold, graphic, poster-like aesthetic. Think magazine cover energy.`,
+          `• One strong visual hierarchy: topic headline → supporting element → quiet background`,
+          `• The text on screen IS the message — make it the dominant element, not a caption`,
+          `• Animations: elegant entrances (slide-up, fade-scale). Loop gently or hold at the end. Never frantic.`,
+          ``,
+          `📐 SAFE AREA (carousel 4:5, 1080×1350):`,
+          `  Place all primary content inside x:80–1000, y:160–1190.`,
+          `  ⛔ FORBIDDEN: place any headline or primary content above y:160 or below y:1190.`,
+          `  • Top 160px (y:0–160): background gradients and decorative atmosphere only.`,
+          `  • Bottom 160px (y:1190–1350): quiet zone — soft gradient, no text.`,
+          `  • Hero/focal element vertical center: aim for y≈630-680 (true middle of safe box).`,
+          `  • Typography size: larger than reel — viewer is reading on mobile at thumb-scroll speed.`,
+          `  • Root div: position:absolute; width:1080px; height:1350px; overflow:hidden`,
+        ].join('\n');
+      }
       return [
         `╔══════════════════════════════════════════════════════╗`,
         `  CANVAS SLOT — FULL FRAME REPLACE`,
@@ -1371,6 +1619,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     slotSection,
     '',
     reelContextSection,
+    lightModeSection,
     brandSection,
     brandChromeSection,
     atmosphereSection,
@@ -1397,12 +1646,15 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     FORBIDDEN_PATTERNS,
   ].filter(Boolean).join('\n');
 
+  const canvasSize = input.canvasAspect === '4:5' ? '1080×1350' : '1080×1920';
+  const systemPromptForRequest = SYSTEM_PROMPT.replace('CANVAS_SIZE_PLACEHOLDER', canvasSize);
+
   let lastError: unknown;
   for (const model of MODEL_CANDIDATES) {
     try {
       const response = await ai.models.generateContent({
         model,
-        contents: { parts: [{ text: SYSTEM_PROMPT }, { text: userBrief }] },
+        contents: { parts: [{ text: systemPromptForRequest }, { text: userBrief }] },
         config: {
           responseMimeType: 'application/json',
           responseSchema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
@@ -1442,31 +1694,30 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
 
 // ─── HTML doc assembly ─────────────────────────────────────────────────
 
-export const buildFullHtmlDoc = (motion: MotionConfig): string => {
+export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '4:5', motionColorMode?: 'dark' | 'light'): string => {
   const compositionId = motion.id;
   const dur = motion.durationSec;
   const isSplit = motion.layer === 'split-bottom' || motion.layer === 'split-top';
-  const canvasH = isSplit ? 960 : 1920;
+  const canvasH = isSplit ? 960 : canvasAspect === '4:5' ? 1350 : 1920;
+  const isLight = motionColorMode === 'light';
   return `<!doctype html>
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=1080, height=${canvasH}" />
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
-    <!-- Motion typography stack:
-         - Inter (UI/body/captions) — neutral, legible, default
-         - Anton (display headlines, single-weight 400) — condensed heavy, "reel caption" energy
-         - Space Grotesk (tech/quotes/numbers) — geometric, modern, monospace-ish
-         HyperFrames injects deterministic @font-face for these so renders are reproducible. -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Anton&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         width: 1080px; height: ${canvasH}px; overflow: hidden;
         background: #000;
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
         /* Enables 3D transforms (rotateY, perspective depth) on any descendant
            without each element needing to declare its own perspective. Use
            transform: rotateY(8deg) translateZ(40px) on cards for depth. */
@@ -1482,12 +1733,14 @@ export const buildFullHtmlDoc = (motion: MotionConfig): string => {
       .font-display { font-family: "Anton", "Inter", system-ui, sans-serif; letter-spacing: -0.01em; text-transform: uppercase; }
       .font-tech    { font-family: "Space Grotesk", "Inter", system-ui, sans-serif; letter-spacing: -0.02em; }
       .font-body    { font-family: "Inter", system-ui, sans-serif; }
-      /* Cinematic atmosphere helper — see ATMOSPHERE section in prompt. */
+      /* Cinematic atmosphere helper — see ATMOSPHERE section in prompt.
+         Dark mode: strong black inset shadow anchors the eye to centre.
+         Light mode: very subtle warm-grey inset so edges don't blow out. */
       .atmos-vignette {
         position: absolute; inset: 0; pointer-events: none;
-        box-shadow:
-          inset 0 0 240px rgba(0, 0, 0, 0.65),
-          inset 0 0 80px rgba(0, 0, 0, 0.45);
+        box-shadow: ${isLight
+          ? 'inset 0 0 160px rgba(0,0,0,0.10), inset 0 0 60px rgba(0,0,0,0.06)'
+          : 'inset 0 0 240px rgba(0,0,0,0.65), inset 0 0 80px rgba(0,0,0,0.45)'};
       }
     </style>
   </head>

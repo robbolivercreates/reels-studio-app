@@ -498,7 +498,7 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
                 controls
                 playsInline
                 className="max-h-[40vh] w-auto rounded-lg"
-                style={{ aspectRatio: state.aspect === '9:16' ? '9/16' : state.aspect === '16:9' ? '16/9' : '1/1' }}
+                style={{ aspectRatio: state.aspect === '9:16' ? '9/16' : state.aspect === '16:9' ? '16/9' : state.aspect === 'carousel' ? '4/5' : '1/1' }}
               />
             </div>
           )}

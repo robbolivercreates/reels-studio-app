@@ -35,6 +35,8 @@ export const INITIAL_STATE: ReelsState = {
   emotion: 'neutral',
   voiceSpeed: 1.0,
   analyses: [],
+  motionColorMode: 'dark',
+  appTheme: 'dark',
 };
 
 const ANALYSIS_HISTORY_LIMIT = 20;
@@ -275,17 +277,24 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
 
     case 'set-block-style-preset-cascade': {
       // Apply preset to the target block AND all blocks without generated motion HTML.
-      // Blocks that already have motion.html are never touched — user already approved their style.
+      // Other blocks that already have motion.html are never touched — user already approved their style.
+      // For the TARGET block: if it already has a generated motion, we invalidate motion.html
+      // and reset status to 'draft' so the next motion render uses the new preset. Otherwise the
+      // visible chip and the cached motion would silently drift.
       return {
         ...state,
         blocks: state.blocks.map(b => {
           const hasMotion = !!(b.motion?.html);
           if (b.id !== action.id && hasMotion) return b;
+          const isTargetWithMotion = b.id === action.id && hasMotion;
+          const nextMotion = isTargetWithMotion && b.motion
+            ? { ...b.motion, html: '', status: 'draft' as const, videoPath: undefined, errorMessage: undefined }
+            : b.motion;
           if (action.preset === undefined) {
             const { stylePresetOverride: _s, ...rest } = b;
-            return rest;
+            return { ...rest, motion: nextMotion };
           }
-          return { ...b, stylePresetOverride: action.preset };
+          return { ...b, stylePresetOverride: action.preset, motion: nextMotion };
         }),
       };
     }
@@ -495,6 +504,11 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
     case 'set-aspect':
       return { ...state, aspect: action.aspect };
 
+    case 'set-motion-color-mode':
+      return { ...state, motionColorMode: action.mode };
+    case 'set-app-theme':
+      return { ...state, appTheme: action.theme };
+
     case 'audio-start':
       return { ...state, audio: { ...state.audio, status: 'generating', error: null } };
 
@@ -539,12 +553,27 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
     case 'audio-silence-toggle':
       // Just flips the flag — the apply/revert side-effect lives in a UI
       // effect that calls the cut worker (or restores the original blob).
+      // No-op when the value is unchanged so callers (e.g. the agent bridge)
+      // can dispatch defensively without triggering re-renders.
+      if (state.audio.silenceCut === action.on) return state;
       return { ...state, audio: { ...state.audio, silenceCut: action.on } };
 
-    case 'audio-silence-preset':
-      // Switching preset invalidates current detection until rerun. If cuts
-      // were already applied, the UI effect will re-apply with the new preset.
-      return { ...state, audio: { ...state.audio, silencePreset: action.preset, keepSegments: [], detectedSilenceSec: 0 } };
+    case 'audio-silence-preset': {
+      // Switching preset invalidates current detection until rerun. No-op
+      // when the preset hasn't actually changed — otherwise we'd needlessly
+      // wipe keepSegments and force the cut effect to revert + re-detect +
+      // re-apply, which the user sees as a flash on the timeline.
+      if (state.audio.silencePreset === action.preset) return state;
+      return {
+        ...state,
+        audio: {
+          ...state.audio,
+          silencePreset: action.preset,
+          keepSegments: [],
+          detectedSilenceSec: 0,
+        },
+      };
+    }
 
     case 'audio-silence-detect-start':
       return { ...state, audio: { ...state.audio, detectingSilence: true } };

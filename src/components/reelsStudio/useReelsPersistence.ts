@@ -174,6 +174,8 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
           analyses: persisted.analyses ?? (persisted.lastAnalysis ? [persisted.lastAnalysis] : []),
           emotion: persisted.emotion ?? 'neutral',
           voiceSpeed: persisted.voiceSpeed ?? 1.0,
+          motionColorMode: persisted.motionColorMode ?? 'dark',
+          appTheme: persisted.appTheme ?? 'dark',
         };
 
         dispatch({ type: 'hydrate', state: restoredState });

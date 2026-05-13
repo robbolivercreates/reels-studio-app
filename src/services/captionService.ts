@@ -42,7 +42,9 @@ REGRAS:
 
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
-  const models = [MODEL, 'gemini-3.1-flash-lite-preview'];
+  // Flash em primeiro; Pro como fallback. Flash Lite cortado — entrega
+  // caption morna pra texto criativo.
+  const models = [MODEL, 'gemini-3.1-pro-preview'];
   let lastErr: unknown;
   for (const model of models) {
     try {

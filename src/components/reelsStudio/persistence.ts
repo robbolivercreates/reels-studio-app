@@ -94,6 +94,8 @@ export interface PersistedProject {
   analyses?: ReelsState['analyses'];
   emotion?: ReelsState['emotion'];
   voiceSpeed?: number;
+  motionColorMode?: ReelsState['motionColorMode'];
+  appTheme?: ReelsState['appTheme'];
   savedAt: number;
 }
 
@@ -139,6 +141,8 @@ export const saveProject = async (state: ReelsState): Promise<void> => {
     analyses: state.analyses,
     emotion: state.emotion,
     voiceSpeed: state.voiceSpeed,
+    motionColorMode: state.motionColorMode,
+    appTheme: state.appTheme,
     savedAt: Date.now(),
   };
   await reqOf(STORE_PROJECT, 'readwrite', s => s.put(snapshot, PROJECT_KEY));
@@ -338,7 +342,7 @@ export interface ExportRecord {
   projectName: string;
   createdAt: number;
   durationSec: number;
-  aspect: '9:16' | '16:9' | '1:1';
+  aspect: '9:16' | '16:9' | '1:1' | 'carousel';
   quality: 'high' | 'lite';
   fileSize: number;
   blob: Blob;
@@ -436,6 +440,8 @@ export const saveNamedProject = async (state: ReelsState): Promise<string> => {
     analyses: state.analyses,
     emotion: state.emotion,
     voiceSpeed: state.voiceSpeed,
+    motionColorMode: state.motionColorMode,
+    appTheme: state.appTheme,
     savedAt: Date.now(),
   };
 
