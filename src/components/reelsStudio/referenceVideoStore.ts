@@ -71,6 +71,16 @@ export const downloadVideo = async (url: string): Promise<ReferenceMeta> => {
   return fromRust(rust);
 };
 
+/// Looks for an already-downloaded reference whose `sourceUrl` matches.
+/// Used by the agent's import-from-video-url tool to avoid re-running
+/// yt-dlp when the same reel is imported repeatedly. Returns null when
+/// no match exists (caller should fall back to downloadVideo).
+export const findReferenceByUrl = async (sourceUrl: string): Promise<ReferenceMeta | null> => {
+  const all = await listReferences();
+  const hit = all.find(r => r.sourceUrl === sourceUrl);
+  return hit ?? null;
+};
+
 export const revealReferencesDir = (): Promise<void> => invoke('reveal_references_dir');
 
 export interface DownloadProgress {

@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { renderMp4, type RenderProgress, type RenderHandle } from './mp4Renderer';
 import { saveExport, loadAudioBlob, type ExportRecord } from './persistence';
 import { detectExportCapability } from './exportCapability';
-import type { ReelsState } from './types';
+import type { ReelsState, ScriptBlock } from './types';
 import { copyText } from './clipboard';
 import { generateInstagramCaption } from '../../services/captionService';
 
@@ -153,9 +153,82 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       if (!audioBlob) throw new Error('Áudio não encontrado. Gere o áudio novamente (o blob expirou).');
 
       // When using the cut session, also use its remapped blocks/duration
-      // — the React state may not have caught up yet.
-      const effectiveBlocks = cutSession ? cutSession.blocks : state.blocks;
-      const effectiveDuration = cutSession ? cutSession.duration : state.audio.duration;
+      // — the React state may not have caught up yet. But: if the cut
+      // session's blocks are STALE (e.g. user resplit AFTER the cut and
+      // the session never got updated), fall back to state.blocks so
+      // the export doesn't render with the old block ids that have no
+      // matching clips/motions in current state.
+      const cutSessionStale = !!cutSession && (() => {
+        // The session is stale when state has anything visual on a block
+        // that the session doesn't know about. Three cases trigger it:
+        //
+        //   1) Clip id in state not present in session (post-resplit ids).
+        //   2) A block in state has motion but the matching session block
+        //      doesn't — happens when motion was generated AFTER the cut.
+        //   3) Same idea for attachedAssets generated after the cut.
+        //
+        // Without (2) and (3) the export silently drops motions/assets
+        // because cutSession.blocks is frozen in time at cut-apply.
+        const sessionById = new Map(cutSession.blocks.map(b => [b.id, b]));
+        const clipIdsInState = Object.keys(state.avatarClips);
+        if (clipIdsInState.some(id => !sessionById.has(id))) return true;
+        for (const b of state.blocks) {
+          const sessionBlock = sessionById.get(b.id);
+          if (!sessionBlock) continue;
+          if (b.motion && !sessionBlock.motion) return true;
+          const stateAssets = b.attachedAssets?.length ?? 0;
+          const sessionAssets = sessionBlock.attachedAssets?.length ?? 0;
+          if (stateAssets > sessionAssets) return true;
+        }
+        return false;
+      })();
+      if (cutSessionStale) {
+        console.warn('[export] cut session blocks are stale (motion/asset/resplit happened after cut) — merging visuals from state.blocks');
+      }
+      // When the session is stale, we still want its compressed start/end
+      // timings (the audio is the cut audio), but the visual fields
+      // (motion, attachedAssets, layout, kind) from state.blocks. Merge
+      // them: take session timing, overlay state visuals where ids match.
+      const effectiveBlocks: ScriptBlock[] = (() => {
+        if (!cutSession) return state.blocks;
+        if (!cutSessionStale) return cutSession.blocks;
+        const stateById = new Map(state.blocks.map(b => [b.id, b]));
+        return cutSession.blocks.map(sb => {
+          const fresh = stateById.get(sb.id);
+          if (!fresh) return sb;
+          // Keep session's start/end (compressed timeline); pull current visuals from state.
+          return {
+            ...fresh,
+            start: sb.start,
+            end: sb.end,
+          };
+        });
+      })();
+      const effectiveDuration = !cutSession ? state.audio.duration : cutSession.duration;
+
+      // Sanity check — every clip in state should map to a block we're
+      // about to render. Mismatches mean visuals will be missing in the
+      // output. Warn loudly so we catch regressions early.
+      const blockIdSet = new Set(effectiveBlocks.map(b => b.id));
+      const orphanClipIds = Object.keys(state.avatarClips).filter(id => !blockIdSet.has(id));
+      if (orphanClipIds.length > 0) {
+        console.warn(
+          '[export] WARN orphan avatar clips (no matching block):',
+          orphanClipIds,
+          '— these clips will NOT appear in the export. If this is unexpected, the block list and avatarClips state are out of sync.',
+        );
+      }
+      const avatarBlocksWithoutClip = effectiveBlocks
+        .filter(b => b.kind === 'avatar')
+        .filter(b => !state.avatarClips[b.id])
+        .map(b => b.id);
+      if (avatarBlocksWithoutClip.length > 0) {
+        console.warn(
+          '[export] WARN avatar blocks without clip:',
+          avatarBlocksWithoutClip,
+          '— these blocks will render as text placeholder. Generate clips before exporting for full quality.',
+        );
+      }
       const { invoke } = await import('@tauri-apps/api/core');
 
       // Render video-only via WebCodecs (audio encoding is broken on macOS
@@ -170,9 +243,9 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
           duration: effectiveDuration,
           aspect: state.aspect,
           quality,
-          silenceKeepSegments: !cutsApplied && state.audio.silenceCut && state.audio.keepSegments.length > 0
-            ? state.audio.keepSegments
-            : undefined,
+          // silenceKeepSegments removed — the audio reaching the
+          // renderer is already cut (block timestamps live on the
+          // post-cut timeline). See Onda 8 débito 12 in the plan.
           videoOnly: true,
         },
         (p) => setProgress(p),

@@ -1,5 +1,6 @@
 import React, { useReducer, useCallback, useEffect, useRef, useState } from 'react';
-import type { ScriptBlock, BlockKind, ToneOption, LanguageOption, RegenerateContext } from './types';
+import type { ScriptBlock, BlockKind, ToneOption, LanguageOption, RegenerateContext, ContentMode } from './types';
+import { suggestContentMode } from '../../services/contentMode';
 import {
   generateCarouselScript,
   carouselSlidesToBlocks,
@@ -121,6 +122,10 @@ interface WizardState {
   voiceProfileId: string | null;
   languageOverride: LanguageOption;
   rewriteOverride: RewriteLevel | null;
+  /** How to transform the source: compress (verbatim short), adapt (rewrite in voice), trailer (promise+glimpse+CTA-bait). */
+  contentMode: ContentMode;
+  /** True until the user changes contentMode manually — lets the auto-suggest update silently. */
+  contentModeAuto: boolean;
 
   // Interactive preview (replaces the old static generatedBlocks)
   previewBlocks: ScriptBlock[] | null;
@@ -193,6 +198,8 @@ const INITIAL: WizardState = {
   voiceProfileId: null,
   languageOverride: 'auto',
   rewriteOverride: null,
+  contentMode: 'adapt',
+  contentModeAuto: true,
   previewBlocks: null,
   previewBusy: undefined,
   previewHeader: {},
@@ -306,12 +313,20 @@ const buildRegenContext = (
   extra: string,
   tone: ToneOption,
   language: LanguageOption,
+  contentMode?: ContentMode,
 ): RegenerateContext => ({
   extraInstructions: extra || undefined,
   toneOverride: tone === 'current' ? undefined : tone,
   languageOverride: language === 'auto' ? undefined : language,
   previousAttempt: previous.map(b => ({ kind: b.kind, text: b.text })),
+  contentMode,
 });
+
+/** For the FIRST generation (no previous attempt yet) we still want contentMode to flow through. */
+const initialContextFor = (contentMode: ContentMode): RegenerateContext | undefined => {
+  if (contentMode === 'adapt') return undefined; // default — service legacy path
+  return { contentMode };
+};
 
 // ─── COMPONENT ────────────────────────────────────────────────────────────────
 
@@ -368,6 +383,30 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-suggest contentMode based on the current source size — but ONLY while
+  // the user hasn't manually changed it (`contentModeAuto` is true). Trailer
+  // mode for long-form, adapt for short. Cheap heuristic on word count / file size.
+  useEffect(() => {
+    if (!ws.contentModeAuto) return;
+    let suggested: ContentMode = 'adapt';
+    if (ws.source === 'video') {
+      // Rough video duration heuristic from file size: ~1MB per 10s at typical mobile bitrates.
+      const sizeMb = ws.videoFile ? ws.videoFile.size / 1024 / 1024 : 0;
+      const estimatedSec = sizeMb * 10;
+      if (estimatedSec > 90) suggested = 'trailer';
+    } else if (ws.source === 'article') {
+      const wordCount = ws.articleText.trim().split(/\s+/).filter(Boolean).length;
+      suggested = suggestContentMode({ kind: 'article', wordCount });
+    } else if (ws.source === 'script') {
+      const wordCount = ws.scriptText.trim().split(/\s+/).filter(Boolean).length;
+      suggested = suggestContentMode({ kind: 'script', wordCount });
+    }
+    if (suggested !== ws.contentMode) {
+      dispatch({ type: 'set-field', key: 'contentMode', value: suggested });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ws.source, ws.videoFile, ws.articleText, ws.scriptText, ws.contentModeAuto]);
+
   const activeProfile: VoiceProfile | undefined = profiles.find(p => p.id === ws.voiceProfileId);
 
   /** Returns a profile clone with rewriteOverride + languageOverride applied. */
@@ -408,7 +447,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     try {
       const meta = await saveImportedVideo(ws.videoFile, ws.videoFile.name);
       set('busyMessage', 'Preparando análise…');
-      const result = await analyseReferenceBlob(ws.videoFile, profileForCall(), undefined, onAnalysisStatus);
+      const result = await analyseReferenceBlob(ws.videoFile, profileForCall(), initialContextFor(ws.contentMode), onAnalysisStatus);
       void refreshLibrary();
       const mimeType = ws.videoFile.type || 'video/mp4';
       const bytesGetter = async () => {
@@ -442,7 +481,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
       set('busyMessage', 'Lendo arquivo…');
       const bytes = await readReferenceBytes(meta.fileName);
       set('busyMessage', 'Preparando análise…');
-      const result = await analyseReferenceFromBytes(bytes, 'video/mp4', profileForCall(), undefined, onAnalysisStatus);
+      const result = await analyseReferenceFromBytes(bytes, 'video/mp4', profileForCall(), initialContextFor(ws.contentMode), onAnalysisStatus);
       void refreshLibrary();
       const bytesGetter = async () => {
         const fresh = await readReferenceBytes(meta.fileName);
@@ -471,7 +510,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     try {
       const bytes = await readReferenceBytes(meta.fileName);
       set('busyMessage', 'Preparando análise…');
-      const result = await analyseReferenceFromBytes(bytes, 'video/mp4', profileForCall(), undefined, onAnalysisStatus);
+      const result = await analyseReferenceFromBytes(bytes, 'video/mp4', profileForCall(), initialContextFor(ws.contentMode), onAnalysisStatus);
       const bytesGetter = async () => {
         const fresh = await readReferenceBytes(meta.fileName);
         return { bytes: fresh, mimeType: 'video/mp4' };
@@ -550,7 +589,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
           if (ws.useHeuristic) {
             blocks = importScriptHeuristic(ws.scriptText.trim());
           } else {
-            blocks = await importScriptWithAI(ws.scriptText.trim(), undefined, profileForCall());
+            blocks = await importScriptWithAI(ws.scriptText.trim(), initialContextFor(ws.contentMode), profileForCall());
           }
           const avatarCount = blocks.filter(b => b.kind === 'avatar').length;
           header = {
@@ -583,6 +622,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
               extraInstructions: ws.articleExtraInstr || undefined,
               voiceProfile: profileForCall(),
             },
+            initialContextFor(ws.contentMode),
           );
           blocks = result.blocks;
           articlePreview = { text, sourceUrl, title, generated: result };
@@ -603,6 +643,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
               extraInstructions: ws.extraInstr || undefined,
               voiceProfile: profileForCall(),
             },
+            initialContextFor(ws.contentMode),
           );
           blocks = result.blocks;
           header = {
@@ -630,7 +671,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     if (!ws.previewBlocks) return;
     dispatch({ type: 'set-preview-busy', busy: { kind: 'all' } });
     try {
-      const regen = buildRegenContext(ws.previewBlocks, extra, tone, language);
+      const regen = buildRegenContext(ws.previewBlocks, extra, tone, language, ws.contentMode);
       const profile = profileForCall();
       const profileWithLang = profile && language !== 'auto'
         ? { ...profile, outputLanguage: language as VoiceProfile['outputLanguage'] }
@@ -884,6 +925,8 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   profiles={profiles}
                   languageOverride={ws.languageOverride}
                   rewriteOverride={ws.rewriteOverride}
+                  contentMode={ws.contentMode}
+                  contentModeAuto={ws.contentModeAuto}
                   disabled={ws.generating}
                   onSelectProfile={(id) => {
                     setActiveProfileId(id);
@@ -891,6 +934,10 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   }}
                   onChangeLanguage={(lang) => set('languageOverride', lang)}
                   onChangeRewrite={(level) => set('rewriteOverride', level)}
+                  onChangeContentMode={(mode) => {
+                    dispatch({ type: 'set-field', key: 'contentMode', value: mode });
+                    dispatch({ type: 'set-field', key: 'contentModeAuto', value: false });
+                  }}
                   onEditProfiles={() => set('profilesPanelOpen', true)}
                 />
               )}

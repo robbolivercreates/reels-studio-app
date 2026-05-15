@@ -18,6 +18,7 @@ import {
   buildFilenames,
   buildReadme,
   type FcpxmlMediaRef,
+  type FcpxmlMotionFile,
 } from './fcpxmlExporter';
 import type { ReelsState } from './types';
 
@@ -78,8 +79,32 @@ export const buildCapcutPackage = async (
     };
   }
 
-  // 3. Generate the FCPXML.
-  const xml = buildFcpxml(state, audioRef, clipFiles, takeRef);
+  // 3a. Load motion MP4 bytes from disk. Same logic as the
+  // openCapcutProject flow so the zipped package includes the same
+  // assets as the 1-click open.
+  const { invoke: invokeForMotions } = await import('@tauri-apps/api/core');
+  const motionFiles: FcpxmlMotionFile[] = [];
+  let motionIdx = 0;
+  for (const block of state.blocks) {
+    const m = block.motion;
+    if (!m || m.status !== 'ready' || !m.videoPath) continue;
+    try {
+      const bytes = await invokeForMotions<number[]>('read_motion_video_bytes', { motionId: m.id });
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'video/mp4' });
+      const filename = `motion-${String(motionIdx + 1).padStart(2, '0')}.mp4`;
+      motionFiles.push({
+        blockId: block.id,
+        file: { filename, blob },
+        durationSec: m.durationSec || (block.end - block.start),
+      });
+      motionIdx++;
+    } catch (err) {
+      console.warn('[reels/zip] failed to read motion video', m.id, err);
+    }
+  }
+
+  // 3b. Generate the FCPXML.
+  const xml = buildFcpxml(state, audioRef, clipFiles, takeRef, motionFiles);
   const readme = buildReadme(state);
 
   onProgress({ phase: 'zipping', message: 'Compactando arquivos...' });
@@ -93,6 +118,9 @@ export const buildCapcutPackage = async (
     zip.file(cf.file.filename, cf.file.blob);
   }
   if (takeRef) zip.file(takeRef.filename, takeRef.blob);
+  for (const mf of motionFiles) {
+    zip.file(mf.file.filename, mf.file.blob);
+  }
 
   const blob = await zip.generateAsync(
     { type: 'blob', compression: 'STORE' }, // STORE — videos already compressed; deflate would be slow + useless
@@ -176,7 +204,32 @@ export const openCapcutProject = async (
     takeRef = { filename: `broll-take.${ext}`, blob: takeBlob };
   }
 
-  const xml = buildFcpxml(state, audioRef, clipFiles, takeRef);
+  // Load motion MP4 bytes from disk for each block whose motion is
+  // ready. Without this CapCut would only see avatar + take clips and
+  // ignore the motion graphics — exactly the bug the user reported.
+  const { invoke: invokeForMotions } = await import('@tauri-apps/api/core');
+  const motionFiles: FcpxmlMotionFile[] = [];
+  let motionIdx = 0;
+  for (const block of state.blocks) {
+    const m = block.motion;
+    if (!m || m.status !== 'ready' || !m.videoPath) continue;
+    try {
+      const bytes = await invokeForMotions<number[]>('read_motion_video_bytes', { motionId: m.id });
+      const blob = new Blob([new Uint8Array(bytes)], { type: 'video/mp4' });
+      const filename = `motion-${String(motionIdx + 1).padStart(2, '0')}.mp4`;
+      motionFiles.push({
+        blockId: block.id,
+        file: { filename, blob },
+        durationSec: m.durationSec || (block.end - block.start),
+      });
+      motionIdx++;
+    } catch (err) {
+      console.warn('[reels/capcut] failed to read motion video', m.id, err);
+    }
+  }
+  console.log('[reels/capcut] motions bundled:', motionFiles.length);
+
+  const xml = buildFcpxml(state, audioRef, clipFiles, takeRef, motionFiles);
 
   onProgress({ phase: 'zipping', message: 'Salvando arquivos...' });
 
@@ -187,6 +240,9 @@ export const openCapcutProject = async (
   }
   if (takeRef) {
     mediaFiles.push({ name: takeRef.filename, bytes: await blobToBytes(takeRef.blob) });
+  }
+  for (const mf of motionFiles) {
+    mediaFiles.push({ name: mf.file.filename, bytes: await blobToBytes(mf.file.blob) });
   }
 
   // Tauri command lives in src-tauri/src/capcut.rs.

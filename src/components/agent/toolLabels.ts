@@ -69,6 +69,10 @@ export const TOOL_LABELS: Record<string, ToolLabel> = {
     doingKey: 'tool.setLayout.doing',
     doneKey: 'tool.setLayout.done',
   },
+  'mcp__reels__set_block_avatar_photo': {
+    doingKey: 'tool.setBlockPhoto.doing',
+    doneKey: 'tool.setBlockPhoto.done',
+  },
   'mcp__reels__set_block_kind': {
     doingKey: 'tool.setKind.doing',
     doneKey: 'tool.setKind.done',

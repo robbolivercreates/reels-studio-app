@@ -9,7 +9,7 @@
  */
 
 import React from 'react';
-import type { LanguageOption } from '../types';
+import type { LanguageOption, ContentMode } from '../types';
 import { REWRITE_LABELS, LANGUAGE_OPTIONS, type VoiceProfile, type RewriteLevel } from '../voiceProfile';
 
 interface Props {
@@ -17,22 +17,34 @@ interface Props {
   profiles: VoiceProfile[];
   languageOverride: LanguageOption;
   rewriteOverride: RewriteLevel | null;
+  contentMode: ContentMode;
+  contentModeAuto: boolean;
   disabled?: boolean;
   onSelectProfile: (id: string) => void;
   onChangeLanguage: (lang: LanguageOption) => void;
   onChangeRewrite: (level: RewriteLevel | null) => void;
+  onChangeContentMode: (mode: ContentMode) => void;
   onEditProfiles: () => void;
 }
+
+const MODE_LABELS: Record<ContentMode, { label: string; hint: string }> = {
+  compress: { label: 'Compress', hint: 'Mantém as palavras, só encurta. Pra Reels/TikToks que já são curtos.' },
+  adapt:    { label: 'Adapt',    hint: 'Reescreve na sua voz, mesmo conteúdo. Default.' },
+  trailer:  { label: 'Trailer',  hint: 'Promete + glimpse + CTA-bait. Pra long-form virar Reel.' },
+};
 
 export const VoiceProfileBar: React.FC<Props> = ({
   activeProfile,
   profiles,
   languageOverride,
   rewriteOverride,
+  contentMode,
+  contentModeAuto,
   disabled = false,
   onSelectProfile,
   onChangeLanguage,
   onChangeRewrite,
+  onChangeContentMode,
   onEditProfiles,
 }) => {
   const effectiveRewrite = rewriteOverride ?? activeProfile.rewriteLevel;
@@ -83,6 +95,22 @@ export const VoiceProfileBar: React.FC<Props> = ({
         {(['faithful', 'translate', 'adapt', 'reimagine'] as RewriteLevel[]).map(level => (
           <option key={level} value={level}>{REWRITE_LABELS[level].label}</option>
         ))}
+      </select>
+      <span className="text-zinc-500">·</span>
+      <select
+        value={contentMode}
+        onChange={e => onChangeContentMode(e.target.value as ContentMode)}
+        disabled={disabled}
+        className={`bg-black/30 border rounded px-2 py-1 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50 ${
+          contentMode === 'trailer'
+            ? 'border-amber-400/40 text-amber-200'
+            : 'border-white/10 text-zinc-100'
+        }`}
+        title={MODE_LABELS[contentMode].hint + (contentModeAuto ? ' · auto-detectado' : ' · escolha manual')}
+      >
+        <option value="compress">🎯 Compress</option>
+        <option value="adapt">✍ Adapt</option>
+        <option value="trailer">🎬 Trailer</option>
       </select>
       <button
         onClick={onEditProfiles}

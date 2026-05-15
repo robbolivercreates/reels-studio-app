@@ -28,7 +28,10 @@ export const DEFAULT_DETECTION: DetectionOptions = {
   minSilenceMs: 500,
   thresholdDb: -25,   // RELATIVE to the peak of this audio (loudness-normalized TTS friendly)
   breathMs: 100,
-  windowMs: 30,
+  // 10ms windows give ±10ms granularity at silence boundaries — tight
+  // enough to not clip plosive consonants (50-80ms) while still cheap
+  // (~1000 RMS windows on a 10s clip, sub-50ms total).
+  windowMs: 10,
 };
 
 export type AudioSilencePreset = 'natural' | 'fast' | 'super';
@@ -36,9 +39,9 @@ export type AudioSilencePreset = 'natural' | 'fast' | 'super';
 // thresholdDb here is RELATIVE to the audio's own peak — works on normalized TTS output
 // where absolute -38dB never gets crossed because everything's lifted to -18 LUFS.
 export const PRESET_OPTIONS: Record<AudioSilencePreset, DetectionOptions> = {
-  natural: { minSilenceMs: 800, thresholdDb: -28, breathMs: 120, windowMs: 30 },
-  fast:    { minSilenceMs: 400, thresholdDb: -25, breathMs: 100, windowMs: 30 },
-  super:   { minSilenceMs: 200, thresholdDb: -20, breathMs: 60,  windowMs: 25 },
+  natural: { minSilenceMs: 800, thresholdDb: -28, breathMs: 120, windowMs: 10 },
+  fast:    { minSilenceMs: 400, thresholdDb: -25, breathMs: 100, windowMs: 10 },
+  super:   { minSilenceMs: 200, thresholdDb: -20, breathMs: 60,  windowMs: 10 },
 };
 
 export interface DetectionResult {

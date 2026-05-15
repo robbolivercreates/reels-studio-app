@@ -1,7 +1,7 @@
 import { fal } from '@fal-ai/client';
 import type { AudioSlice } from './audioSlicer';
 
-export type HeyGenModel = 'avatar3' | 'avatar4';
+export type HeyGenModel = 'avatar3' | 'avatar4' | 'avatar5';
 
 const HEYGEN_BASE = 'https://api.heygen.com';
 
@@ -31,7 +31,86 @@ interface SubmitArgs {
   aspect: '9:16' | '16:9' | '1:1' | 'carousel';
 }
 
+// Avatar V lives on the v3 endpoint and requires the talking photo to
+// be eligible (the look must have "avatar_v" in its supported_api_engines).
+// We do a quick eligibility check first so the error surfaces *before*
+// the user waits for a render, and so the message is actionable
+// ("essa foto não suporta V — usa IV ou cadastra outra").
+async function checkAvatarVEligibility(talkingPhotoId: string, apiKey: string): Promise<void> {
+  const res = await fetch(`${HEYGEN_BASE}/v3/avatars/looks/${encodeURIComponent(talkingPhotoId)}`, {
+    method: 'GET',
+    headers: { 'x-api-key': apiKey },
+  });
+  if (!res.ok) {
+    // 404 → talking photo isn't a registered look (probably a legacy
+    // upload). Treat as "not eligible" so the user sees a clean error.
+    if (res.status === 404) {
+      throw new Error(
+        'Essa foto não está registrada como "look" no HeyGen (necessário para Avatar V). Cadastre uma nova foto ou use Avatar IV.',
+      );
+    }
+    throw new Error(`Falha ao verificar elegibilidade do Avatar V: ${res.status}`);
+  }
+  const data = await res.json().catch(() => null);
+  const supported: string[] = data?.data?.supported_api_engines ?? data?.supported_api_engines ?? [];
+  if (!supported.includes('avatar_v')) {
+    throw new Error(
+      'Essa foto não suporta Avatar V. Tente Avatar IV ou cadastre uma foto compatível.',
+    );
+  }
+}
+
+async function submitAvatarVJob(
+  args: { audioUrl: string; talkingPhotoId: string; aspect: '9:16' | '16:9' | '1:1' | 'carousel' },
+  apiKey: string,
+): Promise<string> {
+  await checkAvatarVEligibility(args.talkingPhotoId, apiKey);
+
+  // Avatar V (v3 /videos) has a DIFFERENT shape than Avatar III/IV:
+  //   - audio source goes at the body ROOT (`audio_url`), NOT inside `voice`
+  //   - no `dimension` key — orientation is derived from the avatar look
+  //   - `resolution` is the only size knob ("1080p" / "720p")
+  // Sending the v2 shape returns:
+  //   "Value error, An audio source is required: provide (script + voice_id), audio_url, or audio_asset_id."
+  // ...which is misleading (audio_url IS there, just in the wrong slot).
+  const body = {
+    type: 'avatar',
+    avatar_id: args.talkingPhotoId,
+    audio_url: args.audioUrl,
+    resolution: '1080p',
+    engine: { type: 'avatar_v' },
+    background: { type: 'color', value: '#000000' },
+  };
+
+  const res = await fetch(`${HEYGEN_BASE}/v3/videos`, {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errJson = await res.json().catch(() => ({}));
+    const msg = (errJson as { error?: { message?: string }; message?: string }).error?.message
+              ?? (errJson as { message?: string }).message
+              ?? res.statusText;
+    throw new Error(`HeyGen Avatar V submit ${res.status}: ${typeof msg === 'string' ? msg : JSON.stringify(msg)}`);
+  }
+  const submitJson = await res.json();
+  // v3 may return { data: { video_id } } or { video_id } at top — handle both.
+  const videoId: string | undefined =
+    (submitJson.data ?? submitJson).video_id ??
+    (submitJson.data ?? submitJson).id;
+  if (!videoId) throw new Error(`HeyGen V3 retornou sem video_id: ${JSON.stringify(submitJson).slice(0, 200)}`);
+  return videoId;
+}
+
 const submitHeyGenJob = async ({ audioUrl, talkingPhotoId, model, aspect }: SubmitArgs, apiKey: string): Promise<string> => {
+  // Avatar V uses the new v3 endpoint with an explicit engine field.
+  // Avatar III / IV stay on the legacy v2 endpoint where IV is opted in
+  // via `use_avatar_iv_model: true`.
+  if (model === 'avatar5') {
+    return submitAvatarVJob({ audioUrl, talkingPhotoId, aspect }, apiKey);
+  }
+
   const character: Record<string, unknown> = {
     type: 'talking_photo',
     talking_photo_id: talkingPhotoId,
@@ -75,10 +154,18 @@ const pollUntilReady = async (
   apiKey: string,
   onStatus: (s: string) => void,
   signal?: AbortSignal,
+  // Avatar V videos are created via /v3/videos and must be polled
+  // through GET /v3/videos/{id}. III / IV stay on the legacy
+  // /v1/video_status.get endpoint, which doesn't recognize V's
+  // video_ids.
+  endpointVersion: 'v1' | 'v3' = 'v1',
 ): Promise<string> => {
   const startedAt = Date.now();
   const MAX_POLL_MS = 15 * 60 * 1000;
   let errors = 0;
+  const url = endpointVersion === 'v3'
+    ? `${HEYGEN_BASE}/v3/videos/${encodeURIComponent(videoId)}`
+    : `${HEYGEN_BASE}/v1/video_status.get?video_id=${videoId}`;
 
   while (true) {
     if (signal?.aborted) throw new Error('Cancelado');
@@ -91,7 +178,7 @@ const pollUntilReady = async (
 
     let res: Response;
     try {
-      res = await fetch(`${HEYGEN_BASE}/v1/video_status.get?video_id=${videoId}`, {
+      res = await fetch(url, {
         headers: { 'x-api-key': apiKey },
       });
     } catch (e) {
@@ -129,7 +216,13 @@ const pollUntilReady = async (
 };
 
 export interface ClipGenerationOptions {
+  /** Default photo used when a slice doesn't carry a per-block override. */
   talkingPhotoId: string;
+  /** Optional per-block override: maps blockId → talking_photo_id. When a
+   *  block has its own entry here, that photo is used instead of the
+   *  default. Lets the user mix photos/poses across blocks of the same
+   *  reel. */
+  talkingPhotoIdByBlock?: Record<string, string>;
   model: HeyGenModel;
   aspect: '9:16' | '16:9' | '1:1' | 'carousel';
   signal?: AbortSignal;
@@ -158,15 +251,22 @@ const generateOneClip = async (
     if (opts.signal?.aborted) throw new Error('Cancelado');
 
     update({ status: 'submitting', message: 'Submetendo...' });
+    const photoForBlock = opts.talkingPhotoIdByBlock?.[slice.blockId] ?? opts.talkingPhotoId;
     const videoId = await submitHeyGenJob({
       audioUrl,
-      talkingPhotoId: opts.talkingPhotoId,
+      talkingPhotoId: photoForBlock,
       model: opts.model,
       aspect: opts.aspect,
     }, apiKey);
 
     update({ status: 'rendering', message: 'Renderizando...' });
-    const videoUrl = await pollUntilReady(videoId, apiKey, m => update({ status: 'rendering', message: m }), opts.signal);
+    const videoUrl = await pollUntilReady(
+      videoId,
+      apiKey,
+      m => update({ status: 'rendering', message: m }),
+      opts.signal,
+      opts.model === 'avatar5' ? 'v3' : 'v1',
+    );
 
     update({ status: 'ready', videoUrl });
     return { blockId: slice.blockId, videoUrl };

@@ -27,7 +27,10 @@ import {
   type Framework,
   type DurationTarget,
 } from '../../services/scriptFromContentService';
-import { downloadVideo, readReferenceBytes } from '../reelsStudio/referenceVideoStore';
+import { downloadVideo, readReferenceBytes, findReferenceByUrl } from '../reelsStudio/referenceVideoStore';
+import { splitLongBlocks } from '../reelsStudio/scriptSplitter';
+import { getMaxBlockSec } from './agentPrefs';
+import { getCachedAnalysis, putCachedAnalysis, normalizeReelUrl } from './reelAnalysisCache';
 import { analyseReferenceFromBytes } from '../../services/videoAnalysisService';
 import { importScriptWithAI, importScriptHeuristic } from '../reelsStudio/scriptImporter';
 import {
@@ -57,6 +60,14 @@ interface BridgeRefs {
   dispatch: React.Dispatch<ReelsAction>;
   /** Called when the agent asks for `generate-audio`. */
   onGenerateAudio?: () => Promise<void> | void;
+  /** Splits any block longer than the user's "Duração máxima do bloco" setting.
+   *  Runs the same flow as the "Quebrar blocos longos" menu action — uses the
+   *  generated audio's word timestamps to find natural pauses. */
+  onSplitLongBlocks?: () => {
+    error?: string;
+    splitsApplied?: number;
+    newBlockCount?: number;
+  };
   /** Called when the agent asks for `generate-motion-for-block`. We pass
    *  the block id; ReelsStudio is responsible for running its own
    *  handleAutoMotion pipeline (Gemini + save). */
@@ -79,7 +90,17 @@ interface BridgeRefs {
   onApplyCaption?: (caption: string, opts?: { openModal?: boolean }) => void;
 }
 
+// Tracks call_ids we've already sent a tool_result for, so we never
+// double-reply (would confuse the Tauri-side MCP server) and so the
+// finally-block fallback in the listener can detect "no reply yet".
+const repliedCallIds = new Set<string>();
+
 async function reply(callId: string, ok: boolean, value?: unknown, error?: string) {
+  if (repliedCallIds.has(callId)) {
+    console.warn('[agent] duplicate reply suppressed for', callId);
+    return;
+  }
+  repliedCallIds.add(callId);
   try {
     await invoke('agent_tool_result', {
       callId,
@@ -90,6 +111,10 @@ async function reply(callId: string, ok: boolean, value?: unknown, error?: strin
   } catch (e) {
     console.error('[agent] failed to reply tool_result:', e);
   }
+}
+
+function hasReplied(callId: string): boolean {
+  return repliedCallIds.has(callId);
 }
 
 function inferAssetType(path: string): 'image' | 'video' {
@@ -138,20 +163,73 @@ function makeDraftId(): string {
   return `draft_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/// Wraps a promise so it rejects after `ms` instead of hanging forever.
+/// Used for tool steps that invoke long-running Tauri commands (yt-dlp,
+/// Gemini Vision) — when those hang, the tool never replies, Claude
+/// forgets the call_id, and the chat falls out of sync with the agent.
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} expirou após ${Math.round(ms / 1000)}s`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+/// Splits any long block according to the user's "Duração máxima do
+/// bloco" setting (Settings → Agents → Avançado). Long avatar blocks
+/// burn HeyGen budget; long broll blocks lose visual energy. We split
+/// at the latest natural pause (sentence terminator, then comma)
+/// before the cap. Imports go through this function uniformly — same
+/// rule for video, article, recreate, carousel, and reanalyse.
+function applyMaxBlockSec(blocks: ScriptBlock[]): ScriptBlock[] {
+  const cap = getMaxBlockSec();
+  if (cap == null) return blocks;
+  const splits = splitLongBlocks(
+    blocks.map(b => ({ kind: b.kind, text: b.text })),
+    { maxSec: cap },
+  );
+  // Always rebuild — the splitter may also have flipped the
+  // first/last kind (broll bookends rule) without changing the count,
+  // so equal-length is NOT a reliable "nothing changed" signal.
+  return splits.map(s => ({
+    id: `b_${Math.random().toString(36).slice(2, 10)}_${Date.now()}`,
+    kind: s.kind,
+    text: s.text,
+    start: 0,
+    end: 0,
+    // Avatar blocks default to avatar-top layout — keeps the speaker
+    // on top, broll/asset on bottom. broll blocks stay full-frame.
+    layout: s.kind === 'avatar' ? ('avatar-top' as const) : undefined,
+  }));
+}
+
 /// Surfaces a draft preview card in the agent chat instead of overwriting
-/// the project blocks straight away. Returns the draft id so the caller
-/// can reference it in tool replies.
+/// the project blocks straight away. Returns `{ draftId, blocks }` — the
+/// returned blocks are the (possibly split) final list, so callers
+/// should save THOSE in `draftsRef`, not their pre-split copies.
+///
+/// When `sourceUrl` is provided, useAgentChat retires older unresolved
+/// drafts of the same URL automatically (so re-importing the same reel
+/// doesn't leave stale Apply buttons in the chat history).
 function proposeDraftToChat(args: {
   blocks: ScriptBlock[];
   source: string;
+  sourceUrl?: string;
   kind: 'reel' | 'carousel';
   meta?: string;
-}): string {
+}): { draftId: string; blocks: ScriptBlock[] } {
+  // Enforce the user's per-block cap before anything else sees the
+  // list — both the preview card and the stored draftsRef get the
+  // split version, so Apply produces the same blocks the user reviewed.
+  const finalBlocks = applyMaxBlockSec(args.blocks);
   const draftId = makeDraftId();
   type ReelsAgentShim = {
     proposeDraft?: (draft: {
       draftId: string;
       source: string;
+      sourceUrl?: string;
       kind: 'reel' | 'carousel';
       blocks: Array<{ kind: 'avatar' | 'broll'; text: string }>;
       meta?: string;
@@ -161,11 +239,12 @@ function proposeDraftToChat(args: {
   w.__reelsAgent?.proposeDraft?.({
     draftId,
     source: args.source,
+    sourceUrl: args.sourceUrl,
     kind: args.kind,
     meta: args.meta,
-    blocks: args.blocks.map(b => ({ kind: b.kind, text: b.text })),
+    blocks: finalBlocks.map(b => ({ kind: b.kind, text: b.text })),
   });
-  return draftId;
+  return { draftId, blocks: finalBlocks };
 }
 
 export function useAgentToolBridge(refs: BridgeRefs): void {
@@ -221,12 +300,20 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
           state,
           dispatch,
           onGenerateAudio,
+          onSplitLongBlocks,
           onGenerateMotionForBlock,
           onGenerateMotionForBlocks,
           onRenderAllMotions,
           onGenerateAvatarClips,
           onApplyCaption,
         } = latest.current;
+
+        // Guard: every reels://tool-call must produce exactly one
+        // agent_tool_result, or the MCP server hangs waiting for the
+        // response (which then drops Claude's context for this call_id
+        // and makes the chat hallucinate "I didn't import it" on the
+        // next turn). `reply` dedupes by call_id globally; the finally
+        // below sends a fallback if no handler path replied at all.
 
         try {
           switch (action_type) {
@@ -364,6 +451,23 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               return;
             }
 
+            case 'set-block-avatar-photo': {
+              const id = String(payload.id);
+              const photoId = payload.photo_id == null ? undefined : String(payload.photo_id);
+              const block = state.blocks.find(b => b.id === id);
+              if (!block) {
+                await reply(call_id, false, null, `Bloco '${id}' não encontrado.`);
+                return;
+              }
+              if (block.kind !== 'avatar') {
+                await reply(call_id, false, null, `Bloco '${id}' não é do tipo avatar.`);
+                return;
+              }
+              dispatch({ type: 'set-block-avatar-photo', id, photoId });
+              await reply(call_id, true, { id, photo_id: photoId ?? null });
+              return;
+            }
+
             case 'set-block-kind': {
               const id = String(payload.id);
               const kindRaw = String(payload.kind ?? '');
@@ -413,6 +517,24 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               };
               dispatch({ type: 'add-block-asset', id: blockId, asset });
               await reply(call_id, true, { blockId, asset });
+              return;
+            }
+
+            case 'split-long-blocks': {
+              if (!onSplitLongBlocks) {
+                await reply(call_id, false, null, 'Quebra de blocos longos não disponível no momento.');
+                return;
+              }
+              const result = onSplitLongBlocks();
+              if (result.error) {
+                await reply(call_id, false, null, result.error);
+                return;
+              }
+              await reply(call_id, true, {
+                status: 'split-done',
+                splitsApplied: result.splitsApplied,
+                newBlockCount: result.newBlockCount,
+              });
               return;
             }
 
@@ -469,31 +591,167 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
             // ---- Wave 1: imports (create-from-source) ----
 
             case 'import-from-video-url': {
-              const url = String(payload.url ?? '');
-              if (!url) {
+              const rawUrl = String(payload.url ?? '');
+              if (!rawUrl) {
                 await reply(call_id, false, null, 'URL vazia.');
                 return;
               }
-              const meta = await downloadVideo(url);
-              const bytes = await readReferenceBytes(meta.fileName);
+              const forceRedownload = !!payload.force_redownload;
+              const canonicalUrl = normalizeReelUrl(rawUrl);
               const { profiles, activeId } = ensureProfiles();
               const profile = profiles.find(p => p.id === activeId);
-              const result = await analyseReferenceFromBytes(bytes, undefined, profile);
-              // Surface as a draft. The user reviews + iterates ("o bloco 3
-              // está mole, deixa mais agressivo") via the regen_draft_block
-              // tool — edits stay scoped to the draft until Apply.
-              const draftId = proposeDraftToChat({
-                blocks: result.blocks,
-                source: meta.fileName,
+              const profileId = profile?.id ?? null;
+              const profileUpdatedAt = profile?.updatedAt ?? 0;
+
+              // Did the agent already pass duration/tone/focus? If yes,
+              // the user said "importa esse reel em 45s mais detalhado"
+              // and we skip the setup card.
+              const hasExplicitHints =
+                payload.duration_sec != null ||
+                payload.tone != null ||
+                payload.focus != null;
+              // Permanent "always skip" preference from Settings.
+              const userAlwaysSkips =
+                typeof window !== 'undefined' &&
+                window.localStorage?.getItem('reels.agent.skipReelSetup') === 'true';
+
+              // Hints we'll feed into the analyser. Start from explicit
+              // payload values; the setup card (if shown) fills in the
+              // rest below.
+              let durationHint: number | null | undefined = payload.duration_sec != null
+                ? Number(payload.duration_sec)
+                : undefined;
+              let toneHint = typeof payload.tone === 'string' ? payload.tone : undefined;
+              let focusHint = typeof payload.focus === 'string' ? payload.focus : undefined;
+
+              // Step 1 — pre-flight setup card. Runs BEFORE the cache
+              // check, because different duration/tone/focus produces
+              // different analyses — we don't want a 30s cache hit to
+              // return when the user actually wants 45s. The cache key
+              // below includes the chosen hints, so once the user
+              // picks, future identical picks ARE cached.
+              type SetupShim = {
+                requestSetup?: (args: { title?: string; subtitle?: string }) => Promise<
+                  | { kind: 'submit'; choice: { durationSec: number | null; tone: string; focus: string } }
+                  | { kind: 'skip' }
+                  | { kind: 'cancel' }
+                >;
+              };
+              const w = window as unknown as Window & { __reelsAgent?: SetupShim };
+              if (!hasExplicitHints && !userAlwaysSkips && w.__reelsAgent?.requestSetup) {
+                const result = await w.__reelsAgent.requestSetup({
+                  subtitle: canonicalUrl,
+                });
+                if (result.kind === 'cancel') {
+                  await reply(call_id, false, null, 'Usuário cancelou antes da geração.');
+                  return;
+                }
+                if (result.kind === 'submit') {
+                  durationHint = result.choice.durationSec;
+                  toneHint = result.choice.tone;
+                  focusHint = result.choice.focus;
+                }
+                // 'skip' → leave hints undefined (analyser defaults).
+              }
+
+              // Cache key includes the chosen hints so swapping duration
+              // (or tone, or focus) skips the cache and forces a fresh
+              // analysis. Profile id+updatedAt cover voice-profile edits.
+              const hintsKey = `d:${durationHint ?? 'orig'}|t:${toneHint ?? 'orig'}|f:${focusHint ?? 'adapt'}`;
+              const cacheProfileKey = `${profileId ?? 'none'}|${profileUpdatedAt}|${hintsKey}`;
+
+              // Step 2 — try the IndexedDB analysis cache for this
+              // exact (url, profile, hints) combo.
+              let blocks: ScriptBlock[];
+              let language: string | undefined;
+              let tone: string[] | undefined;
+              let fileName: string;
+              let cacheHit = false;
+              const cached = forceRedownload
+                ? null
+                : await getCachedAnalysis(canonicalUrl, cacheProfileKey, profileUpdatedAt);
+
+              if (cached) {
+                console.warn('[import-from-video-url] cache HIT', canonicalUrl, hintsKey);
+                blocks = cached.blocks;
+                language = cached.language;
+                tone = cached.tone;
+                const ref = await findReferenceByUrl(canonicalUrl);
+                fileName = ref?.fileName ?? `cached: ${canonicalUrl}`;
+                cacheHit = true;
+              } else {
+                // Step 3 — see if the video file is already on disk
+                // (Rust References folder is keyed by source_url). Skips
+                // yt-dlp when the user pasted the same reel twice but
+                // the new hints triggered a cache miss.
+                console.warn('[import-from-video-url] start', canonicalUrl, forceRedownload ? '(forced)' : '', { durationHint, toneHint, focusHint });
+                let meta;
+                const existing = forceRedownload ? null : await findReferenceByUrl(canonicalUrl);
+                if (existing) {
+                  console.warn('[import-from-video-url] reusing downloaded ref', existing.fileName);
+                  meta = existing;
+                } else {
+                  meta = await withTimeout(downloadVideo(rawUrl), 180_000, 'Download do vídeo');
+                  console.warn('[import-from-video-url] downloaded', meta.fileName);
+                }
+
+                // Step 4 — read bytes + analyse with Gemini. Hints flow
+                // in through the analyser's `extraInstructions` field.
+                const bytes = await withTimeout(readReferenceBytes(meta.fileName), 30_000, 'Leitura do vídeo');
+                const instructionParts: string[] = [];
+                if (durationHint != null) instructionParts.push(`Duração alvo: ${durationHint}s.`);
+                if (toneHint && toneHint !== 'original') instructionParts.push(`Tom: ${toneHint}.`);
+                if (focusHint && focusHint !== 'adapt') {
+                  instructionParts.push(
+                    focusHint === 'summarize' ? 'Resuma o conteúdo.' : focusHint === 'detail' ? 'Adicione mais detalhes.' : '',
+                  );
+                }
+                const extraInstruction = instructionParts.filter(Boolean).join(' ') || undefined;
+                const regen = extraInstruction ? { extraInstructions: extraInstruction } : undefined;
+                const result = await withTimeout(
+                  analyseReferenceFromBytes(bytes, undefined, profile, regen),
+                  180_000,
+                  'Análise do vídeo',
+                );
+                console.warn('[import-from-video-url] analysed', result.blocks.length, 'blocks');
+                blocks = result.blocks;
+                language = result.language;
+                tone = result.tone;
+                fileName = meta.fileName;
+
+                // Persist for next time.
+                await putCachedAnalysis({
+                  sourceUrl: canonicalUrl,
+                  profileId: cacheProfileKey,
+                  profileUpdatedAt,
+                  blocks,
+                  language,
+                  tone,
+                  analyzedAt: Date.now(),
+                });
+              }
+
+              // Step 4 — surface as a draft. The user reviews + iterates
+              // ("o bloco 3 está mole, deixa mais agressivo") via the
+              // regen_draft_block tool — edits stay scoped to the draft
+              // until Apply.
+              const metaLabel = cacheHit
+                ? `${language ?? 'PT-BR'} · ${blocks.length} blocos · cache`
+                : `${language ?? 'PT-BR'} · ${blocks.length} blocos`;
+              const { draftId, blocks: finalBlocks } = proposeDraftToChat({
+                blocks,
+                source: fileName,
+                sourceUrl: canonicalUrl,
                 kind: 'reel',
-                meta: `${result.language ?? 'PT-BR'} · ${result.blocks.length} blocos`,
+                meta: metaLabel,
               });
-              draftsRef.current.set(draftId, { blocks: result.blocks });
+              draftsRef.current.set(draftId, { blocks: finalBlocks });
               await reply(call_id, true, {
-                source: meta.fileName,
-                blocks: result.blocks.length,
-                language: result.language,
-                tone: result.tone,
+                source: fileName,
+                blocks: finalBlocks.length,
+                language,
+                tone,
+                cached: cacheHit,
                 draft_id: draftId,
                 status: 'pending-user-approval',
               });
@@ -505,15 +763,17 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               const passthrough = parsePassthroughBlocks(payload.blocks_json);
               if (passthrough) {
                 const blocks = passthrough.map(blockFromPassthrough);
-                const draftId = proposeDraftToChat({
+                const articleUrl = payload.url ? String(payload.url) : undefined;
+                const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                   blocks,
-                  source: payload.url ? String(payload.url) : 'artigo',
+                  source: articleUrl ?? 'artigo',
+                  sourceUrl: articleUrl,
                   kind: 'reel',
                   meta: `${blocks.length} blocos · Claude`,
                 });
-                draftsRef.current.set(draftId, { blocks });
+                draftsRef.current.set(draftId, { blocks: finalBlocks });
                 await reply(call_id, true, {
-                  blocks: blocks.length,
+                  blocks: finalBlocks.length,
                   provider: 'claude',
                   draft_id: draftId,
                   status: 'pending-user-approval',
@@ -545,15 +805,16 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                 { text, title, sourceUrl },
                 { style, framework, durationSec, voiceProfile: profile, extraInstructions },
               );
-              const draftId = proposeDraftToChat({
+              const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                 blocks: generated.blocks,
                 source: title ?? url ?? 'artigo',
+                sourceUrl: sourceUrl ?? url ?? undefined,
                 kind: 'reel',
                 meta: `${generated.blocks.length} blocos · ${generated.frameworkUsed}`,
               });
-              draftsRef.current.set(draftId, { blocks: generated.blocks });
+              draftsRef.current.set(draftId, { blocks: finalBlocks });
               await reply(call_id, true, {
-                blocks: generated.blocks.length,
+                blocks: finalBlocks.length,
                 framework: generated.frameworkUsed,
                 caption: generated.caption,
                 hashtags: generated.hashtags,
@@ -597,15 +858,15 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               const passthrough = parsePassthroughBlocks(payload.blocks_json);
               if (passthrough) {
                 const blocks = passthrough.map(blockFromPassthrough);
-                const draftId = proposeDraftToChat({
+                const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                   blocks,
                   source: instruction || 'reescrita',
                   kind: 'reel',
                   meta: `${blocks.length} blocos · Claude`,
                 });
-                draftsRef.current.set(draftId, { blocks });
+                draftsRef.current.set(draftId, { blocks: finalBlocks });
                 await reply(call_id, true, {
-                  blocks: blocks.length,
+                  blocks: finalBlocks.length,
                   provider: 'claude',
                   draft_id: draftId,
                   status: 'pending-user-approval',
@@ -634,15 +895,15 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                   extraInstructions: instruction,
                 },
               );
-              const draftId = proposeDraftToChat({
+              const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                 blocks: generated.blocks,
                 source: instruction,
                 kind: 'reel',
                 meta: `${generated.blocks.length} blocos · ${generated.frameworkUsed}`,
               });
-              draftsRef.current.set(draftId, { blocks: generated.blocks });
+              draftsRef.current.set(draftId, { blocks: finalBlocks });
               await reply(call_id, true, {
-                blocks: generated.blocks.length,
+                blocks: finalBlocks.length,
                 instruction,
                 provider: 'gemini',
                 draft_id: draftId,
@@ -692,13 +953,13 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                         };
                       });
                       const blocks = carouselSlidesToBlocks(slides);
-                      const draftId = proposeDraftToChat({
+                      const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                         blocks,
                         source: String(payload.topic ?? 'carrossel'),
                         kind: 'carousel',
                         meta: `${slides.length} slides · Claude`,
                       });
-                      draftsRef.current.set(draftId, { blocks, setCarouselAspect: true });
+                      draftsRef.current.set(draftId, { blocks: finalBlocks, setCarouselAspect: true });
                       await reply(call_id, true, {
                         slides: slides.length,
                         provider: 'claude',
@@ -722,13 +983,13 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               const tone = String(payload.tone ?? 'educativo') as CarouselTone;
               const carousel = await generateCarouselScript(topic, numSlides, tone);
               const blocks = carouselSlidesToBlocks(carousel.slides);
-              const draftId = proposeDraftToChat({
+              const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                 blocks,
                 source: topic,
                 kind: 'carousel',
                 meta: `${carousel.slides.length} slides · ${tone}`,
               });
-              draftsRef.current.set(draftId, { blocks, setCarouselAspect: true });
+              draftsRef.current.set(draftId, { blocks: finalBlocks, setCarouselAspect: true });
               await reply(call_id, true, {
                 slides: carousel.slides.length,
                 theme: carousel.theme,
@@ -1074,8 +1335,8 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
 
             case 'set-avatar-model': {
               const m = String(payload.model ?? '');
-              if (m !== 'avatar3' && m !== 'avatar4') {
-                await reply(call_id, false, null, `Modelo inválido: '${m}'. Use 'avatar3' ou 'avatar4'.`);
+              if (m !== 'avatar3' && m !== 'avatar4' && m !== 'avatar5') {
+                await reply(call_id, false, null, `Modelo inválido: '${m}'. Use 'avatar3', 'avatar4' ou 'avatar5'.`);
                 return;
               }
               dispatch({ type: 'set-avatar-model', model: m });
@@ -1357,16 +1618,16 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                 const { profiles, activeId } = ensureProfiles();
                 const profile = profiles.find(p => p.id === activeId);
                 const result = await analyseReferenceFromBytes(arr, undefined, profile);
-                const draftId = proposeDraftToChat({
+                const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                   blocks: result.blocks,
                   source: fileName,
                   kind: 'reel',
                   meta: `${result.language ?? 'PT-BR'} · ${result.blocks.length} blocos · reanálise`,
                 });
-                draftsRef.current.set(draftId, { blocks: result.blocks });
+                draftsRef.current.set(draftId, { blocks: finalBlocks });
                 await reply(call_id, true, {
                   source: fileName,
-                  blocks: result.blocks.length,
+                  blocks: finalBlocks.length,
                   language: result.language,
                   tone: result.tone,
                   draft_id: draftId,
@@ -1514,7 +1775,16 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
+          console.error('[bridge] handler threw', action_type, msg);
           await reply(call_id, false, null, msg);
+        } finally {
+          // Catch the "fell through without replying" path. This shouldn't
+          // happen with the current code, but it's cheap insurance against
+          // future refactors silently breaking the request/response loop.
+          if (!hasReplied(call_id)) {
+            console.warn('[bridge] handler returned without replying', action_type, call_id);
+            await reply(call_id, false, null, 'Handler retornou sem responder ao agente.');
+          }
         }
       });
     };

@@ -58,6 +58,9 @@ interface ResourceMaps {
   audioAssetId: string | null;
   clipAssetIds: Map<string, string>; // blockId → assetId
   takeAssetId: string | null;
+  /** blockId → assetId of the rendered motion MP4. Present only for
+   *  blocks whose motion is ready (status === 'ready' + videoPath). */
+  motionAssetIds: Map<string, string>;
 }
 
 /** Build the <resources> section. */
@@ -66,6 +69,7 @@ const buildResources = (
   audioFile: FcpxmlMediaRef | null,
   clipFiles: { blockId: string; file: FcpxmlMediaRef }[],
   takeFile: FcpxmlMediaRef | null,
+  motionFiles: { blockId: string; file: FcpxmlMediaRef; durationSec: number }[],
 ): { xml: string; maps: ResourceMaps } => {
   const { width, height } = dimensionsForAspect(state.aspect);
   const formatId = 'r1';
@@ -77,6 +81,7 @@ const buildResources = (
     audioAssetId: null,
     clipAssetIds: new Map(),
     takeAssetId: null,
+    motionAssetIds: new Map(),
   };
 
   let assetCounter = 2;
@@ -101,6 +106,14 @@ const buildResources = (
     const take = state.takes.find(t => t.id === state.activeTakeId);
     const takeDur = take ? Math.max(0.1, take.durationMs / 1000) : 10;
     lines.push(`<asset id="${id}" name="${xmlEscape(takeFile.filename)}" src="./${xmlEscape(takeFile.filename)}" hasVideo="1" hasAudio="1" duration="${formatTime(takeDur)}" format="${formatId}"/>`);
+  }
+
+  // Motion graphics MP4s — one asset per block with a ready motion.
+  // No audio (motions are silent by design), so hasAudio="0".
+  for (const mf of motionFiles) {
+    const id = `r${assetCounter++}`;
+    maps.motionAssetIds.set(mf.blockId, id);
+    lines.push(`<asset id="${id}" name="${xmlEscape(mf.file.filename)}" src="./${xmlEscape(mf.file.filename)}" hasVideo="1" hasAudio="0" duration="${formatTime(mf.durationSec)}" format="${formatId}"/>`);
   }
 
   return { xml: lines.map(l => '    ' + l).join('\n'), maps };
@@ -229,18 +242,66 @@ const buildConnectedClips = (state: ReelsState, maps: ResourceMaps): string => {
     }
   }
 
+  // Motion graphics — one connected clip per block whose motion is
+  // ready. Placed on lane 2 (above the b-roll covers on lane 1) so
+  // editors see the motion on top in CapCut's timeline. For split
+  // layouts (avatar-top / media-top) the motion is positioned in
+  // the media half of the canvas via adjust-transform.
+  for (const slot of layout.slots) {
+    const block = state.blocks.find(b => b.id === slot.blockId);
+    if (!block) continue;
+    const motionAssetId = maps.motionAssetIds.get(block.id);
+    if (!motionAssetId) continue;
+    const blockLen = slot.projectEnd - slot.projectStart;
+    const motionDur = Math.min(blockLen, block.motion?.durationSec ?? blockLen);
+    const blockLayout = block.layout ?? (block.kind === 'avatar' ? 'avatar-only' : 'media-only');
+
+    // Decide where on the canvas the motion sits.
+    // - broll block (media-only) → full frame
+    // - avatar-only with motion → overlay full frame
+    // - avatar-top → motion in bottom half
+    // - media-top → motion in top half
+    let transformXml = '';
+    if (blockLayout === 'avatar-top' || blockLayout === 'media-top') {
+      const slots = getLayoutSlots(blockLayout);
+      const mediaBox = slots.media;
+      if (mediaBox) {
+        const dims = dimensionsForAspect(state.aspect);
+        const cxPx = (mediaBox.x + mediaBox.w / 2) * dims.width;
+        const cyPx = (mediaBox.y + mediaBox.h / 2) * dims.height;
+        const offsetX = cxPx - dims.width / 2;
+        const offsetY = cyPx - dims.height / 2;
+        const scale = mediaBox.h;
+        transformXml = `          <adjust-transform position="${offsetX.toFixed(1)} ${offsetY.toFixed(1)}" scale="${scale.toFixed(3)} ${scale.toFixed(3)}"/>\n`;
+      }
+    }
+
+    lines.push(
+      `        <asset-clip name="Motion" ref="${motionAssetId}" lane="2" offset="${formatTime(slot.projectStart)}" start="0/${TIMESCALE}s" duration="${formatTime(motionDur)}">\n` +
+      transformXml +
+      `        </asset-clip>`
+    );
+  }
+
   return lines.join('\n');
 };
+
+export interface FcpxmlMotionFile {
+  blockId: string;
+  file: FcpxmlMediaRef;
+  durationSec: number;
+}
 
 export const buildFcpxml = (
   state: ReelsState,
   audioFile: FcpxmlMediaRef | null,
   clipFiles: { blockId: string; file: FcpxmlMediaRef }[],
   takeFile: FcpxmlMediaRef | null,
+  motionFiles: FcpxmlMotionFile[] = [],
 ): string => {
   const projectName = sanitizeFilenameStem(state.projectName);
   const totalDuration = computeLayout(state.blocks).totalDuration || state.audio.duration;
-  const { xml: resourcesXml, maps } = buildResources(state, audioFile, clipFiles, takeFile);
+  const { xml: resourcesXml, maps } = buildResources(state, audioFile, clipFiles, takeFile, motionFiles);
   const spine = buildSpine(state, maps);
   const connected = buildConnectedClips(state, maps);
 

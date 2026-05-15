@@ -15,9 +15,15 @@ interface Props {
   motion: MotionConfig;
   playing: boolean;
   layer: MotionLayer;
+  /** Optional local time within the motion clip in seconds. When provided
+   *  the preview <video> seeks to match the project playhead instead of
+   *  running on its own clock. Without this, blocks late in the timeline
+   *  can drift out of sync (the <video> element gets reused across block
+   *  switches and its currentTime carries over). */
+  localTime?: number;
 }
 
-export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) => {
+export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer, localTime }) => {
   const [mp4Url, setMp4Url] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -52,16 +58,38 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer }) 
     }
   }, [motion.videoPath, motion.status, motion.renderedAt]);
 
-  // Sync video play/pause.
+  // Sync video play/pause + currentTime with the project playhead.
+  // The seek-when-off-by-0.3s threshold mirrors what we do for the avatar
+  // clip — frequent micro-seeks cause visible popping in <video>.
   useEffect(() => {
     const v = videoRef.current;
     if (!v || !mp4Url) return;
+    if (localTime != null && Number.isFinite(localTime)) {
+      const target = Math.max(0, localTime);
+      if (Math.abs(v.currentTime - target) > 0.3) {
+        try { v.currentTime = target; } catch { /* ignore */ }
+      }
+    }
     if (playing) {
       v.play().catch(() => {});
     } else {
       v.pause();
     }
-  }, [playing, mp4Url]);
+  }, [playing, mp4Url, localTime]);
+
+  // When the source mp4 swaps (block change), explicitly reset currentTime
+  // to 0 (or localTime). Without this, browsers can keep the previous
+  // playback position, which is exactly the symptom in the last block
+  // ("preview out of sync until I export the MP4").
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !mp4Url) return;
+    const start = localTime != null && Number.isFinite(localTime) ? Math.max(0, localTime) : 0;
+    try { v.currentTime = start; } catch { /* ignore */ }
+    // localTime intentionally omitted from deps — we only reset on source
+    // change, the play/pause effect above handles ongoing sync.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mp4Url]);
 
   // Live iframe — inject HTML via srcdoc. Use postMessage to control GSAP.
   useEffect(() => {

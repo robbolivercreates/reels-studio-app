@@ -2,6 +2,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import type { ScriptBlock, BlockKind, RegenerateContext } from '../components/reelsStudio/types';
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
 import { buildRegenPromptSection } from './regenPrompt';
+import { buildContentModeSection } from './contentMode';
 
 export interface BlockDirection {
   /** Index in the blocks array this direction applies to. */
@@ -219,6 +220,8 @@ const callGemini = async (
   }
   const regenSection = buildRegenPromptSection(regen);
   if (regenSection) promptParts.push({ text: regenSection });
+  const modeSection = buildContentModeSection(regen?.contentMode);
+  if (modeSection) promptParts.push({ text: modeSection });
 
   if (payload.kind === 'inline') {
     promptParts.push({ inlineData: { mimeType: payload.mimeType, data: payload.data } });

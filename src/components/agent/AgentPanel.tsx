@@ -1,3 +1,39 @@
+/**
+ * Renders agent text with minimal inline markdown:
+ *   **bold**   → <strong>
+ *   *italic*   → <em>
+ *   `code`     → <code>
+ * Whitespace + newlines are preserved by the parent's `whitespace-pre-wrap`.
+ * Nothing else is parsed — no headings, no lists, no links. The system prompt
+ * forbids those.
+ */
+const renderInlineMarkdown = (text: string): React.ReactNode[] => {
+  // Tokenise on the 3 patterns, longest-first to avoid `**` being eaten by `*`.
+  const re = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\*[^*\n]+\*)/g;
+  const out: React.ReactNode[] = [];
+  let last = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) out.push(text.slice(last, match.index));
+    const token = match[0];
+    if (token.startsWith('**')) {
+      out.push(<strong key={key++}>{token.slice(2, -2)}</strong>);
+    } else if (token.startsWith('`')) {
+      out.push(
+        <code key={key++} className="px-1 py-0.5 rounded bg-white/10 text-[12px] font-mono">
+          {token.slice(1, -1)}
+        </code>,
+      );
+    } else {
+      out.push(<em key={key++}>{token.slice(1, -1)}</em>);
+    }
+    last = match.index + token.length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+};
+
 // Embedded chat panel that lives next to the editor (not over it).
 //
 // Visual language: Apple-quiet. Inherits the app's theme tokens (light/dark
@@ -22,6 +58,7 @@ import {
 import { ApprovalCard } from './ApprovalCard';
 import { PickerCard } from './PickerCard';
 import { DraftCard } from './DraftCard';
+import { SetupCard, type SetupChoice } from './SetupCard';
 import { getHealth } from './agentBridge';
 import type { ClaudeHealth } from './types';
 import type { AppTheme, ThemeTokens } from '../reelsStudio/theme';
@@ -96,7 +133,7 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
     [locale],
   );
 
-  const { messages, busy, send, cancel, approve, pick, proposeDraft, resolveDraft, updateDraft, clear, model, setModel } = useAgentChat(locale, projectKey);
+  const { messages, busy, send, cancel, approve, pick, proposeDraft, resolveDraft, updateDraft, proposeSetup, resolveSetup, clear, model, setModel } = useAgentChat(locale, projectKey);
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -114,6 +151,13 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, String(width));
   }, [width]);
+
+  // Pending setup-card Promises, keyed by setupId. The bridge calls
+  // `__reelsAgent.requestSetup(...)` which adds an entry here; the
+  // user's SetupCard button click resolves it.
+  const setupPromisesRef = useRef<
+    Map<string, (result: { kind: 'submit'; choice: SetupChoice } | { kind: 'skip' } | { kind: 'cancel' }) => void>
+  >(new Map());
 
   // Expose proposeDraft on `window` so the bridge layer
   // (useAgentToolBridge, which lives outside this component tree) can
@@ -133,18 +177,30 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
           text: string;
         }>,
       ) => void;
+      requestSetup?: (args: {
+        title?: string;
+        subtitle?: string;
+      }) => Promise<{ kind: 'submit'; choice: SetupChoice } | { kind: 'skip' } | { kind: 'cancel' }>;
     };
     const w = window as unknown as Window & { __reelsAgent?: ReelsAgentShim };
     if (!w.__reelsAgent) w.__reelsAgent = {};
     w.__reelsAgent.proposeDraft = proposeDraft;
     w.__reelsAgent.updateDraft = updateDraft;
+    w.__reelsAgent.requestSetup = (args) => {
+      const setupId = `setup_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      proposeSetup({ setupId, title: args.title, subtitle: args.subtitle });
+      return new Promise(resolve => {
+        setupPromisesRef.current.set(setupId, resolve);
+      });
+    };
     return () => {
       if (w.__reelsAgent) {
         delete w.__reelsAgent.proposeDraft;
         delete w.__reelsAgent.updateDraft;
+        delete w.__reelsAgent.requestSetup;
       }
     };
-  }, [proposeDraft, updateDraft]);
+  }, [proposeDraft, updateDraft, proposeSetup]);
 
   /// Click handlers for the DraftCard. We route through the bridge-installed
   /// shim (it knows the reducer + the full ScriptBlock objects), then mark
@@ -168,6 +224,36 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
       resolveDraft(draftId, 'discarded');
     },
     [resolveDraft],
+  );
+
+  // SetupCard click handlers — resolve the pending Promise so the
+  // bridge handler can continue past `await requestSetup(...)`.
+  const handleSetupSubmit = useCallback(
+    (setupId: string, choice: SetupChoice) => {
+      const resolver = setupPromisesRef.current.get(setupId);
+      setupPromisesRef.current.delete(setupId);
+      resolveSetup(setupId, 'submitted');
+      resolver?.({ kind: 'submit', choice });
+    },
+    [resolveSetup],
+  );
+  const handleSetupSkip = useCallback(
+    (setupId: string) => {
+      const resolver = setupPromisesRef.current.get(setupId);
+      setupPromisesRef.current.delete(setupId);
+      resolveSetup(setupId, 'skipped');
+      resolver?.({ kind: 'skip' });
+    },
+    [resolveSetup],
+  );
+  const handleSetupCancel = useCallback(
+    (setupId: string) => {
+      const resolver = setupPromisesRef.current.get(setupId);
+      setupPromisesRef.current.delete(setupId);
+      resolveSetup(setupId, 'cancelled');
+      resolver?.({ kind: 'cancel' });
+    },
+    [resolveSetup],
   );
 
   useEffect(() => {
@@ -421,6 +507,9 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
             onPick={pick}
             onApplyDraft={handleApplyDraft}
             onDiscardDraft={handleDiscardDraft}
+            onSetupSubmit={handleSetupSubmit}
+            onSetupSkip={handleSetupSkip}
+            onSetupCancel={handleSetupCancel}
           />
         ))}
 
@@ -745,8 +834,27 @@ const MessageRow: React.FC<{
   onPick: (pickerId: string, optionId: string | null) => void;
   onApplyDraft: (draftId: string) => void;
   onDiscardDraft: (draftId: string) => void;
-}> = ({ message, tokens, locale, onApprove, onPick, onApplyDraft, onDiscardDraft }) => {
+  onSetupSubmit: (setupId: string, choice: SetupChoice) => void;
+  onSetupSkip: (setupId: string) => void;
+  onSetupCancel: (setupId: string) => void;
+}> = ({ message, tokens, locale, onApprove, onPick, onApplyDraft, onDiscardDraft, onSetupSubmit, onSetupSkip, onSetupCancel }) => {
   const t = useCallback((k: string, vars?: Record<string, string | number>) => tx(locale, k, vars), [locale]);
+
+  // Setup card branch (pre-flight Q&A before video import)
+  if (message.setup) {
+    return (
+      <SetupCard
+        tokens={tokens}
+        locale={locale}
+        title={message.setup.title}
+        subtitle={message.setup.subtitle}
+        resolved={message.setup.resolved}
+        onSubmit={choice => onSetupSubmit(message.setup!.setupId, choice)}
+        onSkip={() => onSetupSkip(message.setup!.setupId)}
+        onCancel={() => onSetupCancel(message.setup!.setupId)}
+      />
+    );
+  }
 
   // Draft preview branch (script generated by an import, awaiting apply)
   if (message.draft) {
@@ -882,7 +990,7 @@ const MessageRow: React.FC<{
               color: tokens.text.primary,
             }}
           >
-            {message.text}
+            {renderInlineMarkdown(message.text)}
             {message.streaming && (
               <span
                 className="inline-block w-1.5 h-3.5 ml-0.5 align-middle animate-pulse"

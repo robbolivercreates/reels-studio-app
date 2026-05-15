@@ -243,6 +243,12 @@ For a {DURATION_SEC}s block, plan your timeline like this:
                  morph, scale-pop, count-up tick
 - Last 0.4s     Graceful exit on the most recent sub-event
 
+CRITICAL: events MUST span the FULL block duration. Never let the last
+1-2 seconds go visually static. Use the block's text as your script —
+each clause / idea gets its own visual beat. If the text has 5 ideas in
+a 12s block, you need ~5 visual beats distributed across the 12s, NOT
+clustered in the first 7s with a dead tail.
+
 Concrete example for a 7s block:
   t=0.0  bg gradient drift starts (continuous, 7s total)
   t=0.3  first word/icon scale-pops in
@@ -257,6 +263,21 @@ For a 4s block:
   t=1.8  secondary reveal
   t=3.2  accent climax
   t=3.7  exit
+
+For a 12s block (longer B-roll, follow the text closely):
+  t=0.0   bg drift starts (continuous, 12s total)
+  t=0.3   first idea/keyword scale-pops in
+  t=2.2   second idea: icon swap or word reveal
+  t=4.4   third idea: morph or clip-path wipe
+  t=6.6   fourth idea: count-up tick or accent flash
+  t=8.8   fifth idea: pulse glow climax on the key element
+  t=10.8  late beat: subtle re-emphasis or secondary highlight
+  t=11.6  exit fade (the last ~0.4s)
+
+Rule of thumb for long blocks: place events at roughly
+DURATION/N intervals where N = number of text ideas (clauses, sentences,
+or beats). For a 10s block with 4 ideas → events at ~0.3, 2.7, 5.5, 8.0,
+then exit at 9.6. NEVER let the final 2 seconds be empty.
 
 EASING (curated by event type):
 - Entrances → "back.out(1.4)" or "expo.out", duration 0.4-0.7s
@@ -549,6 +570,8 @@ If the named app is completely unknown, build a generic-but-plausible shell:
  TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════
 1. Each element: class="clip", data-start, data-duration, data-track-index (0=back, higher=front), id="kebab-case-name" (REQUIRED — lint fails without an id on every timeline element). Media tags (<video src=…>, <img src=…>) ALSO need data-start + data-duration on the tag itself, in addition to being inside a .clip shell — without that the lint reports 'media_missing_data_start' and the render aborts.
+
+1a. TRACK INDEX RULE (CRITICAL — render fails otherwise): every .clip element with the same data-track-index MUST have non-overlapping [data-start, data-start + data-duration] windows. The HyperFrames CLI reports "overlapping_clips_same_track" and aborts the render when two clips share a track and overlap in time. Practical rule: **each clip that is alive at the same time goes on its OWN data-track-index**. Don't bundle "node + label" or "icon + caption" or "card-bg + card-content" on the same track just because they're visually related. Use track 0 for the background, then increment (1, 2, 3, …) for every additional clip — even if it's just a 1px divider. Track 9 is reserved for the brand-chrome layer. If you have 8 clips alive across the block duration, use track-index 0 through 8.
 2. ONE <script> at the end. Use the actual composition ID from the "--- COMPOSITION ID ---" section of your brief (e.g. "motion-abc123"). Example structure:
    window.__timelines = window.__timelines || {}
    const tl = gsap.timeline({ paused: true })
@@ -1647,7 +1670,13 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   ].filter(Boolean).join('\n');
 
   const canvasSize = input.canvasAspect === '4:5' ? '1080×1350' : '1080×1920';
-  const systemPromptForRequest = SYSTEM_PROMPT.replace('CANVAS_SIZE_PLACEHOLDER', canvasSize);
+  const systemPromptForRequest = SYSTEM_PROMPT
+    .replace('CANVAS_SIZE_PLACEHOLDER', canvasSize)
+    // {DURATION_SEC} appears in the timeline-planning rule. Without this
+    // substitution the model receives a literal placeholder and falls
+    // back to the bundled 4s/7s examples — for 10s+ blocks it then
+    // clusters all events early and leaves a dead tail at the end.
+    .replace(/\{DURATION_SEC\}/g, input.durationSec.toString());
 
   let lastError: unknown;
   for (const model of MODEL_CANDIDATES) {

@@ -26,11 +26,9 @@ export interface RenderInputs {
   avatarClips: Record<string, AvatarClipState>;
   activeTake: ScreenTake | null;
   audioBlob: Blob;
-  duration: number;          // seconds (raw audio duration)
+  duration: number;          // seconds (effective audio duration)
   aspect: '9:16' | '16:9' | '1:1' | 'carousel';
   quality: 'high' | 'lite';
-  /** When provided, output skips silent regions; segments are in source time (0..duration). */
-  silenceKeepSegments?: { start: number; end: number }[];
   /** When true, render video track only — no AAC encoding. Use for ffmpeg mux path. */
   videoOnly?: boolean;
 }
@@ -193,8 +191,11 @@ const frameAtProjectTime = (
   const nextSlot = slotIdx >= 0 && slotIdx < layout.slots.length - 1 ? layout.slots[slotIdx + 1] : null;
   const nextBlock = nextSlot ? inputs.blocks.find(b => b.id === nextSlot.blockId) ?? null : null;
 
-  const incomingTransition: BlockTransition = prevBlock ? (prevBlock.transition ?? 'fade') : 'fade';
-  const outgoingTransition: BlockTransition = block.transition ?? 'fade';
+  // Default between-block transition is cross-dissolve (Apple/CapCut style —
+  // no black flash). The reel's intro/outro still uses 'fade' to black for
+  // a clean entry/exit. User can override per-block via block.transition.
+  const incomingTransition: BlockTransition = prevBlock ? (prevBlock.transition ?? 'dissolve') : 'fade';
+  const outgoingTransition: BlockTransition = block.transition ?? (nextBlock ? 'dissolve' : 'fade');
 
   const inFadeRegion = localFrame < FADE_FRAMES;
   const outFadeRegion = localFrame > totalBlockFrames - FADE_FRAMES;
@@ -279,16 +280,75 @@ const loadVideoElement = (url: string): Promise<HTMLVideoElement> =>
     v.onerror = () => reject(new Error(`Failed to load video: ${url}`));
   });
 
-const seekVideo = (v: HTMLVideoElement, t: number): Promise<void> =>
+// Hard cap on a single seek. Healthy seeks finish in <50ms. The previous
+// 1.5s ceiling let a single broken clip burn ~18s per crossfade frame
+// (multiple video layers × 1.5s). 400ms keeps us forgiving but kills
+// the "trava 2s no segundo X" pattern fast.
+const SEEK_TIMEOUT_MS = 400;
+/** After this many consecutive timeouts on the SAME video, we mark it
+ * broken and short-circuit future seeks (renders last good frame).
+ * Prevents one bad HEVC/fragmented MP4 from stalling an entire export. */
+const MAX_TIMEOUTS_BEFORE_GIVEUP = 3;
+const brokenVideoUrls = new WeakSet<HTMLVideoElement>();
+const timeoutCount = new WeakMap<HTMLVideoElement, number>();
+
+/** Reset on each new export so a previous broken-clip mark doesn't
+ *  poison a retry. Called once at the start of renderMp4. */
+const resetVideoHealth = (videos: HTMLVideoElement[]) => {
+  for (const v of videos) {
+    if (brokenVideoUrls.has(v)) {
+      // WeakSet has no delete? — yes it does.
+      brokenVideoUrls.delete(v);
+    }
+    timeoutCount.delete(v);
+  }
+};
+
+const seekVideo = (v: HTMLVideoElement, t: number, signal?: { cancelled: boolean }): Promise<void> =>
   new Promise((resolve) => {
+    // Already known broken — skip the seek entirely. The renderer will
+    // draw whatever the last successfully-seeked frame is.
+    if (brokenVideoUrls.has(v)) {
+      resolve();
+      return;
+    }
     const target = Math.max(0, Math.min(v.duration || t, t));
     if (Math.abs(v.currentTime - target) < 0.02) {
       resolve();
       return;
     }
-    const onSeeked = () => { v.removeEventListener('seeked', onSeeked); resolve(); };
+    let settled = false;
+    const finish = (timedOut = false) => {
+      if (settled) return;
+      settled = true;
+      v.removeEventListener('seeked', onSeeked);
+      clearTimeout(timer);
+      clearInterval(cancelPoll);
+      if (timedOut) {
+        const n = (timeoutCount.get(v) ?? 0) + 1;
+        timeoutCount.set(v, n);
+        if (n >= MAX_TIMEOUTS_BEFORE_GIVEUP) {
+          brokenVideoUrls.add(v);
+          console.warn('[render] giving up on broken video after', n, 'timeouts · src=', v.src.slice(0, 80));
+        }
+      } else {
+        // Reset count on a successful seek — only consecutive misses count.
+        timeoutCount.delete(v);
+      }
+      resolve();
+    };
+    const onSeeked = () => finish(false);
+    const timer = setTimeout(() => {
+      console.warn('[render] seek timeout · target=', target, '· dur=', v.duration, '· cur=', v.currentTime);
+      finish(true);
+    }, SEEK_TIMEOUT_MS);
+    // Poll the cancel flag every 50ms — lets the user-facing Cancel
+    // button break out of a seek that's still within budget.
+    const cancelPoll = signal
+      ? setInterval(() => { if (signal.cancelled) finish(false); }, 50)
+      : 0;
     v.addEventListener('seeked', onSeeked);
-    try { v.currentTime = target; } catch { resolve(); }
+    try { v.currentTime = target; } catch { finish(); }
   });
 
 const decodeAudioChannelData = async (blob: Blob): Promise<{ data: Float32Array; sampleRate: number; numberOfChannels: number }> => {
@@ -319,29 +379,27 @@ const decodeAudioChannelData = async (blob: Blob): Promise<{ data: Float32Array;
 };
 
 export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) => void): RenderHandle => {
+  // Mutable object so deep helpers (seekVideo, anything else nested)
+  // can observe the cancel flag without us threading the boolean
+  // through every call site.
+  const cancelSignal = { cancelled: false };
   let cancelled = false;
 
   const promise = (async (): Promise<Blob> => {
     const { width, height } = dimensionsFor(inputs.aspect, inputs.quality);
 
     // Layout already accounts for trim handles (per-block trimIn/trimOut → ripple).
+    // It also reflects any silence cut already applied to the audio
+    // upstream — the caller passes blocks whose start/end live on the
+    // post-cut timeline, so renderer time == project time (no remap).
+    // The legacy `silenceKeepSegments` param (uniform proportional
+    // squish) lived here for the old flow where HeyGen rendered with
+    // silences baked into the lipsync; that flow is gone (see Onda 8
+    // débito 11 — silence is now cut BEFORE HeyGen).
     const layout = computeLayout(inputs.blocks);
     const projectDuration = layout.totalDuration > 0 ? layout.totalDuration : inputs.duration;
-
-    // Silence cut: keep segments are in SOURCE-AUDIO coords (0..inputs.duration).
-    // Output time → project time is identity unless silence cut is on.
-    const cutOn = !!inputs.silenceKeepSegments && inputs.silenceKeepSegments.length > 0;
-    const keepSegs = cutOn ? inputs.silenceKeepSegments! : [{ start: 0, end: inputs.duration }];
-
-    // Approximate: silence cut applied uniformly shrinks the project duration
-    // proportionally. (Exact mapping needs intersecting silence ranges with each
-    // block's source range — TODO when this matters in practice.)
-    const totalKeepSec = cutOn ? keepSegs.reduce((s, k) => s + (k.end - k.start), 0) : projectDuration;
-    const cutRatio = cutOn && inputs.duration > 0 ? totalKeepSec / inputs.duration : 1;
-    const effectiveDuration = projectDuration * cutRatio;
-    const totalFrames = Math.floor(effectiveDuration * FRAMERATE);
-
-    const mapOutToProject = (outT: number): number => cutOn ? outT / cutRatio : outT;
+    const totalFrames = Math.floor(projectDuration * FRAMERATE);
+    const mapOutToProject = (outT: number): number => outT;
 
     onProgress({ phase: 'preparing', framesDone: 0, totalFrames, message: 'Carregando mídia...' });
 
@@ -361,7 +419,24 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     // Also include motion videos.
     for (const url of motionUrls.values()) allUrls.push(url);
 
+    // Diagnostic block — pinpoint missing visuals before the render
+    // starts so the export modal logs reveal what's wrong.
+    console.log('[render] block summary:', inputs.blocks.map(b => ({
+      id: b.id,
+      kind: b.kind,
+      text: b.text.slice(0, 40),
+      start: b.start.toFixed(2),
+      end: b.end.toFixed(2),
+      hasMotion: !!b.motion?.videoPath,
+      hasClip: b.kind === 'avatar' ? !!inputs.avatarClips[b.id]?.videoUrl : 'n/a',
+      clipStatus: b.kind === 'avatar' ? inputs.avatarClips[b.id]?.status : 'n/a',
+    })));
+    console.log('[render] avatarClips keys:', Object.keys(inputs.avatarClips));
+    console.log('[render] activeTake:', inputs.activeTake?.url ?? 'null');
+    console.log('[render] motionUrls size:', motionUrls.size);
+
     const uniqueUrls = Array.from(new Set(allUrls.filter((u): u is string => !!u)));
+    console.log('[render] uniqueUrls count:', uniqueUrls.length, 'sample:', uniqueUrls.slice(0, 3));
     const videoMap = new Map<string, HTMLVideoElement>();
     for (const url of uniqueUrls) {
       if (cancelled) throw new Error('Cancelado');
@@ -371,6 +446,9 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         console.warn('[reels/render] failed to preload', url, err);
       }
     }
+    console.log('[render] videoMap loaded:', videoMap.size, 'of', uniqueUrls.length);
+    // Reset per-video timeout counters so retries don't inherit prior broken-marks.
+    resetVideoHealth(Array.from(videoMap.values()));
 
     onProgress({ phase: 'preparing', framesDone: 0, totalFrames, message: 'Decodificando áudio...' });
     const audio = await decodeAudioChannelData(inputs.audioBlob);
@@ -434,6 +512,62 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     const drawBlackFrame = () => {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, width, height);
+    };
+
+    /** Fallback placeholder for empty broll blocks. Renders a dark
+     *  gradient background + the block's text wrapped at the centre,
+     *  so the user gets a readable slide instead of black silence
+     *  when an export catches a block before motion/asset/take was
+     *  attached. Sized to the full frame. */
+    const drawTextPlaceholder = (text: string) => {
+      // Diagonal gradient background — feels "designed" rather than
+      // an obvious placeholder.
+      const grad = ctx.createLinearGradient(0, 0, width, height);
+      grad.addColorStop(0, '#1a1a2e');
+      grad.addColorStop(1, '#0f0f1a');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, width, height);
+
+      // Subtle dot grid for texture.
+      ctx.fillStyle = 'rgba(255,255,255,0.04)';
+      const step = 40;
+      for (let y = step; y < height; y += step) {
+        for (let x = step; x < width; x += step) {
+          ctx.fillRect(x, y, 2, 2);
+        }
+      }
+
+      if (!text.trim()) return;
+
+      // Word-wrap so long block texts fit. Pick a font size based on
+      // the canvas height so 9:16 + 16:9 both look balanced.
+      const fontSize = Math.round(height * 0.045);
+      ctx.font = `600 ${fontSize}px -apple-system, "Helvetica Neue", "Segoe UI", sans-serif`;
+      ctx.fillStyle = 'rgba(255,255,255,0.92)';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const maxLineWidth = width * 0.82;
+      const words = text.trim().split(/\s+/);
+      const lines: string[] = [];
+      let line = '';
+      for (const w of words) {
+        const tentative = line ? `${line} ${w}` : w;
+        if (ctx.measureText(tentative).width > maxLineWidth && line) {
+          lines.push(line);
+          line = w;
+        } else {
+          line = tentative;
+        }
+      }
+      if (line) lines.push(line);
+      const lineHeight = fontSize * 1.25;
+      const totalH = lines.length * lineHeight;
+      const startY = height / 2 - totalH / 2 + lineHeight / 2;
+      for (let i = 0; i < lines.length; i++) {
+        ctx.fillText(lines[i], width / 2, startY + i * lineHeight);
+      }
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
     };
 
     /** Draw bottom-to-transparent gradient over the lower portion of the frame. */
@@ -522,11 +656,26 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
 
       drawBlackFrame();
 
+      // Empty-block fallback: when a block has no motion, no asset,
+      // no active take, and no avatar clip — e.g. a broll piece that
+      // resulted from a resplit + bookend flip but never got a motion
+      // generated — the frame would otherwise be pure black. Paint a
+      // designed text placeholder so the user gets a readable
+      // slide-style fallback in the final MP4.
+      const decodedLayers = composition.layers.filter(l => videoMap.has(l.videoUrl));
+      if (decodedLayers.length === 0) {
+        const hit = hitTest(layout, projT);
+        if (hit.kind === 'block') {
+          const block = inputs.blocks.find(b => b.id === hit.slot.blockId);
+          if (block) drawTextPlaceholder(block.text);
+        }
+      }
+
       // Draw video layers with their blend mode + alpha.
       for (const lyr of composition.layers) {
         const v = videoMap.get(lyr.videoUrl);
         if (!v) continue;
-        await seekVideo(v, lyr.sourceSeek);
+        await seekVideo(v, lyr.sourceSeek, cancelSignal);
         drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0);
       }
 
@@ -581,11 +730,6 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       const FADE_MS_DISSOLVE = 150;
       const pieces: Float32Array[] = [];
 
-      const intersect = (a: { start: number; end: number }, b: { start: number; end: number }) => ({
-        start: Math.max(a.start, b.start),
-        end: Math.min(a.end, b.end),
-      });
-
       const pushPcmRange = (startSec: number, endSec: number, fadeInMs: number, fadeOutMs: number) => {
         const startIdx = Math.max(0, Math.floor(startSec * targetRate));
         const endIdx = Math.min(pcmFull.length, Math.floor(endSec * targetRate));
@@ -612,14 +756,11 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         const fadeIn = incomingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
         const fadeOut = outgoingDissolve ? FADE_MS_DISSOLVE : FADE_MS_DEFAULT;
         const blockRange = { start: slot.sourceStart, end: slot.sourceEnd };
-        if (cutOn) {
-          for (const k of keepSegs) {
-            const inter = intersect(blockRange, k);
-            if (inter.end > inter.start) pushPcmRange(inter.start, inter.end, fadeIn, fadeOut);
-          }
-        } else {
-          pushPcmRange(blockRange.start, blockRange.end, fadeIn, fadeOut);
-        }
+        // Silence is already cut upstream — block ranges live on the
+        // final timeline, so the audio pass just emits each block's
+        // PCM as-is. The old `cutOn` branch (intersect with keep
+        // segments) was removed in Onda 8 débito 12.
+        pushPcmRange(blockRange.start, blockRange.end, fadeIn, fadeOut);
       }
 
       const totalLen = pieces.reduce((s, x) => s + x.length, 0);
@@ -679,6 +820,9 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
 
   return {
     promise,
-    cancel: () => { cancelled = true; },
+    cancel: () => {
+      cancelled = true;
+      cancelSignal.cancelled = true;
+    },
   };
 };

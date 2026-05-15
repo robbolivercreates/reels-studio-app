@@ -32,6 +32,18 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
     let cancelled = false;
     (async () => {
       try {
+        // A pending project name (set by the "Novo projeto" flow before
+        // it reloads the page) takes priority: we apply it before
+        // hydration so the new project gets its OWN assets directory
+        // instead of inheriting "Reel sem título"'s.
+        const pendingName = typeof window !== 'undefined'
+          ? window.localStorage?.getItem('reels.pendingProjectName')
+          : null;
+        if (pendingName) {
+          window.localStorage.removeItem('reels.pendingProjectName');
+          dispatch({ type: 'set-name', name: pendingName });
+        }
+
         const persisted = await loadProject();
         if (cancelled) return;
         if (!persisted) {

@@ -106,6 +106,17 @@ pub struct SetBlockLayoutArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetBlockAvatarPhotoArgs {
+    /// Block id (use list_blocks to discover; must be an avatar block).
+    pub id: String,
+    /// AvatarPhoto id from list_avatar_photos. Pass `null` (or omit) to
+    /// clear the per-block override and fall back to the project's
+    /// default photo.
+    #[serde(default)]
+    pub photo_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SetBlockKindArgs {
     /// Block id (use list_blocks to discover).
     pub id: String,
@@ -171,6 +182,29 @@ pub struct ImportFromVideoUrlArgs {
     /// curto", "preserva o sotaque", etc).
     #[serde(default)]
     pub instruction: Option<String>,
+    /// Set true ONLY when the user explicitly asks to re-download or
+    /// re-analyse the same reel ("baixa de novo", "analisa novamente",
+    /// "ignora o cache"). Default false → reuses cached analysis +
+    /// already-downloaded file, which is fast and free. The response
+    /// payload has a `cached` boolean you can mention casually.
+    #[serde(default)]
+    pub force_redownload: Option<bool>,
+    /// Target duration in seconds (15/30/45/60). When the user
+    /// specifies a duration ("recria esse reel em 45s"), pass it
+    /// here so the setup card is auto-skipped. Omit to let the user
+    /// pick interactively or to mirror the source video's length.
+    #[serde(default)]
+    pub duration_sec: Option<i64>,
+    /// Tone: "original" (mimic source) / "casual" / "direct" /
+    /// "educational". Pass when the user is explicit ("mais casual",
+    /// "mais formal"); skip otherwise — the setup card asks the user.
+    #[serde(default)]
+    pub tone: Option<String>,
+    /// Focus: "adapt" (default — adapt to user's niche), "summarize",
+    /// or "detail" (expand). Pass when the user is explicit ("mais
+    /// curto, resume", "explica melhor"); skip otherwise.
+    #[serde(default)]
+    pub focus: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -629,6 +663,17 @@ impl ReelsAgentService {
     }
 
     #[tool(
+        description = "Define qual foto de avatar usar APENAS naquele bloco. Útil quando o usuário quer alternar fotos/poses entre cenas ('no bloco 2 usa a foto X, no bloco 5 usa a Y'). Use list_avatar_photos primeiro pra pegar os ids. Passe `photo_id: null` (ou omita) pra limpar o override e voltar à foto padrão do projeto. A foto global do projeto é mexida com set_avatar_photo."
+    )]
+    async fn set_block_avatar_photo(
+        &self,
+        Parameters(args): Parameters<SetBlockAvatarPhotoArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let payload = json!({ "id": args.id, "photo_id": args.photo_id });
+        self.bridge_write("set-block-avatar-photo", payload).await
+    }
+
+    #[tool(
         description = "Muda o tipo de UM bloco entre 'avatar' (falando pra câmera) e 'broll' (narração sobre visual). Não regenera o texto — só troca o tipo. Use isto pra bulk-converter blocos ('vira tudo em broll'). Mais barato que regenerate_block (zero chamadas Gemini)."
     )]
     async fn set_block_kind(
@@ -725,6 +770,13 @@ impl ReelsAgentService {
     }
 
     #[tool(
+        description = "Quebra blocos do roteiro que são mais longos que a 'Duração máxima do bloco' definida em Settings → Agents → Avançado. Funciona em 2 modos: (1) com áudio gerado, usa word timestamps reais — quebra exata em pausas naturais (ponto/vírgula); (2) sem áudio, usa estimativa palavras/segundo — quebra heurística pelos imports. Se não há limite configurado, retorna erro acionável. Se nenhum bloco passa do limite, retorna 'nothing to split'. Aplica direto, não pede aprovação."
+    )]
+    async fn split_long_blocks(&self) -> Result<CallToolResult, McpError> {
+        self.bridge_write("split-long-blocks", json!({})).await
+    }
+
+    #[tool(
         description = "Troca a voz ativa do projeto. 'voice_id' precisa estar na lista de vozes do projeto (built-in ou clonada). Não regenera áudio automaticamente — chame generate_audio depois se quiser."
     )]
     async fn set_voice(
@@ -738,7 +790,7 @@ impl ReelsAgentService {
     // ---- Import tools (Wave 1 — start a project from a source) ----
 
     #[tool(
-        description = "Importa um Reels existente baixando o vídeo (yt-dlp) e analisando com Gemini. Aceita link de Instagram, TikTok, YouTube Shorts, etc. NÃO substitui os blocos imediatamente — em vez disso surface um draft card no chat com preview pro usuário aprovar antes de aplicar (campo `draft_id` no retorno + status='pending-user-approval'). Apenas confirme ao usuário 'Pronto, dá uma olhada nos blocos abaixo e clica em Aplicar quando estiver bom.'"
+        description = "Importa um Reels existente. Por padrão um card visual pergunta ao usuário duração/tom/foco antes de gerar — SEMPRE deixe esses campos vazios e deixe o card aparecer, A NÃO SER QUE o usuário tenha EXPLICITAMENTE dito na mensagem dele (ex: 'importa esse reel em 45s mais detalhado' → duration_sec=45, focus='detail'). Não invente valores. Não 'lembre' de uma preferência de turn anterior — cada import é uma escolha nova. Cache: re-imports do mesmo URL com mesmas escolhas voltam em <2s (campo `cached: true`). Passe `force_redownload: true` SÓ quando o usuário pedir 'baixa de novo'. NÃO substitui os blocos imediatamente — surface um draft card (campo `draft_id` + status='pending-user-approval'). Confirme ao usuário: 'Pronto, dá uma olhada abaixo e aprova quando estiver bom.'"
     )]
     async fn import_from_video_url(
         &self,
@@ -747,6 +799,10 @@ impl ReelsAgentService {
         let payload = json!({
             "url": args.url,
             "instruction": args.instruction.unwrap_or_default(),
+            "force_redownload": args.force_redownload.unwrap_or(false),
+            "duration_sec": args.duration_sec,
+            "tone": args.tone,
+            "focus": args.focus,
         });
         self.bridge_write("import-from-video-url", payload).await
     }

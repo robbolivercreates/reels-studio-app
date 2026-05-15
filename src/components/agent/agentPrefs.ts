@@ -254,3 +254,48 @@ export const ACTIVE_PROVIDERS: ProviderInfo[] = [
     storageKey: 'FAL_KEY',
   },
 ];
+
+// ─── Max block seconds ──────────────────────────────────────────────
+// Cap on how long a single script block can be before the import
+// pipeline splits it. Long avatar blocks are expensive on HeyGen and
+// feel sluggish; long broll blocks lose energy. Splitting near a
+// sentence boundary keeps the cut natural.
+//
+// 'auto' = no cap (the analyser decides). Numeric values are seconds.
+
+export type MaxBlockSec = 'auto' | 3 | 5 | 8;
+
+const STORAGE_KEY_MAX_BLOCK_SEC = 'reels.agent.maxBlockSec';
+
+function loadMaxBlockSec(): MaxBlockSec {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_MAX_BLOCK_SEC);
+    if (raw === 'auto') return 'auto';
+    if (raw === '3') return 3;
+    if (raw === '5') return 5;
+    if (raw === '8') return 8;
+  } catch { /* ignore */ }
+  // Default: 5s — long enough for a hook or punchline, short enough
+  // that imports of dense source videos don't get monolithic blocks.
+  return 5;
+}
+
+function saveMaxBlockSec(value: MaxBlockSec): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_MAX_BLOCK_SEC, String(value));
+  } catch { /* ignore */ }
+}
+
+/// Read-only access for non-React callers (services, importers).
+/// Returns the configured cap in seconds, or null when set to 'auto'.
+export function getMaxBlockSec(): number | null {
+  const v = loadMaxBlockSec();
+  return v === 'auto' ? null : v;
+}
+
+export function useMaxBlockSec() {
+  const [value, setValue] = useState<MaxBlockSec>(loadMaxBlockSec);
+  useEffect(() => { saveMaxBlockSec(value); }, [value]);
+  const setMax = useCallback((v: MaxBlockSec) => setValue(v), []);
+  return { value, setValue: setMax };
+}

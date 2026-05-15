@@ -93,7 +93,9 @@ export const DraftCard: React.FC<Props> = ({ draft, tokens, locale, onApply, onD
         >
           {resolved === 'applied'
             ? `✓ ${t(locale, 'draft.applied')}`
-            : t(locale, 'draft.discarded')}
+            : resolved === 'superseded'
+              ? t(locale, 'draft.superseded')
+              : t(locale, 'draft.discarded')}
         </div>
       ) : (
         <div className="flex items-center gap-2">

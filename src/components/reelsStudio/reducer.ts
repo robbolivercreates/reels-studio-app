@@ -247,6 +247,20 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       };
     }
 
+    case 'set-block-avatar-photo': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          if (action.photoId === undefined) {
+            const { avatarPhotoId: _, ...rest } = b;
+            return rest;
+          }
+          return { ...b, avatarPhotoId: action.photoId };
+        }),
+      };
+    }
+
     case 'set-block-motion': {
       return {
         ...state,
@@ -414,6 +428,36 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
         // from a fresh video reference always brings analysis along.
         lastAnalysis: action.analysis ?? state.lastAnalysis,
         analyses: nextAnalyses,
+      };
+    }
+
+    case 'resplit-blocks': {
+      // Split-only flow — same audio file, new block boundaries +
+      // re-tagged word timestamps. Avatar clips on UNTOUCHED blocks
+      // survive as-is. Clips on SPLIT blocks get migrated to the
+      // head piece (which still starts at the original block's start),
+      // because the audio at that range is exactly what the clip was
+      // rendered for. Tail pieces inherit nothing and stay broll.
+      const nextClips: typeof state.avatarClips = {};
+      for (const [id, clip] of Object.entries(state.avatarClips)) {
+        if (!action.removedIds.includes(id)) {
+          nextClips[id] = clip;
+          continue;
+        }
+        const newId = action.oldIdToHeadId[id];
+        if (newId) {
+          // Migrate the clip to the head piece. The head's audio
+          // window is `[block.start, cutAt]` — a prefix of the
+          // original clip's audio, so playback aligned to the new
+          // shorter duration matches.
+          nextClips[newId] = clip;
+        }
+      }
+      return {
+        ...state,
+        blocks: action.blocks,
+        audio: { ...state.audio, words: action.words },
+        avatarClips: nextClips,
       };
     }
 

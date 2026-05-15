@@ -26,3 +26,14 @@ export const clearCutSession = () => {
 };
 
 export const getCutSession = (): CutSession | null => current;
+
+/// Keep the cut session's `blocks` aligned with whatever the reducer
+/// just produced. Call this from any code path that mutates
+/// `state.blocks` after the cut was applied — resplit, future bulk
+/// edits, etc. Without this, the singleton stays pointing at stale
+/// pre-mutation blocks and the export reads the wrong block list,
+/// landing on missing-clip / black-frame bugs (see bug 14 in the plan).
+export const syncCutSessionBlocks = (blocks: ScriptBlock[]) => {
+  if (!current) return;
+  current = { ...current, blocks };
+};

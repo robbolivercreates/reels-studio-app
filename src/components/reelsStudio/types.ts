@@ -28,6 +28,14 @@ export type BlockTransition = 'cut' | 'fade' | 'dissolve';
 export type ToneOption = 'current' | 'more-direct' | 'more-casual' | 'more-didactic';
 
 /**
+ * Content transformation mode — how the source becomes a reel.
+ *  - compress: keep wording, just shorter (good for short Reels/TikToks → Reel)
+ *  - adapt:    rewrite in the user's voice, same content
+ *  - trailer:  promise + glimpse + CTA-bait (NOT a tutorial — long-form → Reel)
+ */
+export type ContentMode = 'compress' | 'adapt' | 'trailer';
+
+/**
  * Output language override applied per-generation (chip in the preview panel).
  * `auto` = use the voice profile's outputLanguage. Anything else overrides it.
  */
@@ -44,6 +52,8 @@ export interface RegenerateContext {
   toneOverride?: ToneOption;
   /** When set (and not 'auto'), forces this output language regardless of voice profile. */
   languageOverride?: LanguageOption;
+  /** When set, applies the corresponding mode prompt (compress/adapt/trailer). */
+  contentMode?: ContentMode;
 }
 
 /**
@@ -93,6 +103,14 @@ export interface ScriptBlock {
    * undefined = 0 (centered).
    */
   avatarOffsetY?: number;
+  /**
+   * Avatar blocks only: per-block photo override. When set, the avatar
+   * clip for this block is generated using this AvatarPhoto.id instead
+   * of the project's globally selected `selectedPhotoId`. Lets the user
+   * use different photos/poses across blocks of the same reel.
+   * undefined = inherit the project-level photo.
+   */
+  avatarPhotoId?: string;
   /**
    * Optional motion graphic associated with this block. Rendered by Remotion.
    * undefined = no motion. Picker assigns this via `set-block-motion`.
@@ -191,7 +209,7 @@ export interface AvatarClipState {
   error?: string;
 }
 
-export type HeyGenModelChoice = 'avatar3' | 'avatar4';
+export type HeyGenModelChoice = 'avatar3' | 'avatar4' | 'avatar5';
 
 export interface KeepSegmentSec {
   start: number;
@@ -331,11 +349,13 @@ export type ReelsAction =
   | { type: 'set-block-transition'; id: string; transition: BlockTransition }
   | { type: 'set-brand-identity'; brand: Record<string, unknown> | undefined }
   | { type: 'replace-blocks'; blocks: ScriptBlock[]; analysis?: PersistedAnalysis }
+  | { type: 'resplit-blocks'; blocks: ScriptBlock[]; words: WordTimestamp[]; removedIds: string[]; oldIdToHeadId: Record<string, string> }
   | { type: 'remove-analysis'; createdAt: number }
   | { type: 'set-avatar-visible-sec'; id: string; sec: number | undefined }
   | { type: 'set-block-layout'; id: string; layout: BlockLayout }
   | { type: 'set-avatar-zoom'; id: string; zoom: number }
   | { type: 'set-avatar-offset-y'; id: string; offsetY: number }
+  | { type: 'set-block-avatar-photo'; id: string; photoId: string | undefined }
   | { type: 'set-block-motion'; id: string; motion: MotionConfig | undefined }
   | { type: 'set-block-assets'; id: string; assets: AttachedAsset[] | undefined }
   | { type: 'add-block-asset'; id: string; asset: AttachedAsset }

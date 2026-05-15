@@ -26,6 +26,7 @@ import { generateInstagramCaption } from '../services/captionService';
 import { copyText } from './reelsStudio/clipboard';
 import { invoke } from '@tauri-apps/api/core';
 import { GenerateAvatarsModal } from './reelsStudio/GenerateAvatarsModal';
+import { SilenceWarningModal } from './reelsStudio/SilenceWarningModal';
 import { ClipPreviewLightbox } from './reelsStudio/ClipPreviewLightbox';
 import { useReelsPersistence } from './reelsStudio/useReelsPersistence';
 import { useAgentSnapshotPublisher } from './agent/useAgentSnapshotPublisher';
@@ -42,12 +43,17 @@ import { buildCapcutPackage, downloadPackage, openCapcutDraft, revealCapcutFolde
 import { detectKeepSegments, PRESET_OPTIONS } from './reelsStudio/silenceDetector';
 import { cutAudioByKeepSegments } from './reelsStudio/audioCutter';
 import { applyLipsyncRule, remapBlocks, remapWords } from './reelsStudio/silenceCutMath';
-import { setCutSession, clearCutSession, getCutSession } from './reelsStudio/cutSession';
+import { resplitBlocksByDuration, remapWordsToBlocks } from './reelsStudio/scriptResplit';
+import { splitLongBlocks } from './reelsStudio/scriptSplitter';
+import { getMaxBlockSec } from './agent/agentPrefs';
+import { setCutSession, clearCutSession, getCutSession, syncCutSessionBlocks } from './reelsStudio/cutSession';
 import { SilenceCutControl } from './reelsStudio/SilenceCutControl';
 import { computeLayout, hitTest, projectToSourceTime } from './reelsStudio/timeline';
 import { getLayoutSlots, LAYOUT_OPTIONS, defaultAvatarZoom } from './reelsStudio/layouts';
-import type { SilencePreset, BlockLayout, BlockTransition, LanguageOption, ReelsState } from './reelsStudio/types';
+import type { SilencePreset, BlockLayout, BlockTransition, LanguageOption, ReelsState, HeyGenModelChoice, ToneOption, BlockKind } from './reelsStudio/types';
 import { ensureProfiles, outputLanguageToTts, type OutputLanguage } from './reelsStudio/voiceProfile';
+import { ScriptPreviewPanel, type BusyState } from './reelsStudio/ScriptPreviewPanel';
+import { regenerateBlock, generateNewBlock } from '../services/blockGeneratorService';
 import { sliceAudioByBlocks } from './reelsStudio/audioSlicer';
 import { generateAvatarClips } from './reelsStudio/avatarGenerator';
 import { loadAvatarPhotos } from './reelsStudio/avatarPhotosStore';
@@ -87,6 +93,10 @@ export const ReelsStudio: React.FC = () => {
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
 
   const [scriptOpen, setScriptOpen] = useState(true);
+  /** True when the "Editar tudo" overlay is open — reopens the ScriptPreviewPanel with current blocks. */
+  const [editAllOpen, setEditAllOpen] = useState(false);
+  const [editAllBlocks, setEditAllBlocks] = useState<ScriptBlock[]>([]);
+  const [editAllBusy, setEditAllBusy] = useState<BusyState | undefined>(undefined);
   const [vibeExpanded, setVibeExpanded] = useState(false);
   const [audioSectionExpanded, setAudioSectionExpanded] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
@@ -115,6 +125,27 @@ export const ReelsStudio: React.FC = () => {
   const [motionBusyByBlock, setMotionBusyByBlock] = useState<Record<string, string>>({});
   const [avatarsModalOpen, setAvatarsModalOpen] = useState(false);
   const [generatingClips, setGeneratingClips] = useState(false);
+  // When the user clicks "Gerar clipes" but silence is detected and not
+  // cut yet, we park the request here and show a confirmation modal so
+  // the user can choose: apply-and-go, go-anyway, or cancel. Without
+  // this the HeyGen avatar bakes lipsync around silences that the
+  // export later strips → desync. See Onda 8 in the plan.
+  const [pendingClipGen, setPendingClipGen] = useState<{ photoId: string; model: HeyGenModelChoice } | null>(null);
+  // Re-split preview: when the user clicks "Quebrar blocos longos" we
+  // compute the new block list, show a confirmation modal (especially
+  // important when avatar clips would be discarded), and only then
+  // dispatch. Holds the precomputed payload so the modal can show
+  // counts without re-running the split.
+  const [pendingResplit, setPendingResplit] = useState<null | {
+    newBlocks: import('./reelsStudio/types').ScriptBlock[];
+    newWords: import('./reelsStudio/types').WordTimestamp[];
+    removedIds: string[];
+    oldIdToHeadId: Record<string, string>;
+    clipsAtRisk: number;
+  }>(null);
+  // Per-session "I know the risk" flag — once the user accepts to
+  // generate without cutting, we don't nag again on this audio.
+  const skipSilenceWarningRef = useRef(false);
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
   const [addBrollOpen, setAddBrollOpen] = useState(false);
   const [screenRecOpen, setScreenRecOpen] = useState(false);
@@ -443,65 +474,61 @@ export const ReelsStudio: React.FC = () => {
 
   // ─── Auto-detect silences when audio is ready or preset changes ────
   // Guard against multiple in-flight detections via a ref (state can lag).
-  const detectingLockRef = useRef(false);
+  // Token-based concurrency control. Every detection run gets a fresh
+  // token; only the latest token is allowed to dispatch its result.
+  // Earlier runs that are still mid-async become no-ops when they
+  // notice the token has moved on. No shared mutable `lock` flag, so
+  // there's no cross-run interference.
+  const detectionTokenRef = useRef(0);
 
   useEffect(() => {
-    console.log('[reels/silence] effect run · status=', state.audio.status,
-      '· hasUrl=', !!state.audio.url,
-      '· preset=', state.audio.silencePreset,
-      '· keepCount=', state.audio.keepSegments.length,
-      '· locked=', detectingLockRef.current);
-
     if (state.audio.status !== 'ready' || !state.audio.url) return;
-    if (state.audio.keepSegments.length > 0) return; // already detected for this preset
-    if (detectingLockRef.current) return;
-
-    detectingLockRef.current = true;
-    let cancelled = false;
-    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    if (state.audio.keepSegments.length > 0) return; // already detected
+    const myToken = ++detectionTokenRef.current;
     const preset = state.audio.silencePreset;
+    console.log('[reels/silence] effect run · preset=', preset, '· token=', myToken);
+
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
+    const isCurrent = () => detectionTokenRef.current === myToken;
 
     (async () => {
-      console.log('[reels/silence] STARTING detection · preset=', preset, '· duration=', state.audio.duration);
+      console.log('[reels/silence] STARTING detection · preset=', preset, '· token=', myToken);
       dispatch({ type: 'audio-silence-detect-start' });
       watchdog = setTimeout(() => {
-        if (cancelled) return;
-        console.warn('[reels/silence] timeout 20s — finishing with empty result');
-        detectingLockRef.current = false;
+        if (!isCurrent()) return;
+        console.warn('[reels/silence] timeout 20s — token', myToken);
         dispatch({ type: 'audio-silence-detect-done', keepSegments: [], detectedSilenceSec: 0 });
       }, 20_000);
       try {
-        // Always detect against the PRISTINE blob in IndexedDB. `state.audio.url`
-        // may point at a cut version (when cutsApplied=true), and detecting on
-        // the cut audio would produce nonsensical "no silence" results.
         const { loadAudioBlob } = await import('./reelsStudio/persistence');
         const blob = await loadAudioBlob();
+        if (!isCurrent()) return;
         if (!blob) throw new Error('Blob original não encontrado em IndexedDB');
-        console.log('[reels/silence] using IDB blob for detection...');
-        console.log('[reels/silence] blob size =', (blob.size / 1024).toFixed(1), 'KB · type=', blob.type);
-        if (cancelled) { detectingLockRef.current = false; return; }
+        console.log('[reels/silence] blob size=', (blob.size / 1024).toFixed(1), 'KB · token=', myToken);
         const opts = PRESET_OPTIONS[preset];
-        console.log('[reels/silence] running detector with', opts);
         const result = await detectKeepSegments(blob, opts);
-        if (cancelled) { detectingLockRef.current = false; return; }
-        console.log('[reels/silence] result:', {
-          keepCount: result.keep.length,
-          silentSec: result.totalSilent.toFixed(2),
-          duration: result.duration.toFixed(2),
-        });
+        if (!isCurrent()) {
+          console.log('[reels/silence] stale token, skipping dispatch', myToken);
+          return;
+        }
+        console.log('[reels/silence] result · keep=', result.keep.length, '· silent=', result.totalSilent.toFixed(2), 's');
         if (watchdog) clearTimeout(watchdog);
-        detectingLockRef.current = false;
         dispatch({ type: 'audio-silence-detect-done', keepSegments: result.keep, detectedSilenceSec: result.totalSilent });
       } catch (err) {
         console.error('[reels/silence] FAILED:', err);
         if (watchdog) clearTimeout(watchdog);
-        detectingLockRef.current = false;
-        if (!cancelled) dispatch({ type: 'audio-silence-detect-done', keepSegments: [], detectedSilenceSec: 0 });
+        if (isCurrent()) {
+          dispatch({ type: 'audio-silence-detect-done', keepSegments: [], detectedSilenceSec: 0 });
+        }
       }
     })();
+
     return () => {
-      cancelled = true;
+      // Bumping the token here makes this run "stale" — the async loop
+      // observes that and exits cleanly without dispatching anything,
+      // even when the cleanup races with the in-flight detection.
       if (watchdog) clearTimeout(watchdog);
+      detectionTokenRef.current++;
     };
   }, [state.audio.status, state.audio.url, state.audio.silencePreset, state.audio.keepSegments.length, state.audio.duration]);
 
@@ -876,6 +903,10 @@ export const ReelsStudio: React.FC = () => {
         voiceId: selectedVoiceId,
       });
       setPlayhead(0);
+      // New audio → user hasn't acknowledged any silence-cut tradeoff
+      // yet for this take. Reset the "skip warning" decision so the
+      // confirmation re-asks next time they Gerar clipes.
+      skipSilenceWarningRef.current = false;
     } catch (err) {
       dispatch({ type: 'audio-error', error: err instanceof Error ? err.message : 'Falha ao gerar áudio' });
     }
@@ -1176,26 +1207,26 @@ export const ReelsStudio: React.FC = () => {
     [blocks, motionBusyByBlock, handleAutoMotion, handleRenderMotionMp4],
   );
 
-  const handleGenerateClips = useCallback(async (photoId: string, model: 'avatar3' | 'avatar4') => {
-    if (!audio.url || avatarBlocks.length === 0) return;
+  // Core clip generation. Reads the *current* audio.url (which is the
+  // cut version when cutsApplied is true) and the *current* block ranges.
+  // Callers must dispatch set-photo / set-avatar-model and apply any
+  // silence cut BEFORE calling this — we don't gate here.
+  const runGenerateClips = useCallback(async (photoId: string, model: HeyGenModelChoice) => {
+    const url = audio.url;
+    if (!url) return;
     const photos = loadAvatarPhotos();
     const photo = photos.find(p => p.id === photoId);
     if (!photo) {
       alert('Foto não encontrada. Selecione novamente.');
       return;
     }
-    dispatch({ type: 'set-photo', photoId });
-    dispatch({ type: 'set-avatar-model', model });
-    setAvatarsModalOpen(false);
     setGeneratingClips(true);
-
     try {
       // Re-fetch the audio Blob from its object URL.
-      const audioResp = await fetch(audio.url);
+      const audioResp = await fetch(url);
       const audioBlob = await audioResp.blob();
 
       // For each avatar block, send only the visible portion to HeyGen.
-      // This saves money: a 8s block configured for 3s of avatar visibility renders only 3s.
       const ranges = avatarBlocks.map(b => {
         const blockLen = b.end - b.start;
         const visible = Math.min(b.avatarVisibleSec ?? blockLen, blockLen);
@@ -1203,8 +1234,19 @@ export const ReelsStudio: React.FC = () => {
       });
       const slices = await sliceAudioByBlocks(audioBlob, ranges);
 
+      // Build per-block override map.
+      const photosById = new Map(loadAvatarPhotos().map(p => [p.id, p]));
+      const talkingPhotoIdByBlock: Record<string, string> = {};
+      for (const b of avatarBlocks) {
+        if (b.avatarPhotoId) {
+          const override = photosById.get(b.avatarPhotoId);
+          if (override) talkingPhotoIdByBlock[b.id] = override.talkingPhotoId;
+        }
+      }
+
       await generateAvatarClips(slices, {
         talkingPhotoId: photo.talkingPhotoId,
+        talkingPhotoIdByBlock,
         model,
         aspect: state.aspect,
         onClipUpdate: (blockId, update) => {
@@ -1224,6 +1266,141 @@ export const ReelsStudio: React.FC = () => {
       setGeneratingClips(false);
     }
   }, [audio.url, avatarBlocks, state.aspect]);
+
+  // Entry point from the GenerateAvatarsModal. Decides whether to
+  // surface the anti-dessync warning before kicking off the real
+  // generation. The warning fires when silence is detected on the
+  // audio but the user hasn't cut it yet — generating now bakes the
+  // silences into HeyGen's lipsync, which the export then strips and
+  // the lips drift.
+  const handleGenerateClips = useCallback(async (photoId: string, model: HeyGenModelChoice) => {
+    if (!audio.url || avatarBlocks.length === 0) return;
+
+    dispatch({ type: 'set-photo', photoId });
+    dispatch({ type: 'set-avatar-model', model });
+    setAvatarsModalOpen(false);
+
+    const hasDetectedSilence =
+      audio.keepSegments.length > 0 && audio.detectedSilenceSec >= 0.2;
+    const cutPending = hasDetectedSilence && !audio.silenceCut;
+
+    if (cutPending && !skipSilenceWarningRef.current) {
+      // Park the request; user resolves via SilenceWarningModal buttons.
+      setPendingClipGen({ photoId, model });
+      return;
+    }
+
+    await runGenerateClips(photoId, model);
+  }, [audio.url, audio.keepSegments.length, audio.detectedSilenceSec, audio.silenceCut, avatarBlocks.length, runGenerateClips]);
+
+  // Resolves the SilenceWarningModal: apply the silence cut, wait
+  // for cutsApplied to flip true, then run the clip generation with
+  // the now-cut audio in scope. The applying useEffect elsewhere in
+  // this component handles the actual re-encoding.
+  const onWarningApplyAndGenerate = useCallback(async () => {
+    const req = pendingClipGen;
+    if (!req) return;
+    setPendingClipGen(null);
+    setGeneratingClips(true);
+    try {
+      dispatch({ type: 'audio-silence-toggle', on: true });
+      // Poll for the cut to land. The effect that owns the actual
+      // cut takes ~1-3s end-to-end. We give up after 20s — well above
+      // worst-case so we don't hang if something upstream broke.
+      const start = Date.now();
+      while (Date.now() - start < 20_000) {
+        await new Promise(r => setTimeout(r, 150));
+        // audioRef-style read via stateRef would be cleaner, but we
+        // can re-read state via a deferred path: rerun the effect
+        // pipeline finished when state.audio.cutsApplied flips. We
+        // check the latest snapshot through a function reference.
+        if (audioRefForWait.current?.cutsApplied) break;
+      }
+    } finally {
+      setGeneratingClips(false);
+    }
+    await runGenerateClips(req.photoId, req.model);
+  }, [pendingClipGen, runGenerateClips]);
+
+  const onWarningGenerateAnyway = useCallback(async () => {
+    const req = pendingClipGen;
+    if (!req) return;
+    setPendingClipGen(null);
+    skipSilenceWarningRef.current = true;
+    await runGenerateClips(req.photoId, req.model);
+  }, [pendingClipGen, runGenerateClips]);
+
+  const onWarningCancel = useCallback(() => {
+    setPendingClipGen(null);
+  }, []);
+
+  // Mirror of state.audio used by onWarningApplyAndGenerate's polling
+  // loop — closures captured at callback-creation time would never see
+  // the post-dispatch updates otherwise.
+  const audioRefForWait = useRef(audio);
+  audioRefForWait.current = audio;
+
+  // ─── Re-split current blocks by the user's max duration setting ────
+  // Reads `Settings → Avançado → Duração máxima do bloco`, finds every
+  // block that exceeds it, and splits at natural word boundaries
+  // (preferring sentence terminators, then commas). The audio file
+  // stays untouched — we just rewire block start/end + retag words.
+  const handleResplitBlocks = useCallback(() => {
+    const maxSec = getMaxBlockSec();
+    if (maxSec == null) {
+      alert(
+        'Defina uma duração máxima em Settings → Agents → Avançado → "Duração máxima do bloco" antes de quebrar blocos.',
+      );
+      return;
+    }
+    const result = resplitBlocksByDuration(blocks, audio.words, {
+      maxSec,
+      flipTailToBroll: true,
+    });
+    if (!result.changed) {
+      alert(`Nenhum bloco passa de ${maxSec}s — nada pra quebrar.`);
+      return;
+    }
+    const newWords = remapWordsToBlocks(audio.words, result.blocks);
+    // Count clips that would be DISCARDED — only the ones on split
+    // blocks where the HEAD piece is broll (so the clip can't be
+    // migrated). Clips whose head stays avatar migrate over and are
+    // preserved.
+    const clipsAtRisk = result.removedIds.reduce((n, oldId) => {
+      const wasReady = state.avatarClips[oldId]?.status === 'ready';
+      if (!wasReady) return n;
+      const newHeadId = result.oldIdToHeadId[oldId];
+      const headBlock = result.blocks.find(b => b.id === newHeadId);
+      // Clip can be reused if the head piece is still an avatar block.
+      const willMigrate = headBlock?.kind === 'avatar';
+      return willMigrate ? n : n + 1;
+    }, 0);
+    setPendingResplit({
+      newBlocks: result.blocks,
+      newWords,
+      removedIds: result.removedIds,
+      oldIdToHeadId: result.oldIdToHeadId,
+      clipsAtRisk,
+    });
+  }, [blocks, audio.words, state.avatarClips]);
+
+  const applyPendingResplit = useCallback(() => {
+    const req = pendingResplit;
+    if (!req) return;
+    dispatch({
+      type: 'resplit-blocks',
+      blocks: req.newBlocks,
+      words: req.newWords,
+      removedIds: req.removedIds,
+      oldIdToHeadId: req.oldIdToHeadId,
+    });
+    // Keep the cut session in sync with the post-resplit block list,
+    // otherwise the export path reads the stale (pre-resplit) blocks
+    // from the session and ignores all clips/motions generated after
+    // the split — the export then ends up with no visuals.
+    syncCutSessionBlocks(req.newBlocks);
+    setPendingResplit(null);
+  }, [pendingResplit]);
 
   const handleGenerateMockClips = useCallback(async () => {
     if (avatarBlocks.length === 0) return;
@@ -1247,10 +1424,75 @@ export const ReelsStudio: React.FC = () => {
   // Bridge MCP tool calls from the Rust side into reducer dispatches +
   // service calls. Mounted once after all handlers are declared so the
   // bridge can wire each agent capability to its underlying handler.
+  // Same logic as handleResplitBlocks, but returns a structured result for
+  // the Agent instead of alerting the user. Has two paths:
+  //   1. Audio ready → uses word timestamps for exact splits (high precision)
+  //   2. No audio yet → uses words-per-second heuristic (same as imports)
+  const splitLongBlocksForAgent = useCallback((): {
+    error?: string;
+    splitsApplied?: number;
+    newBlockCount?: number;
+  } => {
+    const maxSec = getMaxBlockSec();
+    if (maxSec == null) {
+      return {
+        error: 'Configure a "Duração máxima do bloco" em Settings → Agents → Avançado antes.',
+      };
+    }
+
+    // Path 1: audio ready — use word timestamps for accurate splits.
+    if (state.audio.status === 'ready') {
+      const result = resplitBlocksByDuration(blocks, audio.words, {
+        maxSec,
+        flipTailToBroll: true,
+      });
+      if (!result.changed) {
+        return { error: `Nenhum bloco passa de ${maxSec}s — nada pra quebrar.` };
+      }
+      const newWords = remapWordsToBlocks(audio.words, result.blocks);
+      dispatch({
+        type: 'resplit-blocks',
+        blocks: result.blocks,
+        words: newWords,
+        removedIds: result.removedIds,
+        oldIdToHeadId: result.oldIdToHeadId,
+      });
+      syncCutSessionBlocks(result.blocks);
+      return {
+        splitsApplied: result.removedIds.length,
+        newBlockCount: result.blocks.length,
+      };
+    }
+
+    // Path 2: no audio — heuristic split using estimated words/second.
+    // Same approach used when importing scripts.
+    const splits = splitLongBlocks(
+      blocks.map(b => ({ kind: b.kind, text: b.text })),
+      { maxSec },
+    );
+    if (splits.length === blocks.length) {
+      return { error: `Nenhum bloco passa de ~${maxSec}s — nada pra quebrar.` };
+    }
+    const newBlocks: ScriptBlock[] = splits.map(s => ({
+      id: `b_${Math.random().toString(36).slice(2, 10)}_${Date.now()}`,
+      kind: s.kind,
+      text: s.text,
+      start: 0,
+      end: 0,
+      layout: s.kind === 'avatar' ? ('avatar-top' as const) : undefined,
+    }));
+    dispatch({ type: 'replace-blocks', blocks: newBlocks });
+    return {
+      splitsApplied: splits.length - blocks.length,
+      newBlockCount: newBlocks.length,
+    };
+  }, [state.audio.status, blocks, audio.words, dispatch]);
+
   useAgentToolBridge({
     state,
     dispatch,
     onGenerateAudio: handleGenerate,
+    onSplitLongBlocks: splitLongBlocksForAgent,
     onGenerateMotionForBlock: handleAutoMotion,
     onGenerateMotionForBlocks: handleAutoMotionMany,
     onRenderAllMotions: handleRenderAllMotions,
@@ -2361,12 +2603,21 @@ export const ReelsStudio: React.FC = () => {
                 }
               })();
               if (displayLayer === 'overlay') return null;
+              // Map the project playhead into "seconds since this block
+              // started", so MotionLayerOverlay can keep its <video>
+              // element seeked to the right frame even when the
+              // user-perceived block is the last in the reel. Without
+              // this the overlay element gets reused across block
+              // switches and drifts out of sync with the audio.
+              const slot = slotById.get(currentBlock.id);
+              const localTime = slot ? Math.max(0, playhead - slot.projectStart) : undefined;
               return (
                 <MotionLayerOverlay
                   key={`motion-${motion.id}-${motion.renderedAt ?? 0}`}
                   motion={motion}
                   playing={playing}
                   layer={displayLayer}
+                  localTime={localTime}
                 />
               );
             })()}
@@ -2466,16 +2717,35 @@ export const ReelsStudio: React.FC = () => {
                 </div>
               </div>
               <div className="flex items-center gap-1.5">
+                {aspect !== 'carousel' && blocks.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setEditAllBlocks(blocks);
+                      setEditAllOpen(true);
+                    }}
+                    className="px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 text-[11px] font-medium text-zinc-300 transition-colors"
+                    title="Reabre o painel de revisão com os blocos atuais"
+                  >
+                    ✏ Editar tudo
+                  </button>
+                )}
                 {aspect === 'carousel' && blocks.length > 0 && (
                   <button
                     onClick={() => {
-                      for (const b of blocks) {
-                        const m = b.motion;
-                        const isStale = isMotionAssetsStale(m, b.attachedAssets);
-                        if (!motionBusyByBlock[b.id] && (!m?.html || isStale)) {
-                          void handleAutoMotion(b.id);
-                        }
-                      }
+                      // Build the list of pending block ids upfront, then
+                      // hand it to the shared serialized batcher. Without
+                      // this, the fire-and-forget loop would launch every
+                      // block in parallel — 8 blocks = 8 Chromium renders
+                      // fighting for the same GPU and most timing out.
+                      const pendingIds = blocks
+                        .filter(b => {
+                          const m = b.motion;
+                          const isStale = isMotionAssetsStale(m, b.attachedAssets);
+                          return !motionBusyByBlock[b.id] && (!m?.html || isStale);
+                        })
+                        .map(b => b.id);
+                      if (pendingIds.length === 0) return;
+                      void handleAutoMotionMany(pendingIds);
                     }}
                     className="text-[11px] px-2 py-1 rounded-md bg-fuchsia-500/15 hover:bg-fuchsia-500/25 text-fuchsia-300 border border-fuchsia-500/30 transition-colors flex items-center gap-1"
                     title="Gerar motion para todos os slides que ainda não têm"
@@ -2782,6 +3052,7 @@ export const ReelsStudio: React.FC = () => {
                     onSetLayout: (layout: BlockLayout) => dispatch({ type: 'set-block-layout', id: b.id, layout }),
                     onSetAvatarZoom: (zoom: number) => dispatch({ type: 'set-avatar-zoom', id: b.id, zoom }),
                     onSetAvatarOffsetY: (offsetY: number) => dispatch({ type: 'set-avatar-offset-y', id: b.id, offsetY }),
+                    onSetAvatarPhoto: (photoId: string | undefined) => dispatch({ type: 'set-block-avatar-photo', id: b.id, photoId }),
                     defaultZoom: defaultAvatarZoom(state.aspect, b.layout),
                     isCurrent: currentBlock?.id === b.id,
                     isSelected: selectedBlockId === b.id,
@@ -3034,6 +3305,20 @@ export const ReelsStudio: React.FC = () => {
                   hint: 'Coloque imagens e clipes pra usar no projeto',
                   onClick: () => invoke('reveal_assets_dir', { projectName: state.projectName }),
                 },
+                {
+                  key: 'resplit',
+                  icon: '🪓',
+                  label: 'Quebrar blocos longos',
+                  hint: 'Aplica o limite configurado em Settings nos blocos atuais',
+                  onClick: handleResplitBlocks,
+                  disabled: audio.status !== 'ready' || audio.words.length === 0 || blocks.length === 0,
+                  disabledHint:
+                    audio.status !== 'ready'
+                      ? 'Gere o áudio primeiro'
+                      : audio.words.length === 0
+                        ? 'Sem timestamps de palavras pra usar como corte'
+                        : undefined,
+                },
               ];
 
               return (
@@ -3259,8 +3544,12 @@ export const ReelsStudio: React.FC = () => {
             )}
             {/* Silence cut indicators.
                 - Cut OFF: vermelho hash sobre as regiões silenciosas (preview do que seria cortado)
-                - Cut ON: linha vertical fina onde os silêncios foram colados (junções) */}
-            {state.audio.keepSegments.length > 0 && state.audio.duration > 0 && (() => {
+                - Cut ON (preview mode, not yet applied): linha vertical fina nas junções
+                - cutsApplied=true: nothing — keepSegments live on the
+                  pristine coord space, but the waveform now shows the
+                  COMPRESSED audio; drawing the markers here would put
+                  them on the wrong time axis. */}
+            {!state.audio.cutsApplied && state.audio.keepSegments.length > 0 && state.audio.duration > 0 && (() => {
               const segs = state.audio.keepSegments;
               if (cutOn) {
                 // Junctions: between consecutive keep segments — at the END of each keep segment except the last.
@@ -3885,6 +4174,67 @@ export const ReelsStudio: React.FC = () => {
         />
       )}
 
+      {pendingClipGen && (
+        <SilenceWarningModal
+          silenceSeconds={audio.detectedSilenceSec}
+          durationSeconds={audio.duration}
+          onApplyAndGenerate={onWarningApplyAndGenerate}
+          onGenerateAnyway={onWarningGenerateAnyway}
+          onCancel={onWarningCancel}
+        />
+      )}
+
+      {pendingResplit && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[80] p-6">
+          <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-md w-full overflow-hidden">
+            <div className="px-6 pt-6 pb-2">
+              <div className="text-[11px] uppercase tracking-widest text-violet-300/80 font-semibold mb-2">
+                Resplit · preview
+              </div>
+              <div className="text-base font-semibold text-zinc-100 mb-2">
+                Quebrar {blocks.length} blocos em {pendingResplit.newBlocks.length}?
+              </div>
+              <div className="text-[12px] text-zinc-400 leading-relaxed">
+                {pendingResplit.removedIds.length} bloco
+                {pendingResplit.removedIds.length === 1 ? '' : 's'} acima do limite
+                {' '}vai ser divido em pedaços menores nas pausas naturais do áudio.
+                {' '}A primeira parte mantém o tipo original; o resto vira B-roll.
+                {' '}O áudio fica intacto.
+              </div>
+            </div>
+
+            {pendingResplit.clipsAtRisk > 0 && (
+              <div className="px-6 py-3 bg-amber-500/[0.08] border-y border-amber-500/20 mt-3">
+                <div className="text-[11px] font-semibold text-amber-300 mb-1">
+                  ⚠️ {pendingResplit.clipsAtRisk} clipe
+                  {pendingResplit.clipsAtRisk === 1 ? '' : 's'} de avatar
+                  {pendingResplit.clipsAtRisk === 1 ? ' será descartado' : ' serão descartados'}
+                </div>
+                <div className="text-[10.5px] text-amber-200/70 leading-snug">
+                  Os clipes dos blocos divididos perdem o vínculo. Regenere depois pra
+                  cobrir os pedaços novos.
+                </div>
+              </div>
+            )}
+
+            <div className="px-6 py-4 flex flex-col gap-2">
+              <button
+                onClick={applyPendingResplit}
+                className="w-full py-2.5 rounded-lg bg-violet-500 hover:bg-violet-400 text-white text-[12.5px] font-semibold transition-colors"
+              >
+                Quebrar agora
+              </button>
+              <button
+                onClick={() => setPendingResplit(null)}
+                className="w-full py-1.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <AddBrollModal
         open={addBrollOpen}
         onClose={() => setAddBrollOpen(false)}
@@ -3913,6 +4263,85 @@ export const ReelsStudio: React.FC = () => {
         initialTab={settingsTab}
         onClonedVoicesChange={refreshClonedVoices}
       />
+
+      {/* Editar tudo — reabre o painel de revisão com os blocos atuais. */}
+      {editAllOpen && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6">
+          <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-3xl w-full overflow-hidden flex flex-col max-h-[92vh]">
+            <ScriptPreviewPanel
+              mode="script"
+              blocks={editAllBlocks}
+              detectedHeader={{
+                format: `${editAllBlocks.length} blocos · ${editAllBlocks.filter(b => b.kind === 'avatar').length} avatar / ${editAllBlocks.filter(b => b.kind === 'broll').length} B-roll`,
+              }}
+              onBlocksChange={setEditAllBlocks}
+              onRegenerateAll={async (extra, _tone, _lang) => {
+                // No upstream source available here, so we regenerate each block in parallel.
+                setEditAllBusy({ kind: 'all' });
+                try {
+                  const { profiles, activeId } = ensureProfiles();
+                  const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+                  const next = await Promise.all(editAllBlocks.map((b, i) => regenerateBlock(
+                    b,
+                    { prev: editAllBlocks[i - 1], next: editAllBlocks[i + 1] },
+                    profile,
+                    extra || 'reescreve mantendo a intenção do bloco',
+                  )));
+                  setEditAllBlocks(next);
+                } catch (err) {
+                  console.error('[editAll] regenerateAll failed:', err);
+                } finally {
+                  setEditAllBusy(undefined);
+                }
+              }}
+              onRegenerateBlock={async (blockId, extra) => {
+                const idx = editAllBlocks.findIndex(b => b.id === blockId);
+                if (idx === -1) return;
+                setEditAllBusy({ kind: 'block', blockId });
+                try {
+                  const { profiles, activeId } = ensureProfiles();
+                  const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+                  const updated = await regenerateBlock(
+                    editAllBlocks[idx],
+                    { prev: editAllBlocks[idx - 1], next: editAllBlocks[idx + 1] },
+                    profile,
+                    extra,
+                  );
+                  setEditAllBlocks(prev => prev.map(b => b.id === blockId ? updated : b));
+                } catch (err) {
+                  console.error('[editAll] regenerateBlock failed:', err);
+                } finally {
+                  setEditAllBusy(undefined);
+                }
+              }}
+              onAddBlock={async (kind: BlockKind, prompt) => {
+                setEditAllBusy({ kind: 'add' });
+                try {
+                  const { profiles, activeId } = ensureProfiles();
+                  const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+                  const fresh = await generateNewBlock(
+                    kind,
+                    prompt,
+                    { prev: editAllBlocks[editAllBlocks.length - 1] },
+                    profile,
+                  );
+                  setEditAllBlocks(prev => [...prev, fresh]);
+                } catch (err) {
+                  console.error('[editAll] addBlock failed:', err);
+                } finally {
+                  setEditAllBusy(undefined);
+                }
+              }}
+              onApprove={(_lang) => {
+                dispatch({ type: 'replace-blocks', blocks: editAllBlocks });
+                setEditAllOpen(false);
+              }}
+              onCancel={() => setEditAllOpen(false)}
+              busy={editAllBusy}
+            />
+          </div>
+        </div>
+      )}
 
       {/* Projects modal */}
       {projectsOpen && (
@@ -4047,6 +4476,22 @@ export const ReelsStudio: React.FC = () => {
                   setClearing(true);
                   try {
                     await clearProject();
+                    // For "new project", stamp a unique name so the new
+                    // project gets its OWN assets dir
+                    // (`~/Reels Studio/Projects/<unique>/Assets/`).
+                    // Without this, every fresh project would share
+                    // "Reel sem título" → assets from prior runs leak.
+                    // The hydrator reads + clears this key on next boot.
+                    if (confirmClearMode === 'new') {
+                      const now = new Date();
+                      const pad = (n: number) => String(n).padStart(2, '0');
+                      const stamp =
+                        `${pad(now.getDate())}/${pad(now.getMonth() + 1)} ${pad(now.getHours())}h${pad(now.getMinutes())}`;
+                      localStorage.setItem(
+                        'reels.pendingProjectName',
+                        `Reel · ${stamp}`,
+                      );
+                    }
                     window.location.reload();
                   } catch (err) {
                     console.error('[reels] clearProject failed:', err);
@@ -4135,9 +4580,22 @@ const ActionsMenu: React.FC<{
 }> = ({ items, tokens }) => {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
+  // "down" by default; flips to "up" when the menu would overflow the
+  // viewport bottom. Re-evaluated each open so it adapts to scroll.
+  const [direction, setDirection] = useState<'down' | 'up'>('down');
 
   useEffect(() => {
     if (!open) return;
+    // Pick a direction based on how much room is below the trigger.
+    // Reasonable estimate: each item is ~52px (icon + label + hint),
+    // plus 12px of vertical padding on the menu.
+    const trigger = ref.current?.querySelector('button');
+    if (trigger) {
+      const rect = trigger.getBoundingClientRect();
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const estimatedHeight = items.length * 52 + 12;
+      setDirection(spaceBelow < estimatedHeight + 24 && rect.top > spaceBelow ? 'up' : 'down');
+    }
     function onClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
@@ -4152,7 +4610,7 @@ const ActionsMenu: React.FC<{
       window.removeEventListener('mousedown', onClick);
       window.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, items.length]);
 
   return (
     <div ref={ref} className="relative">
@@ -4181,7 +4639,9 @@ const ActionsMenu: React.FC<{
 
       {open && (
         <div
-          className="absolute left-0 top-full mt-1.5 rounded-xl py-1.5 z-50 min-w-[260px]"
+          className={`absolute left-0 rounded-xl py-1.5 z-50 min-w-[260px] max-h-[80vh] overflow-y-auto ${
+            direction === 'up' ? 'bottom-full mb-1.5' : 'top-full mt-1.5'
+          }`}
           style={{
             backgroundColor: tokens.bg.elevated,
             border: `1px solid ${tokens.border.default}`,
@@ -4237,6 +4697,10 @@ interface BlockCardProps {
   onSetLayout: (layout: BlockLayout) => void;
   onSetAvatarZoom: (zoom: number) => void;
   onSetAvatarOffsetY: (offsetY: number) => void;
+  /** Pick a per-block avatar photo. `undefined` clears the override and
+   *  the block falls back to the project's default photo. The list of
+   *  photos is loaded lazily inside the card. */
+  onSetAvatarPhoto: (photoId: string | undefined) => void;
   defaultZoom: number;
   isCurrent: boolean;
   isSelected: boolean;
@@ -4597,7 +5061,68 @@ const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({
   );
 };
 
-const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, carouselRole }) => {
+// Inline thumbnail picker for the per-block avatar photo. Loads
+// AvatarPhoto[] from localStorage (cheap), renders a horizontal strip of
+// thumbs. The first chip is "Padrão" (clears the override and falls back
+// to the project-level photo). Selection state is purely driven by the
+// block's `avatarPhotoId` — we don't keep local state here.
+const BlockAvatarPhotoPicker: React.FC<{
+  currentPhotoId: string | undefined;
+  onPick: (photoId: string | undefined) => void;
+}> = ({ currentPhotoId, onPick }) => {
+  const photos = loadAvatarPhotos();
+  if (photos.length === 0) {
+    return (
+      <div className="px-3 py-2 border-t border-white/5">
+        <div className="text-[10px] text-zinc-400 mb-1.5">👤 Foto do avatar</div>
+        <div className="text-[10px] text-zinc-500">
+          Nenhuma foto cadastrada — adicione em &quot;Gerar clipes de avatar&quot;.
+        </div>
+      </div>
+    );
+  }
+  const usingDefault = !currentPhotoId;
+  return (
+    <div className="px-3 py-2 border-t border-white/5">
+      <div className="text-[10px] text-zinc-400 mb-1.5">👤 Foto do avatar</div>
+      <div className="flex gap-1.5 overflow-x-auto pb-1">
+        {/* Default chip — clears the per-block override. */}
+        <button
+          onClick={() => onPick(undefined)}
+          className={`shrink-0 w-12 h-12 rounded-md border flex items-center justify-center text-[9px] font-medium transition-colors ${
+            usingDefault
+              ? 'border-violet-400 bg-violet-500/15 text-violet-200'
+              : 'border-white/10 bg-black/30 text-zinc-400 hover:bg-white/5'
+          }`}
+          title="Usar a foto padrão do projeto"
+        >
+          Padrão
+        </button>
+        {photos.map(p => {
+          const selected = currentPhotoId === p.id;
+          return (
+            <button
+              key={p.id}
+              onClick={() => onPick(p.id)}
+              className={`shrink-0 w-12 h-12 rounded-md overflow-hidden border transition-colors ${
+                selected ? 'border-violet-400' : 'border-white/10 hover:border-white/30'
+              }`}
+              title={p.name}
+            >
+              <img
+                src={p.thumbnailBase64 || p.previewUrl || ''}
+                alt={p.name}
+                className="w-full h-full object-cover"
+              />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, onSetAvatarPhoto, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, carouselRole }) => {
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // Block "advanced" controls (asset, style picker, layout, sliders) live behind a
@@ -4982,6 +5507,13 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
             })}
           </div>
         </div>
+      )}
+
+      {expanded && isAvatar && (
+        <BlockAvatarPhotoPicker
+          currentPhotoId={b.avatarPhotoId}
+          onPick={onSetAvatarPhoto}
+        />
       )}
 
       {expanded && isAvatar && audioReady && duration > 0.5 && (

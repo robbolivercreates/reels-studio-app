@@ -8,6 +8,23 @@ const TONE_OPTIONS: { value: ToneOption; label: string }[] = [
   { value: 'more-didactic', label: 'Mais didático' },
 ];
 
+/** Quick presets the user can click to append common regen instructions. */
+const REGEN_PRESETS: { label: string; phrase: string }[] = [
+  { label: 'mais persuasivo', phrase: 'mais persuasivo' },
+  { label: 'mais direto', phrase: 'mais direto, sem rodeios' },
+  { label: 'mais curto', phrase: 'mais curto' },
+  { label: 'menos formal', phrase: 'menos formal, conversa de bar' },
+  { label: 'tom de história', phrase: 'tom de história pessoal' },
+  { label: 'provocativo', phrase: 'mais provocativo, contraintuitivo' },
+];
+
+const appendPreset = (current: string, phrase: string): string => {
+  const trimmed = current.trim();
+  if (!trimmed) return phrase;
+  if (trimmed.toLowerCase().includes(phrase.toLowerCase())) return trimmed;
+  return `${trimmed}, ${phrase}`;
+};
+
 const LANGUAGE_OPTIONS: { value: LanguageOption; label: string }[] = [
   { value: 'auto', label: 'Auto (perfil)' },
   { value: 'pt-BR', label: 'PT-BR' },
@@ -401,6 +418,17 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
                     placeholder="ex: mais provocativo, sem rodeios"
                     className="w-full text-[11px] bg-black/40 border border-white/10 rounded-md px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-violet-400/50"
                   />
+                  <div className="flex items-center gap-1 flex-wrap">
+                    {REGEN_PRESETS.map(p => (
+                      <button
+                        key={p.label}
+                        onClick={() => setBlockInstructions(prev => appendPreset(prev, p.phrase))}
+                        className="px-2 py-0.5 rounded-full bg-white/5 hover:bg-violet-500/15 border border-white/10 hover:border-violet-400/30 text-[10px] text-zinc-300 hover:text-violet-100"
+                      >
+                        + {p.label}
+                      </button>
+                    ))}
+                  </div>
                   <div className="flex items-center gap-1.5 justify-end">
                     <button
                       onClick={() => {
@@ -504,6 +532,17 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
               placeholder="ex: mais direto, corta o final, foca só no problema"
               className="w-full text-[11px] bg-black/30 border border-white/10 rounded-md px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-violet-400/50"
             />
+            <div className="flex items-center gap-1 flex-wrap">
+              {REGEN_PRESETS.map(p => (
+                <button
+                  key={p.label}
+                  onClick={() => setGlobalInstructions(prev => appendPreset(prev, p.phrase))}
+                  className="px-2 py-0.5 rounded-full bg-white/5 hover:bg-violet-500/15 border border-white/10 hover:border-violet-400/30 text-[10px] text-zinc-300 hover:text-violet-100"
+                >
+                  + {p.label}
+                </button>
+              ))}
+            </div>
             <div className="flex items-center gap-1.5 justify-end">
               <button
                 onClick={() => {
@@ -525,6 +564,13 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
         )}
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={tryCancel}
+            disabled={anyBusy}
+            className="px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-medium text-zinc-300 transition-colors disabled:opacity-40"
+          >
+            ← Voltar
+          </button>
           <button
             onClick={() => setShowRegenerateAllForm(s => !s)}
             disabled={anyBusy}

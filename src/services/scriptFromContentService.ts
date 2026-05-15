@@ -2,6 +2,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import type { ScriptBlock, BlockKind, RegenerateContext } from '../components/reelsStudio/types';
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
 import { buildRegenPromptSection } from './regenPrompt';
+import { buildContentModeSection } from './contentMode';
 
 // ─── STYLES ─────────────────────────────────────────────────────────────
 
@@ -89,6 +90,8 @@ export interface GeneratedReel {
   rationale: string;
   /** Estimated total spoken duration (seconds, ballpark). */
   estimatedDurationSec: number;
+  /** Trailer mode only: the single uppercase word for the comment-to-DM CTA. */
+  commentKeyword?: string;
 }
 
 // ─── PROMPT ─────────────────────────────────────────────────────────────
@@ -151,6 +154,7 @@ const RESPONSE_SCHEMA = {
     frameworkUsed: { type: Type.STRING },
     rationale: { type: Type.STRING },
     estimatedDurationSec: { type: Type.NUMBER },
+    commentKeyword: { type: Type.STRING },
   },
   required: ['blocks', 'caption', 'hashtags', 'frameworkUsed', 'rationale', 'estimatedDurationSec'],
 } as const;
@@ -212,6 +216,10 @@ export const generateReelFromContent = async (
   if (regenSection) {
     promptLines.push(regenSection);
   }
+  const modeSection = buildContentModeSection(regen?.contentMode);
+  if (modeSection) {
+    promptLines.push(modeSection);
+  }
   promptLines.push('');
   promptLines.push('--- SOURCE CONTENT ---');
   if (source.title) promptLines.push(`Title: ${source.title}`);
@@ -256,6 +264,7 @@ export const generateReelFromContent = async (
     frameworkUsed: string;
     rationale: string;
     estimatedDurationSec: number;
+    commentKeyword?: string;
   };
   try {
     parsed = JSON.parse(raw);
@@ -282,6 +291,7 @@ export const generateReelFromContent = async (
     frameworkUsed: parsed.frameworkUsed ?? options.framework,
     rationale: parsed.rationale?.trim() ?? '',
     estimatedDurationSec: parsed.estimatedDurationSec ?? options.durationSec,
+    commentKeyword: parsed.commentKeyword?.trim().toUpperCase() || undefined,
   };
 };
 

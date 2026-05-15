@@ -10,8 +10,10 @@ import {
   ACTIVE_PROVIDERS,
   useTextProvider,
   useMotionProvider,
+  useMaxBlockSec,
   type TextProvider,
   type MotionProvider,
+  type MaxBlockSec,
 } from './agentPrefs';
 
 export const AgentSettingsTab: React.FC = () => {
@@ -23,6 +25,10 @@ export const AgentSettingsTab: React.FC = () => {
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const { value: textProvider, resolved: resolvedTextProvider, setValue: setTextProvider } = useTextProvider();
   const { value: motionProvider, resolved: resolvedMotionProvider, setValue: setMotionProvider } = useMotionProvider();
+  const { value: maxBlockSec, setValue: setMaxBlockSec } = useMaxBlockSec();
+  const [skipSetup, setSkipSetup] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.localStorage?.getItem('reels.agent.skipReelSetup') === 'true',
+  );
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -359,6 +365,81 @@ export const AgentSettingsTab: React.FC = () => {
                   <span className="text-zinc-600"> · resolvido pela chave configurada</span>
                 )}
               </div>
+            </div>
+
+            {/* ─── MAX BLOCK SECONDS ─── */}
+            <div className="space-y-2.5">
+              <div>
+                <div className="text-[11.5px] font-medium text-zinc-200 mb-0.5">
+                  Duração máxima do bloco
+                </div>
+                <div className="text-[10px] text-zinc-500 leading-snug">
+                  Blocos longos viram cansativos no avatar e estáticos no B-roll.
+                  Quando o import detectar um bloco mais longo que o limite, ele
+                  é quebrado na pausa natural mais próxima — a primeira parte
+                  fica avatar, o resto vira B-roll.
+                </div>
+              </div>
+              <div className="grid grid-cols-4 gap-1.5">
+                {([
+                  { id: 3 as MaxBlockSec, label: '3s' },
+                  { id: 5 as MaxBlockSec, label: '5s' },
+                  { id: 8 as MaxBlockSec, label: '8s' },
+                  { id: 'auto' as MaxBlockSec, label: 'Auto' },
+                ]).map(opt => {
+                  const active = maxBlockSec === opt.id;
+                  return (
+                    <button
+                      key={String(opt.id)}
+                      onClick={() => setMaxBlockSec(opt.id)}
+                      className={`text-[11.5px] font-medium py-1.5 rounded-lg transition-colors ${
+                        active
+                          ? 'bg-violet-500/15 border border-violet-500/40 text-violet-100'
+                          : 'bg-black/20 border border-white/5 text-zinc-400 hover:bg-white/[0.04]'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-[10px] text-zinc-500">
+                {maxBlockSec === 'auto'
+                  ? 'Sem limite — a IA decide o tamanho dos blocos.'
+                  : `Blocos acima de ${maxBlockSec}s são divididos automaticamente.`}
+              </div>
+            </div>
+
+            {/* ─── IMPORT SETUP CARD ─── */}
+            <div className="space-y-2">
+              <div>
+                <div className="text-[11.5px] font-medium text-zinc-200 mb-0.5">
+                  Pré-perguntas em imports de vídeo
+                </div>
+                <div className="text-[10px] text-zinc-500 leading-snug">
+                  Quando você cola um link de reel/TikTok sem dizer duração, tom ou foco, o chat
+                  pergunta antes de gerar. Desligue se prefere ir direto com os padrões.
+                </div>
+              </div>
+              <label className="flex items-center gap-2.5 cursor-pointer px-3 py-2 rounded-lg bg-black/20 border border-white/5 hover:bg-white/[0.04]">
+                <input
+                  type="checkbox"
+                  checked={skipSetup}
+                  onChange={e => {
+                    const next = e.target.checked;
+                    setSkipSetup(next);
+                    if (next) {
+                      window.localStorage.setItem('reels.agent.skipReelSetup', 'true');
+                    } else {
+                      window.localStorage.removeItem('reels.agent.skipReelSetup');
+                    }
+                  }}
+                  className="w-3.5 h-3.5 accent-violet-500"
+                />
+                <div className="text-[11.5px] text-zinc-100">
+                  Sempre pular o card de setup
+                </div>
+              </label>
             </div>
           </div>
         )}

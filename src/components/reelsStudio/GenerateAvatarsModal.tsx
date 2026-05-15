@@ -21,6 +21,10 @@ interface Props {
 const PRICE_PER_SECOND: Record<HeyGenModelChoice, number> = {
   avatar3: 0.030, // estimated
   avatar4: 0.058,
+  // HeyGen reports Avatar V uses the same credit pool as IV (no
+  // explicit upcharge for the engine itself). Treat as IV for the
+  // cost estimate; if pricing diverges in the future we can split it.
+  avatar5: 0.058,
 };
 
 export const GenerateAvatarsModal: React.FC<Props> = ({
@@ -245,6 +249,22 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
           <div>
             <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">Modelo</div>
             <div className="space-y-1.5">
+              <button
+                onClick={() => setModel('avatar5')}
+                className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all ${
+                  model === 'avatar5' ? 'bg-violet-500/15 border-violet-400/50' : 'bg-black/20 border-white/10 hover:border-white/20'
+                }`}
+              >
+                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${model === 'avatar5' ? 'border-violet-400 bg-violet-400' : 'border-zinc-500'}`}>
+                  {model === 'avatar5' && <div className="w-1.5 h-1.5 bg-white rounded-full m-auto mt-[3px]"></div>}
+                </div>
+                <div className="text-left flex-1">
+                  <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
+                    Avatar V <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 uppercase tracking-wider">Novo</span>
+                  </div>
+                  <div className="text-[10px] text-zinc-500 mt-0.5">Mais realista · sem drift em vídeos longos · 1080p · ${PRICE_PER_SECOND.avatar5.toFixed(3)}/s · requer foto compatível</div>
+                </div>
+              </button>
               <button
                 onClick={() => setModel('avatar4')}
                 className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all ${
