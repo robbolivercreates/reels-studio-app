@@ -352,32 +352,69 @@ NEVER:
       vignetteIntensity: 0.5,
     },
     geminiBrief: `
-PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
-  bg: brandBackgroundColor (or pure #000 if bg is dark)
-  text: brandTextColor
-  highlight-bg: brandPrimaryColor (block behind keyword)
-  alt-color: brandAccentColor
+PALETTE: Typography IS the design. Minimal color, maximum impact.
+  bg: brandBackgroundColor if it is dark (luminance < 25%).
+      Fallback if unset OR light: force '#0a0a0a' (deep charcoal — never pure #000,
+      pure black eats the vignette and feels flat).
+  text: brandTextColor.
+      Fallback: '#ffffff' is acceptable here (kinetic-bold is digital-loud by design).
+  highlight-bg: brandPrimaryColor — block fill behind the hero word.
+      Padding inside the block: 8px horizontal, 4px vertical.
+      Alpha: 1.0 for current word, 0.85 for previous word (decay over 0.4s).
+  alt-color: brandAccentColor — used on 1-2 secondary words per beat
+  NO gradients, NO glows, NO multi-color text — kinetic is monochromatic
+  with single-color highlight blocks.
 
 TYPOGRAPHY:
-  primary: "Inter", system-ui, sans-serif
-  weights: 800, 900
-  display sizes: 140-280px (HUGE)
-  letter-spacing: -4 to -8
-  line-height: 0.9 (tight)
+  primary: "Inter", "Helvetica Neue", system-ui, sans-serif (class="font-brand")
+  weights: 800, 900 (NEVER below 800 in display — kinetic IS the heaviness)
+  display sizes: 140-260px (HUGE — single word fills 80%+ of canvas width)
+  letter-spacing: -0.05em to -0.08em on display
+  line-height: 0.88-0.95 (tight, packed)
+  text-transform: UPPERCASE the hero word; mixed-case OK on connector words
 
 LAYOUT:
-  text fills the canvas
-  one or two words on screen at a time
-  important word gets brandPrimaryColor block background
-  mask-style reveals (clip-path)
+  text fills the canvas — 80%+ width on hero words, ≥ 50% on connectors
+  one or two words on screen at a time, MAX three
+  hero word centered, anchored at vertical center or slightly above
+  hero word gets highlight-bg block: padding 8px h / 4px v, NOT rounded
+      (kinetic is geometric, not pill-shaped — rounded ≤ 4px MAX)
+  connector words (de, a, é, com) smaller and at 60% alpha — visual hierarchy
+  NO decorative shapes, NO icons, NO backgrounds beyond the bg color
+      and optional 1-2 thin lines (1-2px) as compositional anchors
 
 MOTION:
-  ease: power4.out, expo.out
-  durations: 0.25-0.5s (snappy)
-  word-by-word reveals with stagger (0.06-0.1s)
-  use clip-path: inset(0 100% 0 0) → inset(0 0 0 0) for wipe-in
-  highlighted words get a quick scale punch (1 → 1.08 → 1)
-  no fade — only motion + clip-path`.trim(),
+  ease: power4.out, expo.out, power3.out (entries)
+  ease for exits: power3.in, expo.in
+  durations: 0.20-0.45s (snappy — kinetic is fast)
+  word-by-word reveals with clip-path: inset(0 100% 0 0) → inset(0 0 0 0)
+      ease power4.out, duration 0.28-0.35s, stagger 0.06-0.10s
+  highlighted words: clip-path reveal + immediate scale punch 1 → 1.08 → 1
+      over 0.18s ease back.out(2)
+  exits: clip-path inset(0 0 0 0) → inset(0 100% 0 0) ease expo.in 0.20s
+      OR scale 1 → 0.85 + opacity 1 → 0 over 0.18s
+  NO fade-only entries — kinetic uses clip-path + scale, never plain opacity
+  staggers: 0.06-0.10s between words
+
+VOICE:
+  Manchete em movimento. Cada palavra é um soco. Esse preset é o oposto de
+  cinematic-dark — ele EXIGE atenção, não convida. Pensa em outdoor de
+  campanha política, capa de revista provocativa, manifesto. Single-thought
+  per beat. A palavra é a estrela, tudo o mais é palco.
+
+NEVER:
+  • easing suaves (sine.*, power1.*, power2.inOut) — kinetic é instantâneo
+  • durations > 0.6s em qualquer animação
+  • texto pequeno (< 120px display) — kinetic = grande por definição
+  • plain fade-in (opacity-only) — entrada precisa de clip-path OU scale punch
+  • fonts < 800 weight em display
+  • cards rounded > 4px — kinetic é geométrico, não pill-shaped
+  • mais de 3 palavras simultâneas no canvas
+  • highlight-bg sem padding interno (8h × 4v) — fica colado, mata legibilidade
+  • multi-color text (text com mais de 1 cor por palavra)
+  • decorative shapes, icons, blobs — austeridade tipográfica
+  • text-shadow ou glow — kinetic é tipografia limpa, não brilhante
+  • bg gradient — sempre cor sólida`.trim(),
   },
   {
     id: 'soft-pastel',
