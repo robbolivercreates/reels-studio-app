@@ -1236,25 +1236,38 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     `╔══════════════════════════════════════════════════════╗`,
     `  ☀️  LIGHT MODE OVERRIDE — MANDATORY (user setting)`,
     `╚══════════════════════════════════════════════════════╝`,
-    `The user has switched the reel to LIGHT MODE. Regardless of the brand colors`,
-    `or preset mood below, you MUST apply these background overrides:`,
+    `The user switched the reel to LIGHT MODE. Some preset briefs below contain`,
+    `hardcoded dark hex values inside CSS examples — those are STALE REFERENCES.`,
+    `You MUST translate them to the light palette before emitting HTML.`,
     ``,
-    `brandBackgroundColor: #ffffff   ← pure white (overrides ANY dark bg from brand)`,
-    `brandTextColor: #1d1d1f         ← near-black (high contrast on white)`,
+    `── HARD COLOR REMAPS (apply BEFORE writing any CSS) ──`,
     ``,
-    `KEEP from the brand/preset:`,
-    `  • brandPrimaryColor  (accent, icons, glows — keep as-is)`,
-    `  • brandSecondaryColor, brandAccentColor`,
-    `  • All animation timing, easing, and motion grammar`,
+    `Replace these EXACT tokens whenever they appear in preset CSS examples:`,
+    `  #000  / #000000             → #ffffff`,
+    `  #0a0a0f / #08080f / #08080a → #ffffff`,
+    `  #1a1a1a / #1c1c1c           → #f4f4f5  (a soft off-white card on white bg)`,
+    `  rgba(30, 30, 30, 0.82)      → rgba(255, 255, 255, 0.92)  + 1px border rgba(0,0,0,0.08)`,
+    `  rgba(255,255,255,0.08-0.18) → rgba(0, 0, 0, 0.06)  (glass / frost layers)`,
+    `  white text (#fff / #ffffff) → #1d1d1f  on any element NOT layered over a brand-color block`,
+    `  inset rgba(0,0,0,0.4–0.65)  → remove entirely (no dark vignettes on white)`,
+    `  text-shadow with white glow → remove or replace with subtle #000 at alpha 0.06`,
+    `  "or pure #000 if bg is dark" / "if bg is dark" fallbacks → ALWAYS pick the light branch`,
+    `  "keep it dark" / "deep #0a0a0f" / similar moody bias phrases → IGNORE them`,
     ``,
-    `FORBIDDEN in light mode:`,
-    `  • Any background darker than #f0f0f0`,
-    `  • Dark vignettes (box-shadow: inset rgba(0,0,0,…)) — remove them entirely`,
-    `  • White text on white background — always check contrast`,
-    `  • The preset's dark atmosphere glows — skip them or reduce alpha to ≤ 0.06`,
+    `── EFFECTIVE PALETTE for this generation ──`,
+    `brandBackgroundColor: #ffffff   (pure white canvas, overrides preset bg)`,
+    `brandTextColor:       #1d1d1f   (near-black, high contrast on white)`,
+    `brandPrimaryColor:    (keep as-is — accent + icons + bars)`,
+    `brandSecondaryColor / brandAccentColor: (keep as-is)`,
+    `Animation timing, easing, motion grammar: KEEP — only the palette shifts.`,
     ``,
-    `The composition must feel bright, airy, and clean — like an Apple.com product page`,
-    `or a well-lit editorial spread. Motion grammar stays the same; only the palette shifts.`,
+    `── CONTRAST AUDIT (final check before emitting) ──`,
+    `Walk every <div>, <span>, <p> with text:`,
+    `  • If text color = white AND the immediate background is now white → FLIP to #1d1d1f`,
+    `  • If a card background was #1a1a1a (now #f4f4f5) and text was white → text becomes #1d1d1f`,
+    `  • If text is over a brandPrimaryColor block → keep contrast-aware (white on dark accent stays)`,
+    ``,
+    `The composition must feel bright, airy, clean — Apple.com product page energy.`,
     '',
   ].join('\n') : '';
 
@@ -1777,6 +1790,13 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     // clusters all events early and leaves a dead tail at the end.
     .replace(/\{DURATION_SEC\}/g, input.durationSec.toString());
 
+  // Debug: confirm light-mode override is actually in the prompt + final HTML body.
+  console.log('[motion/audit] motionColorMode=', input.motionColorMode,
+    '· preset=', preset.id,
+    '· presetBgType=', preset.bgType,
+    '· forceLight=', forceLight,
+    '· lightModeSection chars=', lightModeSection.length,
+    '· atmosphere baseBg=', atmBg);
   let lastError: unknown;
   for (const model of MODEL_CANDIDATES) {
     try {
@@ -1799,6 +1819,18 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         parsed = JSON.parse(match[0]);
       }
       if (parsed.htmlBody && parsed.htmlBody.length > 100) {
+        // Debug: see if Gemini honoured the light-mode override. We count
+        // the suspicious dark hex literals that *should* have been remapped.
+        if (input.motionColorMode === 'light' && preset.bgType === 'dark') {
+          const darkRefs = (parsed.htmlBody.match(/#000(?![0-9a-fA-F])|#000000|#0a0a0f|#08080f|#08080a|#1a1a1a|#1c1c1c/g) ?? []).length;
+          const whiteRefs = (parsed.htmlBody.match(/#fff(?![0-9a-fA-F])|#ffffff/g) ?? []).length;
+          console.log('[motion/audit] HTML inspection · darkHexCount=', darkRefs,
+            '· whiteHexCount=', whiteRefs,
+            '· htmlLength=', parsed.htmlBody.length);
+          if (darkRefs > 0) {
+            console.warn('[motion/audit] Gemini emitted', darkRefs, 'dark hex references despite LIGHT MODE — sample:', parsed.htmlBody.slice(0, 500));
+          }
+        }
         return {
           intent: (parsed.intent ?? input.intent ?? '').trim(),
           text: (parsed.text ?? input.text ?? '').trim(),
@@ -1852,7 +1884,7 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         width: 1080px; height: ${canvasH}px; overflow: hidden;
-        background: #000;
+        background: ${isLight ? '#ffffff' : '#000'};
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;

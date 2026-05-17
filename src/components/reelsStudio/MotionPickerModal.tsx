@@ -102,6 +102,12 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
   const [showAdvanced, setShowAdvanced] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [followSuggestionDismissed, setFollowSuggestionDismissed] = useState(false);
+  // Snapshot the colour mode at the moment we open the picker. If the user
+  // flips the toggle while the current motion was rendered in the old mode,
+  // we surface a "↻ Regenerate to apply" hint so they're not confused by a
+  // preview that doesn't match the toggle.
+  const [openedWithMode] = useState(motionColorMode);
+  const colorModeDirty = !!motion.html && openedWithMode !== motionColorMode;
 
   // Show the "apply follow CTA" banner when:
   //   - this is the final block of the reel
@@ -491,6 +497,21 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
               <div className="text-[10px] mt-1" style={{ color: tokens.text.tertiary }}>
                 Vale para todas as motions deste reel.
               </div>
+              {/* Tip: motions already rendered keep the old colour scheme until
+                  regenerated — surface that explicitly so the user doesn't
+                  wonder why the preview still looks dark after flipping. */}
+              {colorModeDirty && (
+                <div
+                  className="mt-2 px-2.5 py-2 rounded-md text-[11px] leading-relaxed flex items-start gap-2"
+                  style={{
+                    backgroundColor: 'rgba(251,191,36,0.12)',
+                    border: '1px solid rgba(251,191,36,0.3)',
+                    color: '#FBBF24',
+                  }}
+                >
+                  <span>⚡ O motion atual ainda está no modo anterior. Clique em <strong>"↻ Regenerar com IA"</strong> pra aplicar.</span>
+                </div>
+              )}
             </div>
 
             {/* Style preset — always visible, single source of truth */}

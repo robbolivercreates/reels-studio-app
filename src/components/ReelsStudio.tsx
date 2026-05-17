@@ -1060,7 +1060,7 @@ export const ReelsStudio: React.FC = () => {
         },
         // Reuse the reel's brand identity so all motions stay visually consistent.
         existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
-        motionColorMode: state.motionColorMode ?? 'dark',
+        motionColorMode: (state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')),
         motionEnergy: state.motionEnergy ?? 'energetic',
         // Match motion text language to the script language (TTS override wins
         // over the active voice profile, same precedence used for audio).
@@ -1097,7 +1097,7 @@ export const ReelsStudio: React.FC = () => {
       dispatch({ type: 'set-block-motion', id: blockId, motion: generated });
 
       setBusy('Renderizando…');
-      const fullHtml = buildFullHtmlDoc(generated, canvasAspect, state.motionColorMode ?? 'dark');
+      const fullHtml = buildFullHtmlDoc(generated, canvasAspect, (state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')));
       await invoke('save_motion_html', { motionId: generated.id, html: fullHtml });
       const rendered = await invoke<{ mp4_path: string; size_bytes: number }>(
         'render_motion', { motionId: generated.id },
@@ -1124,7 +1124,8 @@ export const ReelsStudio: React.FC = () => {
       });
       setBusy(null);
     }
-  }, [blocks, dispatch, motionBusyByBlock]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [blocks, dispatch, motionBusyByBlock, state.motionColorMode, state.motionEnergy, state.appTheme, state.brandIdentity, state.projectName, aspect, ttsLanguageOverride]);
 
   const handleRenderMotionMp4 = useCallback(async (blockId: string) => {
     const block = blocks.find(b => b.id === blockId);
@@ -1143,7 +1144,7 @@ export const ReelsStudio: React.FC = () => {
         ...motion,
         html: motion.html.replace(/repeat\s*:\s*-1/g, () => `repeat: Math.floor(${motion.durationSec} / 0.8) - 1`),
       };
-      const fullHtml = buildFullHtmlDoc(sanitizedMotion, motion.canvasAspect, state.motionColorMode ?? 'dark');
+      const fullHtml = buildFullHtmlDoc(sanitizedMotion, motion.canvasAspect, (state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')));
       await invoke('save_motion_html', { motionId: motion.id, html: fullHtml });
       const rendered = await invoke<{ mp4_path: string; size_bytes: number }>(
         'render_motion', { motionId: motion.id },
@@ -3446,6 +3447,8 @@ export const ReelsStudio: React.FC = () => {
             onOpenMotion={selBlock ? () => setMotionPickerBlockId(selBlock.id) : undefined}
             onGenerateMotion={selBlock ? () => handleAutoMotion(selBlock.id) : undefined}
             motionBusy={selBlock ? (motionBusyByBlock[selBlock.id] ?? null) : null}
+            motionColorMode={state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')}
+            onSetMotionColorMode={(mode) => dispatch({ type: 'set-motion-color-mode', mode })}
             onOpenAssetPicker={selBlock ? () => setAssetPickerBlockId(selBlock.id) : undefined}
           />
         );

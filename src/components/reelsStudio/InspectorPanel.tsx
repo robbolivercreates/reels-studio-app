@@ -51,6 +51,11 @@ interface Props {
   onGenerateMotion?: () => void;
   /** True while a generation is in flight — disables buttons + shows status. */
   motionBusy?: string | null;
+  /** Current colour scheme used by motion generation (dark backdrop vs. light). */
+  motionColorMode?: 'dark' | 'light';
+  /** Setter for the colour scheme. Inspector exposes a quick chip so users don't
+   * have to dive into Settings or the overflow menu to flip it. */
+  onSetMotionColorMode?: (mode: 'dark' | 'light') => void;
   onOpenAssetPicker?: () => void;
   onRegenAvatar?: () => void;
 }
@@ -142,6 +147,8 @@ export const InspectorPanel: React.FC<Props> = ({
   onOpenMotion,
   onGenerateMotion,
   motionBusy,
+  motionColorMode,
+  onSetMotionColorMode,
   onOpenAssetPicker: _onOpenAssetPicker,
   onRegenAvatar: _onRegenAvatar,
 }) => {
@@ -203,12 +210,44 @@ export const InspectorPanel: React.FC<Props> = ({
       <div className="space-y-3">
         {/* Style preset grid — replaces the dropdown that lived inside the card. */}
         <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-between mb-2 gap-3">
             <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>
               Estilo do motion
             </div>
-            <div className="text-[10px]" style={{ color: tokens.text.tertiary }}>
-              {motionLabel}
+            <div className="flex items-center gap-3">
+              {/* Dark/Light chip — controls how the NEXT generation paints
+                  backgrounds. Lives here because users typically pick a
+                  preset and a colour scheme in the same gesture. */}
+              {onSetMotionColorMode && (
+                <div
+                  className="flex items-center gap-0.5 p-0.5 rounded-md"
+                  style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)' }}
+                >
+                  {(['light', 'dark'] as const).map(mode => {
+                    const active = (motionColorMode ?? 'dark') === mode;
+                    return (
+                      <button
+                        key={mode}
+                        onClick={() => onSetMotionColorMode(mode)}
+                        className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors"
+                        style={{
+                          backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.1)') : 'transparent',
+                          color: active ? tokens.text.primary : tokens.text.tertiary,
+                          cursor: 'pointer',
+                          border: 'none',
+                        }}
+                        title={mode === 'light' ? 'Motion com fundo claro' : 'Motion com fundo escuro'}
+                      >
+                        <span>{mode === 'light' ? '☀' : '🌙'}</span>
+                        <span>{mode === 'light' ? 'Claro' : 'Escuro'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              <div className="text-[10px]" style={{ color: tokens.text.tertiary }}>
+                {motionLabel}
+              </div>
             </div>
           </div>
           <div className="grid grid-cols-6 gap-2">
