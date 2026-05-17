@@ -18,6 +18,7 @@ import { ReferencesModal } from './reelsStudio/ReferencesModal';
 import type { PersistedAnalysis } from './reelsStudio/types';
 import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
 import { ClipRescueModal } from './reelsStudio/ClipRescueModal';
+import { InspectorPanel } from './reelsStudio/InspectorPanel';
 import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
 import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
@@ -3420,6 +3421,36 @@ export const ReelsStudio: React.FC = () => {
         )}
       </div>
 
+      {/* ─── INSPECTOR (Apple-style contextual block editor) ─────────────────
+           Onda 1 — replaces per-card inline expansion. Lives between the
+           preview/script row and the timeline, full-width across them. */}
+      {aspect !== 'carousel' && (() => {
+        const selBlock = selectedBlockId ? blocks.find(b => b.id === selectedBlockId) ?? null : null;
+        const selDefaultZoom = selBlock?.kind === 'avatar'
+          ? defaultAvatarZoom(state.aspect, selBlock.layout)
+          : 1;
+        return (
+          <InspectorPanel
+            block={selBlock}
+            appTheme={state.appTheme}
+            multiSelectCount={multiSelectIds.size}
+            aspect={state.aspect}
+            defaultZoom={selDefaultZoom}
+            audioReady={audio.status === 'ready'}
+            onSetAvatarZoom={selBlock ? (z) => dispatch({ type: 'set-avatar-zoom', id: selBlock.id, zoom: z }) : undefined}
+            onSetAvatarOffsetY={selBlock ? (o) => dispatch({ type: 'set-avatar-offset-y', id: selBlock.id, offsetY: o }) : undefined}
+            onSetAvatarVisibleSec={selBlock ? (s) => dispatch({ type: 'set-avatar-visible-sec', id: selBlock.id, sec: s }) : undefined}
+            onSetLayout={selBlock ? (l) => dispatch({ type: 'set-block-layout', id: selBlock.id, layout: l }) : undefined}
+            onSetAvatarPhoto={selBlock ? (id) => dispatch({ type: 'set-block-avatar-photo', id: selBlock.id, photoId: id }) : undefined}
+            onSetStylePreset={selBlock ? (preset) => dispatch({ type: 'set-block-style-preset', id: selBlock.id, preset }) : undefined}
+            onOpenMotion={selBlock ? () => setMotionPickerBlockId(selBlock.id) : undefined}
+            onGenerateMotion={selBlock ? () => handleAutoMotion(selBlock.id) : undefined}
+            motionBusy={selBlock ? (motionBusyByBlock[selBlock.id] ?? null) : null}
+            onOpenAssetPicker={selBlock ? () => setAssetPickerBlockId(selBlock.id) : undefined}
+          />
+        );
+      })()}
+
       {/* ─── TIMELINE (hidden in carousel mode — no audio timeline concept) ── */}
       <div className={`h-[300px] border-t border-white/5 bg-[#0C0C0E] flex flex-col shrink-0 ${aspect === 'carousel' ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between px-5 py-2 border-b border-white/5">
@@ -5500,10 +5531,10 @@ const BlockAvatarPhotoPicker: React.FC<{
 const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, onSetAvatarPhoto, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, carouselRole }) => {
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
-  // Block "advanced" controls (asset, style picker, layout, sliders) live behind a
-  // disclosure toggle. Collapsed by default — the card shows just header + text + footer.
-  // Local state only — users rediscover on next session, which is the right tradeoff.
-  const [expanded, setExpanded] = useState(false);
+  // Note: Onda 1 moved all "advanced" controls (zoom, offset, layout, photo,
+  // visible-sec, style picker, asset picker, attached assets) into the new
+  // InspectorPanel below the preview. The sidebar card now only shows text +
+  // status — selecting a block surfaces its details in the inspector.
   // Resolve current preset (override or seed default 'glass-tech').
   const activePreset = findStylePreset(b.stylePresetOverride ?? 'glass-tech');
   const isAvatar = b.kind === 'avatar';
@@ -5754,226 +5785,6 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         rows={3}
       />
 
-      {/* ── Disclosure toggle: "Ajustes do bloco" ───────────────────────── */}
-      <button
-        onClick={(e) => { e.stopPropagation(); setExpanded(v => !v); }}
-        className="w-full px-3 py-1.5 border-t border-white/5 flex items-center justify-center gap-1.5 text-[10px] text-zinc-500 hover:text-zinc-300 hover:bg-white/[0.02] transition-colors"
-        title={expanded ? 'Recolher ajustes' : 'Expandir ajustes'}
-      >
-        <span>Ajustes do bloco</span>
-        <svg
-          className="w-3 h-3 transition-transform"
-          style={{ transform: expanded ? 'rotate(180deg)' : 'rotate(0deg)' }}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-
-      {/* ── Inspector strip + layout + sliders — hidden by default ───── */}
-      {expanded && (() => {
-        const currentAssets = b.attachedAssets ?? [];
-        const assetCount = currentAssets.length;
-        const assetLabel = assetCount === 0
-          ? 'Asset'
-          : assetCount === 1
-            ? currentAssets[0].name
-            : `${assetCount} slides`;
-        const assetTooltip = assetCount === 0
-          ? 'Anexar asset (imagem/vídeo) ao bloco'
-          : assetCount === 1
-            ? `Asset: ${currentAssets[0].name}`
-            : `${assetCount} slides em sequência: ${currentAssets.map(a => a.name).join(' → ')}`;
-        return (
-          <div className="px-3 py-2 border-t border-white/5 flex items-center gap-1.5 flex-wrap">
-            <button
-              onClick={(e) => { e.stopPropagation(); onOpenAssetPicker(); }}
-              className={`px-2 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1 min-w-0 ${
-                assetCount > 0
-                  ? 'bg-violet-500/20 border-violet-400/50 text-violet-100 hover:bg-violet-500/30'
-                  : 'bg-violet-500/[0.06] border-violet-400/20 text-violet-300/80 hover:bg-violet-500/15 hover:text-violet-200 hover:border-violet-400/40'
-              }`}
-              title={assetTooltip}
-            >
-              <span>📎</span>
-              <span className="max-w-[140px] truncate">{assetLabel}</span>
-              {assetCount > 1 && (
-                <span className="ml-0.5 px-1 rounded bg-violet-300/20 text-[9px] font-bold text-violet-50">{assetCount}</span>
-              )}
-            </button>
-
-            <div className="relative">
-              <button
-                onClick={(e) => { e.stopPropagation(); setStyleMenuOpen(o => !o); }}
-                className={`px-2 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1 ${
-                  b.stylePresetOverride
-                    ? 'bg-amber-500/15 border-amber-400/40 text-amber-100 hover:bg-amber-500/25'
-                    : 'bg-zinc-500/[0.06] border-zinc-400/20 text-zinc-300/80 hover:bg-zinc-500/15 hover:text-zinc-100 hover:border-zinc-400/40'
-                }`}
-                title={`Estilo: ${activePreset.label}${b.stylePresetOverride ? ' (override)' : ' (default)'} — clique pra trocar`}
-              >
-                <span>{activePreset.emoji}</span>
-                <span className="max-w-[100px] truncate">{activePreset.label}</span>
-                <svg className="w-2.5 h-2.5 opacity-60" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-              {styleMenuOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={(e) => { e.stopPropagation(); setStyleMenuOpen(false); }} />
-                  <div
-                    className="absolute left-0 top-full mt-1 z-50 w-72 rounded-lg border border-white/10 bg-[#141416] shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <div className="px-3 py-2 border-b border-white/5 text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                      Estilo do motion
-                    </div>
-                    <div className="max-h-[320px] overflow-y-auto">
-                      {STYLE_PRESETS.map(p => {
-                        const isActive = (b.stylePresetOverride ?? 'glass-tech') === p.id;
-                        return (
-                          <button
-                            key={p.id}
-                            onClick={() => {
-                              onSetStylePreset(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId));
-                              setStyleMenuOpen(false);
-                            }}
-                            className={`w-full text-left px-3 py-2 flex items-start gap-2 transition-colors ${
-                              isActive ? 'bg-amber-500/10' : 'hover:bg-white/5'
-                            }`}
-                          >
-                            <span className="text-base shrink-0 mt-0.5">{p.emoji}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className={`text-[11.5px] font-medium ${isActive ? 'text-amber-200' : 'text-zinc-100'}`}>
-                                {p.label}
-                                {isActive && <span className="ml-1.5 text-[9px] text-amber-300">●</span>}
-                              </div>
-                              <div className="text-[10px] text-zinc-500 leading-snug line-clamp-2">{p.bestFor}</div>
-                            </div>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        );
-      })()}
-
-      {expanded && isAvatar && (
-        <div className="px-3 py-2 border-t border-white/5">
-          <div className="text-[10px] text-zinc-400 mb-1.5">📐 Layout</div>
-          <div className="grid grid-cols-4 gap-1.5">
-            {LAYOUT_OPTIONS.map(opt => {
-              const selected = (b.layout ?? 'avatar-only') === opt.id;
-              return (
-                <button
-                  key={opt.id}
-                  onClick={() => onSetLayout(opt.id)}
-                  className="space-y-1"
-                  title={opt.label}
-                >
-                  <LayoutThumbnail layout={opt.id} selected={selected} />
-                  <div className={`text-[8px] text-center truncate ${selected ? 'text-violet-300' : 'text-zinc-500'}`}>{opt.label}</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {expanded && isAvatar && (
-        <BlockAvatarPhotoPicker
-          currentPhotoId={b.avatarPhotoId}
-          onPick={onSetAvatarPhoto}
-        />
-      )}
-
-      {expanded && isAvatar && audioReady && duration > 0.5 && (
-        <div className="px-3 py-2 border-t border-white/5 space-y-1.5">
-          <div className="flex items-center justify-between text-[10px]">
-            <span className="text-zinc-400">⏱ Avatar visível</span>
-            <span className={`font-mono ${isPartial ? 'text-emerald-300' : 'text-zinc-300'}`}>
-              {visibleSec.toFixed(1)}s
-              {isPartial && <span className="text-zinc-500 ml-1">· depois B-roll {(duration - visibleSec).toFixed(1)}s</span>}
-            </span>
-          </div>
-          <input
-            type="range"
-            min={0.5}
-            max={duration}
-            step={0.1}
-            value={visibleSec}
-            onChange={(e) => {
-              const v = parseFloat(e.target.value);
-              onSetAvatarVisibleSec(Math.abs(v - duration) < 0.05 ? undefined : v);
-            }}
-            className="w-full h-1 accent-emerald-400 cursor-pointer"
-          />
-        </div>
-      )}
-
-      {expanded && isAvatar && (() => {
-        // Sliders go from 1.0 (no zoom — works for natively-vertical clips like
-        // Avatar V) up to 2.4 (tight crop). Earlier the min was clamped to the
-        // aspect's "auto" zoom (1.78x for 9:16) on the assumption that all
-        // HeyGen clips were 16:9 — but Avatar V is 9:16 native, so the clamp
-        // forced an unwanted scale-up on those.
-        const zoomMin = 1.0;
-        const zoomMax = 2.4;
-        const zoomStep = 0.02;
-        const zoomValue = b.avatarZoom ?? defaultZoom;
-        const clampedZoomValue = Math.max(zoomMin, Math.min(zoomMax, zoomValue));
-        // "At auto" when the value is within one slider step of the default —
-        // covers both undefined and the explicit value if the user dragged back to it.
-        const atAuto = Math.abs(zoomValue - defaultZoom) < zoomStep;
-        // Vertical offset reduced from ±0.5 → ±0.25. The old wide range made
-        // tiny slider moves shove the avatar offscreen.
-        const offsetY = b.avatarOffsetY ?? 0;
-        return (
-        <div className="px-3 py-2 border-t border-white/5 space-y-1.5">
-          <div className="flex items-center justify-between text-[10px]">
-            <span className="text-zinc-400">🔍 Zoom do avatar</span>
-            <span className={`font-mono ${atAuto ? 'text-zinc-300' : 'text-violet-300'}`}>
-              {zoomValue.toFixed(2)}x
-              {atAuto && <span className="text-zinc-600 ml-1">(preenche)</span>}
-            </span>
-          </div>
-          <input
-            type="range"
-            min={zoomMin}
-            max={zoomMax}
-            step={zoomStep}
-            value={clampedZoomValue}
-            onChange={(e) => onSetAvatarZoom(parseFloat(e.target.value))}
-            onDoubleClick={() => onSetAvatarZoom(defaultZoom)}
-            title="Duplo-clique pra voltar ao zoom que preenche o frame"
-            className="w-full h-1 accent-violet-400 cursor-pointer"
-          />
-          <div className="text-[9px] text-zinc-500">Mínimo já preenche o frame · arraste pra fechar mais no rosto. Duplo-clique reseta.</div>
-          {/* Vertical position slider */}
-          <div className="flex items-center justify-between text-[10px] mt-2">
-            <span className="text-zinc-400">↕️ Posição vertical</span>
-            <span className="font-mono text-zinc-300">
-              {offsetY === 0 ? 'centro' : offsetY > 0 ? `+${(offsetY * 100).toFixed(0)}% ↓` : `${(offsetY * 100).toFixed(0)}% ↑`}
-            </span>
-          </div>
-          <input
-            type="range"
-            min={-0.25}
-            max={0.25}
-            step={0.01}
-            value={Math.max(-0.25, Math.min(0.25, offsetY))}
-            onChange={(e) => onSetAvatarOffsetY(parseFloat(e.target.value))}
-            onDoubleClick={() => onSetAvatarOffsetY(0)}
-            title="Duplo-clique para centralizar"
-            className="w-full h-1 accent-violet-400 cursor-pointer"
-          />
-        </div>
-        );
-      })()}
 
       <div className="px-3 py-2 border-t border-white/5 flex items-center justify-between text-[10px] text-zinc-500 font-mono">
         <span>{formatTime(b.start)} → {formatTime(b.end)}{b.dirty && <span className="ml-1.5 text-amber-400">· alterado</span>}</span>
