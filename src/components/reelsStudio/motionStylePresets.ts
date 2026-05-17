@@ -23,6 +23,12 @@ export type StylePresetId =
   | 'notification-pop'
   | 'map-zoom'
   | 'logo-outro'
+  // ─── Onda 2 / Entrega B: asset-heavy shot templates ───────────
+  | 'browser-chrome'
+  | 'phone-mockup'
+  | 'pip-talking-head'
+  | 'before-after-split'
+  | 'karaoke-captions'
   | 'claude-ui';
 
 /**
@@ -952,6 +958,465 @@ FORBIDDEN — your output MUST NOT contain:
 - NESTED timed elements. Two elements that both carry data-start cannot be parent-and-child. The OUTER one must drop its timing (be a static <div>) or the INNER must drop its timing. Wrapping a <video data-start> inside a <div class="clip" data-start> is FORBIDDEN — lint code: video_nested_in_timed_element. Same applies to canvas/img inside a timed shell. Rule of thumb: if the inner element needs its own timeline (video, canvas with data-start), then the outer wrapper is a plain non-timed <div> with NO class="clip" and NO data-start.
 - two clips on the SAME data-track-index that overlap in time at all (lint code: overlapping_clips_same_track). Background layer (vignette, mesh, gradient, bg-shell) and any other element on track 0 ALWAYS collide — keep ONLY ONE element on track 0 (the background), and put everything else on tracks 1+. If you need both a brand-chrome layer AND a bg gradient, put bg on track 0 and chrome on track 1.
 `.trim();
+
+// ─── Asset-heavy shot templates (Onda 2 / Entrega B) ─────────────────────
+// These presets wrap an attached image/video in a recognizable visual frame
+// (browser chrome, phone mockup, talking-head PIP, comparison split) or use
+// audio word-level timestamps for karaoke captions. They expect at least one
+// pinnedAsset on the block — Gemini is told which slot to use and how to mask
+// the asset into the chrome.
+
+STYLE_PRESETS.push({
+  id: 'browser-chrome',
+  role: 'example',
+  roleLabel: 'Screenshot · navegador',
+  defaultFontSet: 'apple',
+  label: 'Browser chrome',
+  description: 'Envolve um screenshot em janela macOS Safari com address bar e traffic lights.',
+  emoji: '🖥',
+  bestFor: 'Demos de webapp, tweets, dashboards, sites — qualquer screenshot que ganha autoridade num navegador real.',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#0e0e10',
+    warmGlow: { color: '#0084ff', alpha: 0.08, pos: '20% 25%' },
+    coolGlow: { color: '#ffffff', alpha: 0.04, pos: '80% 75%' },
+    vignetteIntensity: 0.6,
+  },
+  geminiBrief: `
+PALETTE: macOS Safari window over moody dark backdrop.
+  bg: brandBackgroundColor if dark (luminance < 25%) OR force '#0e0e10' deep blue-black.
+  text: '#ffffff' for labels on the dark bg; '#1d1d1f' for any caption that sits ON the screenshot
+  window-bg: '#1d1d1f' (the Safari chrome frame, not the screenshot itself)
+  window-border: rgba(255, 255, 255, 0.08) — 1px subtle separation
+  address-bar-bg: '#2c2c2e'
+  address-bar-text: '#a1a1a6'
+  traffic-light-red: '#ff5f57'
+  traffic-light-amber: '#febc2e'
+  traffic-light-green: '#28c840'
+  caption-accent: brandPrimaryColor (or '#0084ff' fallback) — used SPARINGLY on 1 word max
+
+REQUIRED ASSETS:
+  This preset REQUIRES at least one pinnedAsset (image). If pinnedAssets is empty,
+  fall back gracefully: render a placeholder gradient inside the window with the
+  block text written on it. NEVER omit the window chrome — the chrome IS the preset.
+
+LAYOUT (CRITICAL — match the visual reference):
+  Root: full canvas with bg color, vignette via box-shadow inset.
+  Window container:
+    - position: absolute; top: 240px; left: 80px; right: 80px (1080-wide canvas → 920px window)
+    - background: '#1d1d1f'; border-radius: 18px; border: 1px solid window-border;
+    - box-shadow: 0 30px 80px rgba(0,0,0,0.55), 0 8px 20px rgba(0,0,0,0.35)
+    - Inside: top chrome (60px) + content area (rest)
+  Top chrome (Safari header):
+    - height: 60px; padding: 0 22px; display: flex; align-items: center; gap: 12px
+    - 3 traffic lights on the left: each 14px diameter, gap 10px, colors above
+    - Address bar centered: width 480px height 32px, bg #2c2c2e, border-radius 8px,
+      inside: a small lock icon SVG (10px) + URL text in address-bar-text color, 16px monospace
+    - URL text: derive from block topic ("yourapp.com/dashboard", "stripe.com/pricing", etc.)
+      OR use a generic placeholder ("example.com") if topic is unclear
+  Content area (the screenshot):
+    - the pinnedAsset image fills this area
+    - inside a .clip shell with overflow: hidden, border-radius 0 0 18px 18px (bottom only)
+    - <img object-fit: cover; object-position: top center>
+  Optional caption below window:
+    - max 6 words, 56px weight 600 .font-tech, color white, centered, max-width 800px
+    - sits at y: window-bottom + 64px
+
+MOTION (5s timeline) — Safari "opens with a click":
+  - 0.0-0.55s: window appears with scale 0.92 → 1.0 + opacity 0 → 1, ease "power3.out".
+    transformOrigin: center center.
+  - 0.55s: subtle settle scale 1.0 → 1.012 → 1.0 over 0.25s (the "snap into slot")
+  - 0.6-1.2s: traffic lights fade in one at a time, stagger 0.06s (red → amber → green),
+    each from opacity 0 → 1 + scale 0.7 → 1 ease back.out(1.8)
+  - 1.0-1.4s: address bar URL text reveals letter-by-letter using clip-path inset,
+    duration ~0.4s ease power3.out
+  - 1.4s onwards: very subtle ambient float — translateY 0 → -3 → 0 yoyo over 4s sine.inOut
+  - If caption is present: caption fades in opacity 0 → 1 + translateY(8 → 0) at 1.6s,
+    duration 0.7s ease power3.out
+  - 4.6-5.0s: gentle scale 1 → 0.98 + opacity 1 → 0 exit, ease power3.in
+
+TYPOGRAPHY:
+  caption: .font-tech (Space Grotesk / Inter), weight 600, 56px, letter-spacing -0.02em
+  URL: monospace fallback "SF Mono", "JetBrains Mono", monospace; 16px
+  body / address-bar: weight 400-500
+
+VOICE:
+  Native macOS Safari, not a designed graphic. The viewer should feel they're
+  watching a real screen recording, not a marketing illustration. Restraint over
+  flourish — the screenshot IS the hero, the chrome is just the proof.
+
+NEVER:
+  • render this preset without the Safari window chrome (chrome IS the identity)
+  • use Windows / Chrome-on-Windows / Firefox styling — this is MACOS Safari only
+  • crop the screenshot to fit weirdly — always object-fit: cover; object-position: top center
+  • animate the screenshot independently (no zoom, pan, parallax) — the window is the unit
+  • add decoration (blobs, particles, gradients) on top of the screenshot
+  • rounded corners > 20px on the window — Safari is 14-18px historically
+  • bright background bg colors — preset requires a dark moody backdrop
+  • back.out / elastic / overshoot on the window itself (only on traffic lights)`.trim(),
+});
+
+STYLE_PRESETS.push({
+  id: 'phone-mockup',
+  role: 'example',
+  roleLabel: 'Screenshot · iPhone',
+  defaultFontSet: 'apple',
+  label: 'iPhone mockup',
+  description: 'Envolve um screenshot em moldura iPhone 15 Pro com Dynamic Island.',
+  emoji: '📱',
+  bestFor: 'Demos de app mobile, conversas, posts de Instagram/TikTok — qualquer screenshot vertical que pede contexto de telefone.',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#101012',
+    warmGlow: { color: '#ffffff', alpha: 0.05, pos: '50% 20%' },
+    coolGlow: { color: '#0084ff', alpha: 0.06, pos: '50% 80%' },
+    vignetteIntensity: 0.65,
+  },
+  geminiBrief: `
+PALETTE: Premium iPhone 15 Pro mockup floating on moody dark stage.
+  bg: brandBackgroundColor if dark OR force '#101012' (slight warmer than pure black)
+  phone-frame: '#1a1a1a' (the titanium/black bezel)
+  phone-frame-edge: linear-gradient(135deg, '#2a2a2a' 0%, '#0a0a0a' 50%, '#2a2a2a' 100%)
+      — this gradient sells the metallic edge highlight; apply as a 2px border via background-clip
+  dynamic-island-bg: '#000000' (true black)
+  screen-radius: 48px (iPhone 15 Pro corner radius scaled to our 1080 canvas)
+  caption-color: '#ffffff'
+  caption-accent: brandPrimaryColor (or '#0084ff' fallback)
+
+REQUIRED ASSETS:
+  This preset REQUIRES at least one pinnedAsset (image, ideally 9:19.5 or vertical).
+  If pinnedAssets is empty, render placeholder gradient inside the screen with
+  block text. NEVER omit the phone frame — frame IS the preset.
+
+LAYOUT (CRITICAL — iPhone 15 Pro proportions in 9:16 canvas):
+  Canvas is 1080×1920. Phone occupies roughly the central column:
+  Phone container:
+    - position: absolute; top: 180px; left: 50%; transform: translateX(-50%)
+    - width: 720px; height: 1480px (matches iPhone aspect ratio ~9:19.5)
+    - background: phone-frame; border-radius: 100px; padding: 14px (the bezel)
+    - box-shadow: 0 40px 100px rgba(0,0,0,0.6), 0 12px 24px rgba(0,0,0,0.4)
+    - inside ::before for the metallic edge: position absolute; inset -1px;
+      border-radius inherit; background: phone-frame-edge; z-index: -1
+  Screen (inside the bezel):
+    - background: #000; border-radius: 88px (inner radius after 14px bezel inset)
+    - overflow: hidden; position: relative
+    - the pinnedAsset image: object-fit: cover; width 100%; height 100%
+  Dynamic Island:
+    - position: absolute; top: 22px (inside screen); left: 50%; transform: translateX(-50%)
+    - width: 168px; height: 44px; background: dynamic-island-bg; border-radius: 22px
+    - z-index above screen content
+  Optional caption above OR below phone:
+    - max 6 words, 52px weight 600 .font-tech, white, centered, max-width 760px
+    - top: phone-y - 110px (above) OR phone-bottom + 50px (below)
+
+MOTION (5s timeline) — iPhone "rises into frame":
+  - 0.0-0.7s: phone enters from y:80 + opacity 0 → y:0 + opacity 1, ease "power3.out"
+    + slight rotation -2deg → 0
+  - 0.7s: micro-settle scale 1 → 1.01 → 1 over 0.25s (the "presence" beat)
+  - 0.7-1.2s: dynamic island scales 0.6 → 1 with back.out(1.6)
+  - 0.9-1.3s: screen content fades in opacity 0 → 1 ease power2.out
+  - 1.3s onwards: very subtle continuous float — translateY 0 → -4 → 0 yoyo 5s sine.inOut
+  - If caption: caption fades in at 1.4s, opacity 0 → 1 + translateY(10 → 0), 0.7s
+  - 4.6-5.0s: phone exits with scale 1 → 0.96 + opacity 1 → 0, ease power3.in
+
+TYPOGRAPHY:
+  caption: .font-tech weight 600, 52px, letter-spacing -0.02em, line-height 1.15
+
+VOICE:
+  Premium product photography vibe. The viewer should feel "Apple keynote
+  spotlight" — phone floating in soft light, dramatic but not loud. The
+  screenshot is the message; the phone is the stage.
+
+NEVER:
+  • render without the iPhone frame (frame IS the identity)
+  • flat phone color — must have the metallic edge gradient or feels cartoonish
+  • round screen corners < 80px or > 96px — iPhone 15 Pro is ~88px
+  • omit the Dynamic Island (it's the visual signature of modern iPhones)
+  • rotate the phone beyond ±3deg during the float
+  • add decoration on top of the screen (blobs, particles) — screen is sacred
+  • caption longer than 8 words — phone composition needs negative space
+  • bright background — preset requires dark moody stage for the spotlight feel
+  • elastic/back.out on the phone body itself (only on Dynamic Island reveal)`.trim(),
+});
+
+STYLE_PRESETS.push({
+  id: 'pip-talking-head',
+  role: 'concept',
+  roleLabel: 'PIP · talking-head',
+  defaultFontSet: 'brand',
+  label: 'PIP talking-head',
+  description: 'Avatar pequeno no canto + conteúdo grande ocupando o resto — feel de live stream/podcast.',
+  emoji: '⚡',
+  bestFor: 'Conteúdo educativo / tutorial onde o avatar fala mas o ponto principal é o gráfico/texto que ocupa a tela.',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#0a0a0c',
+    warmGlow: { color: '#ff6b3c', alpha: 0.08, pos: '15% 80%' },
+    coolGlow: { color: '#3ce7ff', alpha: 0.10, pos: '85% 20%' },
+    vignetteIntensity: 0.5,
+  },
+  geminiBrief: `
+PALETTE: Live-stream / podcast aesthetic — high-energy backdrop, talking-head as overlay.
+  bg: brandBackgroundColor (if dark) OR '#0a0a0c'
+  text: '#ffffff' (must contrast 7:1 on dark bg)
+  accent: brandPrimaryColor (for hero word + PIP frame border)
+  pip-frame: '#1a1a1a' (the rounded card behind avatar slot)
+  pip-frame-border: 2px solid accent at 80% alpha
+  pip-shadow: 0 12px 40px rgba(0,0,0,0.5)
+
+CONTEXT FROM BLOCK:
+  This preset is intended for BLOCKS WHERE THE AVATAR IS PRESENT (avatar mode).
+  The motion COMPLEMENTS the avatar — the talking-head video is already rendered
+  by the timeline at its layout-defined position. This preset's HTML provides:
+  (a) a decorative PIP frame that the avatar will sit IN; (b) bold content
+  graphics that occupy the rest of the canvas.
+  CRITICAL: do NOT render the avatar yourself. The .clip layers you produce go
+  UNDER the avatar layer. Reserve the bottom-right corner for the avatar by
+  leaving a 400×400px transparent zone at position (bottom: 60px, right: 60px).
+
+LAYOUT:
+  Main content area (top + left + center):
+    - hero text fills 70% of canvas, anchored top-third
+    - .font-display weight 800-900, 110-180px, letter-spacing -0.04em, line-height 0.95
+    - 1-2 words highlighted with accent color (NOT the whole text)
+    - secondary text (caption / supporting line): .font-body 32-44px weight 500,
+      below the hero, max 2 lines
+    - decorative accent: 1 horizontal hairline 2px solid accent at 60% alpha,
+      between hero and caption, width 200px
+  PIP reservation zone (DO NOT FILL):
+    - position: absolute; bottom: 60px; right: 60px
+    - width: 400px; height: 400px (the actual avatar layer goes here from the timeline)
+    - The PIP frame decoration BELONGS HERE (z-index just below avatar):
+      a soft rounded shell with .pip-frame-border, .pip-shadow, border-radius 32px,
+      with a subtle pulse glow over time
+  Background decoration:
+    - 2-4 soft particles (8-14px, accent color, opacity 0.25-0.45) drifting slowly
+    - 1 large blurred radial glow behind hero text, opacity 0.18, blur(60px)
+
+MOTION (5s timeline):
+  - 0.0-0.4s: bg glow fades in opacity 0 → 0.18, ease power2.out
+  - 0.2-0.7s: hero text reveals word-by-word with clip-path inset(0 100% 0 0) → 0,
+    stagger 0.10s, each 0.35s ease power4.out
+  - 0.6-0.9s: accent hairline expands from width 0 → 200px, ease expo.out
+  - 0.7-1.1s: caption fades in opacity + translateY(10 → 0), ease power3.out
+  - 1.0-1.4s: PIP frame appears with scale 0.85 → 1 + opacity 0 → 1, ease back.out(1.6)
+  - 1.4s onwards: PIP border glow pulse (border-color alpha 0.6 ↔ 1.0 yoyo 2.4s sine.inOut)
+  - 1.4s onwards: particles drift translateY ±18px yoyo over 4-6s, randomly staggered
+  - 4.6-5.0s: hero scale 1 → 0.97 + opacity 1 → 0, exit ease power3.in
+
+TYPOGRAPHY:
+  hero: .font-display weight 800-900, 110-180px
+  caption: .font-body weight 500, 32-44px
+  italic OK on 1-2 hot words (visual rhythm)
+
+VOICE:
+  Live podcast set. The avatar is the personality; the graphic is the
+  point. Both win when they share the frame — the avatar gets a corner,
+  the graphic gets the stage, and they conspire to make the viewer feel
+  they're watching a premium show.
+
+NEVER:
+  • fill the bottom-right 400×400px zone with motion content (avatar lives there)
+  • cover the hero text with the PIP frame
+  • use the PIP frame as a "card" for content — it's specifically the avatar slot
+  • forget the PIP frame entirely (the frame IS the visual signature)
+  • render an actual avatar/face inside the PIP frame (timeline layer does that)
+  • use easing back.out / elastic on the hero text — those break the "live show" feel
+  • saturate > 70% — live stream graphics are punchy but not neon
+  • more than 2 hot accent words in the hero (visual fatigue)`.trim(),
+});
+
+STYLE_PRESETS.push({
+  id: 'before-after-split',
+  role: 'comparison',
+  roleLabel: 'Antes / Depois',
+  defaultFontSet: 'brand',
+  label: 'Antes / Depois',
+  description: 'Split vertical com reveal diagonal — 2 assets comparados lado a lado.',
+  emoji: '⚖',
+  bestFor: 'Comparações visuais: produto antes/depois, app legado vs novo, dia 1 vs dia 30 — qualquer transformação que ganha com confronto direto.',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#0c0c10',
+    warmGlow: { color: '#ff5a3c', alpha: 0.10, pos: '20% 50%' },
+    coolGlow: { color: '#3ce7ff', alpha: 0.10, pos: '80% 50%' },
+    vignetteIntensity: 0.6,
+  },
+  geminiBrief: `
+PALETTE: Confronto / transformação. Visual peso emocional, accent forte.
+  bg: brandBackgroundColor (dark) OR '#0c0c10'
+  text: '#ffffff'
+  label-before-bg: '#3a1a1a' (deep warm red — failure/past)
+  label-after-bg: '#1a3a2a' (deep emerald — success/future)
+  label-before-text: '#ff8a6c' (warm coral)
+  label-after-text: '#6cf0a8' (mint)
+  divider: linear-gradient(180deg, accent 0%, white 50%, accent 100%) — the slash between halves
+  caption-color: '#ffffff'
+  caption-accent: brandPrimaryColor (or '#3ce7ff' fallback)
+
+REQUIRED ASSETS:
+  This preset REQUIRES TWO pinnedAssets:
+    - pinnedAssets[0] = the BEFORE image (placed on the LEFT half)
+    - pinnedAssets[1] = the AFTER image (placed on the RIGHT half)
+  If only 1 asset provided: use it on the AFTER side; render a gray placeholder
+  on the BEFORE side with the text "ANTES" at 60% alpha.
+  If 0 assets: render a gradient on both sides with labels visible — degrade
+  gracefully but keep the structure recognizable.
+
+LAYOUT (CRITICAL — diagonal split with confrontation):
+  Canvas split into 2 vertical halves with a diagonal seam:
+    Left half (BEFORE):
+      - clip-path: polygon(0 0, 55% 0, 45% 100%, 0 100%) — slight diagonal lean
+      - background image: pinnedAssets[0] via background-image: url(...) cover center
+      - desaturate filter: grayscale(0.7) brightness(0.85) — past looks faded
+    Right half (AFTER):
+      - clip-path: polygon(45% 0, 100% 0, 100% 100%, 55% 100%) — mirrored diagonal
+      - background image: pinnedAssets[1] via background-image: url(...) cover center
+      - NO desaturate — full color, future looks vivid
+  Diagonal divider seam:
+    - a 6px wide diagonal strip running from (55% top) to (45% bottom)
+    - background: divider gradient
+    - z-index above both halves
+    - subtle glow: box-shadow 0 0 24px accent at 40% alpha
+  Labels:
+    - "ANTES" label: position absolute top: 120px, left: 80px, padding 16px 32px,
+      background label-before-bg, color label-before-text, .font-display 36px
+      weight 700, letter-spacing 0.08em, text-transform uppercase, border-radius 8px
+    - "DEPOIS" label: same style on the right, position top: 120px, right: 80px,
+      background label-after-bg, color label-after-text
+  Optional caption at the bottom:
+    - max 6 words, .font-display 56px weight 800 white, centered,
+      position: absolute; bottom: 140px; left: 50%; transform translateX(-50%)
+    - text-shadow: 0 4px 24px rgba(0,0,0,0.8)
+
+MOTION (5s timeline) — confrontation rhythm:
+  - 0.0-0.6s: both halves slide in from opposite sides simultaneously:
+    - LEFT half: translateX(-300px → 0), opacity 0 → 1, ease power3.out
+    - RIGHT half: translateX(300px → 0), opacity 0 → 1, ease power3.out
+  - 0.6-1.0s: diagonal divider expands from height 0 → 100% with the gradient
+    revealing, ease expo.out, scaleY origin center
+  - 0.9-1.3s: labels appear:
+    - BEFORE label: opacity 0 → 1 + translateX(-30 → 0), ease back.out(1.6), 0.4s
+    - AFTER label: opacity 0 → 1 + translateX(30 → 0), ease back.out(1.6), 0.4s,
+      delay 0.1s after BEFORE
+  - 1.3s onwards: very subtle ambient breath — both halves scale 1 ↔ 1.015 yoyo
+    over 5s sine.inOut (alternating phase so it feels like they're pulsing toward each other)
+  - 1.5-2.0s: divider glow pulses (box-shadow alpha 0.4 ↔ 0.7 yoyo 2.5s)
+  - If caption: caption fades in at 1.8s with opacity + translateY(20 → 0), 0.7s
+  - 4.6-5.0s: divider scales 1 → 1.15 + opacity 1 → 0; halves scale 1 → 0.97 + fade
+
+TYPOGRAPHY:
+  labels: .font-display weight 700, 36px, UPPERCASE, letter-spacing 0.08em
+  caption: .font-display weight 800, 56px
+
+VOICE:
+  Drama da transformação. O lado esquerdo precisa parecer EVITÁVEL, o direito
+  ASPIRACIONAL. Eles competem visualmente; o motion é sobre essa tensão.
+  Pensa "anúncio de campanha política do antes vs depois" — não sutil, frontal.
+
+NEVER:
+  • render without the diagonal divider (the seam IS the identity)
+  • render both halves with the same saturation (defeat the comparison)
+  • diagonal seam mais vertical que 5° de inclinação ou mais que 15° (visual ruído)
+  • labels horizontais sem o background sólido (ficam frágeis)
+  • saturação > 90% no lado AFTER (parece neon, não aspiracional)
+  • caption longer than 8 words (composition needs the visual to breathe)
+  • particles ou blobs no top — a comparação já é o conteúdo
+  • easing suave (sine.*) nas entradas — confronto é rápido
+  • flip-flop dos lados (AFTER à esquerda é antinatural pra leitura ocidental)`.trim(),
+});
+
+STYLE_PRESETS.push({
+  id: 'karaoke-captions',
+  role: 'hook',
+  roleLabel: 'Karaokê · word-sync',
+  defaultFontSet: 'brand',
+  label: 'Karaokê word-sync',
+  description: 'Caption palavra-por-palavra sincronizada com o TTS — vibe TikTok / Reels viral.',
+  emoji: '🎤',
+  bestFor: 'Hooks emocionais, frases de impacto, qualquer momento onde a fala É o conteúdo e merece destaque tipográfico.',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#0a0a0c',
+    warmGlow: { color: '#ffd93c', alpha: 0.12, pos: '50% 30%' },
+    coolGlow: { color: '#ffffff', alpha: 0.04, pos: '50% 80%' },
+    vignetteIntensity: 0.65,
+  },
+  geminiBrief: `
+PALETTE: TikTok / Reels viral caption — high contrast, single accent.
+  bg: brandBackgroundColor (dark) OR '#0a0a0c'
+  text-idle: '#ffffff' (the words waiting to be spoken)
+  text-active: brandPrimaryColor (or '#ffd93c' yellow fallback) — the CURRENT word
+  text-active-bg: rgba(0, 0, 0, 0.6) — slight backdrop behind the active word for legibility
+  text-spoken: rgba(255, 255, 255, 0.55) — words already said, faded back
+
+REQUIRED CONTEXT:
+  This preset works with WORD TIMESTAMPS injected by motionService when available.
+  Look for a "WORD TIMESTAMPS" section in the prompt — it lists each word + start +
+  end (in seconds, relative to the block's audio start). If timestamps ARE provided:
+  build a real karaoke where each word transitions through 3 states (idle → active →
+  spoken). If timestamps are NOT provided: degrade gracefully — show all words at
+  once with a slow stagger reveal (0.15s between words) over the full block duration.
+
+LAYOUT:
+  Single hero caption fills the canvas vertical center:
+    - position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%)
+    - max-width: 920px (leave canvas margins)
+    - text-align: center
+    - .font-display weight 900, 120-180px (BIG — caption is the only thing)
+    - letter-spacing: -0.04em
+    - line-height: 1.08
+    - text-transform: UPPERCASE for hero emotional beats; mixed-case for narrative
+  Each word is a SEPARATE <span> with class clip and an id like word-0, word-1, etc:
+    - inline-block, padding 4px 14px, border-radius 8px
+    - default style: color text-idle, background transparent
+    - active state: color text-active, background text-active-bg
+    - spoken state: color text-spoken, background transparent
+  No decoration, no shapes, no background blobs — karaoke is pure typography.
+
+MOTION (word-by-word, driven by timestamps when present):
+  Per-word lifecycle:
+    - 0.0 → wordStart: idle state (visible at text-idle color, scale 1.0)
+    - wordStart → wordStart + 0.10s: transition to ACTIVE
+      * color text-idle → text-active over 0.10s
+      * scale 1.0 → 1.06 ease back.out(1.6) over 0.18s
+      * background fades in (text-active-bg) over 0.10s
+      * subtle text-shadow blooms: 0 0 24px text-active at 0.4 alpha
+    - wordEnd → wordEnd + 0.15s: transition to SPOKEN
+      * color text-active → text-spoken over 0.15s
+      * scale 1.06 → 1.0 ease power3.out
+      * background fades out
+      * text-shadow returns to none
+  If NO timestamps:
+    - reveal all words sequentially with stagger 0.15s starting at 0.0s
+    - each word: opacity 0 → 1 + scale 0.92 → 1, ease back.out(1.6), 0.35s
+    - all stay visible at text-idle color, no active/spoken states
+  Background ambient:
+    - very subtle radial glow behind the caption block (track-0): opacity 0.08 → 0.14
+      yoyo over 3s sine.inOut, color text-active
+
+TYPOGRAPHY:
+  caption: .font-display weight 900, 120-180px
+  italic OK on 1-2 emotional hot words (sets visual rhythm without breaking flow)
+
+VOICE:
+  TikTok viral caption. O TTS está falando — o texto faz dança com a voz.
+  Não é sub-título passivo, é PROTAGONISTA. Cada palavra ganha o seu instante
+  de espotlight quando é falada. Hierarquia visual = sequência temporal.
+
+NEVER:
+  • mostrar todas as palavras com a mesma cor/peso ao mesmo tempo (defeats the karaoke)
+  • mais de 1 palavra "ativa" simultânea (foco se dissolve)
+  • decoração não-tipográfica (blobs, particles, gradients no fundo)
+  • caption pequeno (< 100px) — karaoke precisa ler de longe
+  • cores active no espectro 250-345 hue (purple/rose/magenta — PRINCIPLE 6)
+  • saturação < 70% no text-active — palavra ativa precisa pular
+  • durations > 0.3s em qualquer transição active (matar o ritmo)
+  • esquecer o estado spoken (palavras spent precisam recuar visualmente)
+  • rotation em palavras (texto bailando = ruído, não dança)
+  • multi-line layout se há > 8 palavras — quebra a leitura linear do karaokê`.trim(),
+});
+
 
 // ─── Native presets (no Gemini — HTML is built programmatically) ──────────
 
