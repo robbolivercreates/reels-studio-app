@@ -12,6 +12,31 @@
 
 import type { StylePresetId } from './motionStylePresets';
 
+/**
+ * Curated typography palettes — each preset declares a default set, but a motion
+ * can override per-instance via MotionConfig.fontSet. Inter is always loaded as
+ * fallback so the headless Chromium has something to render before the chosen
+ * set arrives from Google Fonts CDN.
+ *
+ * - brand: Anton + Space Grotesk + Inter (viral/hype/keyword reveals)
+ * - social: DM Sans (Instagram/TikTok/YouTube overlays — authentic social look)
+ * - apple: system -apple-system + JetBrains Mono fallback (counters, stats, Apple keynote vibe)
+ * - editorial: Libre Baskerville + Libre Franklin (NYT-style charts, quotes, data)
+ * - tech: Space Grotesk + Inter (flowcharts, code, diagrams)
+ * - display: Inter only (safe neutral fallback)
+ */
+export type FontSet = 'brand' | 'social' | 'apple' | 'editorial' | 'tech' | 'display';
+
+/** Optional cinematic overlays applied at render time. */
+export interface MotionOverlays {
+  /** Film grain texture (SVG turbulence, 0.15 opacity). Adds analog/cinematic feel. */
+  grain?: boolean;
+  /** Cinematic radial vignette darkening the edges. */
+  vignette?: boolean;
+  /** Light sweep across .shimmer-sweep-target elements — premium/AI accent. */
+  shimmer?: boolean;
+}
+
 // overlay: motion blends over avatar (screen blend)
 // replace: motion fills the full frame
 // split-bottom: avatar top half, motion bottom half
@@ -53,6 +78,15 @@ export interface MotionConfig {
   renderedAt?: number;
   /** Canvas aspect ratio used when generating this motion. '4:5' for carousel, '9:16' (default) for reels. */
   canvasAspect?: '9:16' | '4:5';
+  /**
+   * Typography palette. When omitted, falls back to the preset's defaultFontSet,
+   * which in turn falls back to 'brand' if the preset doesn't declare one.
+   * The font set is materialized in `buildFullHtmlDoc` into <link> tags +
+   * .font-* CSS classes; the system prompt instructs Gemini which classes to use.
+   */
+  fontSet?: FontSet;
+  /** Premium polish toggles — film grain, vignette, shimmer. All off by default. */
+  overlays?: MotionOverlays;
   /**
    * Ordered snapshot of the user-attached assets at the moment this motion's
    * HTML was generated. Compared at regeneration time against

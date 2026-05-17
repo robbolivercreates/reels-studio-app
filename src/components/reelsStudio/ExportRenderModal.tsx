@@ -119,10 +119,55 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       const cutSession = getCutSession();
       const cutsApplied = !!state.audio.cutsApplied || !!cutSession;
 
-      if (cutSession) {
+      // Decide IF we drop the session up front. The session's audio and the
+      // session's block timings are paired — if we drop the session for the
+      // visuals (because clip ids no longer match), we MUST also drop its
+      // audio. Mixing cut-audio + state.blocks-timings produces a video
+      // where clips render at the wrong moments.
+      //
+      // Drop the session in ANY of these cases:
+      //   (a) A ready clip in state references a block id the session doesn't
+      //       know about — the session is missing that visual.
+      //   (b) An avatar block in the session has no clip in state — the
+      //       renderer would draw text placeholder for it (this is the
+      //       "só texto" bug). Almost always means the session is from a
+      //       pre-rescue/pre-split snapshot and state is the source of truth.
+      //   (c) Session and state block id lists differ by more than a small
+      //       overlap — same reason as (b) but caught more aggressively.
+      const sessionIds = cutSession ? new Set(cutSession.blocks.map(b => b.id)) : null;
+      const stateBlockIds = new Set(state.blocks.map(b => b.id));
+      const readyClipIds = Object.entries(state.avatarClips)
+        .filter(([, c]) => c.status === 'ready')
+        .map(([id]) => id);
+      const clipsOutsideSession = sessionIds
+        ? readyClipIds.filter(id => !sessionIds.has(id))
+        : [];
+      // Session avatar blocks that have NO ready clip in state (these would render as text-only).
+      const sessionAvatarsWithoutClip = cutSession
+        ? cutSession.blocks
+            .filter(b => b.kind === 'avatar')
+            .filter(b => state.avatarClips[b.id]?.status !== 'ready')
+            .map(b => b.id)
+        : [];
+      // Block-id list diverged from state (session ids the user no longer has, or vice versa).
+      const sessionOnlyIds = cutSession ? cutSession.blocks.filter(b => !stateBlockIds.has(b.id)).map(b => b.id) : [];
+      const dropSession = !!cutSession && (
+        clipsOutsideSession.length > 0 ||
+        sessionAvatarsWithoutClip.length > 0 ||
+        sessionOnlyIds.length > 0
+      );
+      if (dropSession) {
+        console.warn(
+          '[export] DROPPING cut session — visuals will not render correctly otherwise.',
+          { clipsOutsideSession, sessionAvatarsWithoutClip, sessionOnlyIds },
+          '· Will use state.blocks + state.audio (uncut) so visuals actually render.',
+        );
+      }
+
+      if (cutSession && !dropSession) {
         console.log('[export] using cut session blob · size=', cutSession.audioBlob.size, '· duration=', cutSession.duration);
         audioBlob = cutSession.audioBlob;
-      } else if (cutsApplied && state.audio.url) {
+      } else if (cutsApplied && !dropSession && state.audio.url) {
         console.log('[export] cutsApplied=true → fetching cut audio from object URL');
         try {
           const resp = await fetch(state.audio.url);
@@ -189,8 +234,18 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       // timings (the audio is the cut audio), but the visual fields
       // (motion, attachedAssets, layout, kind) from state.blocks. Merge
       // them: take session timing, overlay state visuals where ids match.
+      //
+      // Edge case (the "só texto" bug): when state.blocks and cutSession.blocks
+      // share NO ids at all — typically after the user rescued orphaned clips
+      // into different block ids, or split blocks post-cut — the merge above
+      // returns the session blocks unchanged, but the renderer then can't find
+      // their clips/motions in state.avatarClips (keyed by the new ids). Result:
+      // the export renders only text placeholders. Detect that intersection-
+      // empty case and fall back to state.blocks; we accept that the visual
+      // timing won't perfectly hit the cut audio's compressed timeline, but
+      // it's far less broken than silently dropping every clip and motion.
       const effectiveBlocks: ScriptBlock[] = (() => {
-        if (!cutSession) return state.blocks;
+        if (!cutSession || dropSession) return state.blocks;
         if (!cutSessionStale) return cutSession.blocks;
         const stateById = new Map(state.blocks.map(b => [b.id, b]));
         return cutSession.blocks.map(sb => {
@@ -204,7 +259,40 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
           };
         });
       })();
-      const effectiveDuration = !cutSession ? state.audio.duration : cutSession.duration;
+      let effectiveDuration = (!cutSession || dropSession) ? state.audio.duration : cutSession.duration;
+      // Sync drift fix: the renderer derives the project duration from the
+      // sum of block start/end (`layout.totalDuration`) when that's > 0,
+      // overriding `inputs.duration`. When the audio is shorter than that
+      // sum (e.g. silence cut took 4s off but blocks still hold pre-cut
+      // timings, especially in the `dropSession` fallback), ffmpeg `-shortest`
+      // then trims the longer video stream — output ends with the audio
+      // ahead. Rescale block timings so they sum to exactly the audio's
+      // duration: each block keeps its proportional share of the timeline.
+      const blocksSum = effectiveBlocks.reduce((s, b) => s + Math.max(0, b.end - b.start), 0);
+      let rescaledBlocks: ScriptBlock[] = effectiveBlocks;
+      if (blocksSum > 0 && Math.abs(blocksSum - effectiveDuration) > 0.05) {
+        console.warn(
+          '[export] blocks/audio duration mismatch — rescaling block timings to match audio.',
+          { blocksSumSec: blocksSum.toFixed(3), audioDurationSec: effectiveDuration.toFixed(3) },
+        );
+        const scale = effectiveDuration / blocksSum;
+        let cursor = 0;
+        rescaledBlocks = effectiveBlocks.map(b => {
+          const len = Math.max(0, b.end - b.start) * scale;
+          const clone: ScriptBlock = { ...b, start: cursor, end: cursor + len };
+          cursor += len;
+          return clone;
+        });
+        // Tail correction for fp rounding so the very last block's end lands
+        // exactly on `effectiveDuration` (not 0.0001s short, which would let
+        // ffmpeg trim a frame off).
+        if (rescaledBlocks.length > 0) {
+          rescaledBlocks[rescaledBlocks.length - 1] = {
+            ...rescaledBlocks[rescaledBlocks.length - 1],
+            end: effectiveDuration,
+          };
+        }
+      }
 
       // Sanity check — every clip in state should map to a block we're
       // about to render. Mismatches mean visuals will be missing in the
@@ -236,7 +324,7 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       // mux the audio separately from the original MP3 blob.
       const handle = renderMp4(
         {
-          blocks: effectiveBlocks,
+          blocks: rescaledBlocks,
           avatarClips: state.avatarClips,
           activeTake: state.takes.find(t => t.id === state.activeTakeId) ?? null,
           audioBlob,

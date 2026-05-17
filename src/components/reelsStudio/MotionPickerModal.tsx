@@ -26,6 +26,8 @@ interface Props {
   motionColorMode: MotionColorMode;
   /** Setter for the reel-wide motion color mode. */
   onSetMotionColorMode: (mode: MotionColorMode) => void;
+  /** Global reel pacing/energy — minimal vs energetic. */
+  motionEnergy?: 'minimal' | 'energetic';
   /** App UI theme — modal chrome respects this. */
   appTheme: AppTheme;
   onClose: () => void;
@@ -47,20 +49,42 @@ const deriveDefaultText = (blockText: string): string => {
   return sentence.slice(0, 60).split(' ').slice(0, -1).join(' ') + '…';
 };
 
-export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBrandLearned, motionColorMode, onSetMotionColorMode, appTheme, onClose, onSave }) => {
+export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBrandLearned, motionColorMode, onSetMotionColorMode, motionEnergy, appTheme, onClose, onSave }) => {
   const tokens = useTheme(appTheme);
   // Existing motion or fresh draft.
-  const initial: MotionConfig = useMemo(() => block.motion ?? {
-    id: newMotionId(),
-    presetId: 'editorial-clean',
-    // Avatar blocks → split-bottom (50/50). B-roll blocks → replace (full-frame).
-    layer: block.kind === 'broll' ? 'replace' : 'split-bottom',
-    intent: '',
-    text: deriveDefaultText(block.text),
-    durationSec: 4,
-    html: '',
-    status: 'draft',
-    createdAt: Date.now(),
+  const initial: MotionConfig = useMemo(() => {
+    if (block.motion) return block.motion;
+    // Default motion layer follows the block's chosen layout — so the motion
+    // composes the way the user already framed the block, instead of forcing
+    // them to flip to "overlay" every time after framing an avatar-only shot.
+    //
+    //   block.layout                    → motion layer
+    //   avatar-only                     → overlay   (motion sits over the avatar)
+    //   media-only / broll              → replace   (motion takes the full frame)
+    //   avatar-top (avatar | media)     → split-bottom  (motion below)
+    //   media-top  (media | avatar)     → split-top     (motion above)
+    let defaultLayer: MotionLayer;
+    if (block.kind === 'broll') {
+      defaultLayer = 'replace';
+    } else {
+      const layout = block.layout ?? 'avatar-only';
+      if (layout === 'avatar-only') defaultLayer = 'overlay';
+      else if (layout === 'media-only') defaultLayer = 'replace';
+      else if (layout === 'avatar-top') defaultLayer = 'split-bottom';
+      else if (layout === 'media-top')  defaultLayer = 'split-top';
+      else defaultLayer = 'overlay';
+    }
+    return {
+      id: newMotionId(),
+      presetId: 'editorial-clean',
+      layer: defaultLayer,
+      intent: '',
+      text: deriveDefaultText(block.text),
+      durationSec: 4,
+      html: '',
+      status: 'draft',
+      createdAt: Date.now(),
+    };
   }, [block.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [motion, setMotion] = useState<MotionConfig>(initial);
@@ -115,6 +139,9 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
         canvasAspect: motion.canvasAspect,
         existingBrand: brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
         motionColorMode,
+        motionEnergy,
+        fontSet: motion.fontSet,
+        overlays: motion.overlays,
       });
       // First motion of the reel? Cache the brand so subsequent motions reuse it.
       if (result.brand && !brandIdentity && onBrandLearned) {
@@ -506,6 +533,36 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
                 </div>
               </div>
             </div>
+
+            {/* Premium polish — film grain, vignette, shimmer toggles. Universal overlays. */}
+            {!NATIVE_PRESET_IDS.includes(motion.presetId) && (
+              <div className="rounded-md border border-white/10 bg-black/20 p-3 space-y-2">
+                <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Premium polish</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {([
+                    { key: 'grain', label: 'Granulado', desc: 'textura de filme' },
+                    { key: 'vignette', label: 'Vinheta', desc: 'escurece bordas' },
+                    { key: 'shimmer', label: 'Shimmer', desc: 'brilho passando' },
+                  ] as const).map(opt => {
+                    const on = !!motion.overlays?.[opt.key];
+                    return (
+                      <button
+                        key={opt.key}
+                        onClick={() => patch('overlays', { ...motion.overlays, [opt.key]: !on })}
+                        className={`text-left px-2.5 py-1.5 rounded-md border transition-colors text-[10px] ${
+                          on
+                            ? 'bg-fuchsia-500/15 border-fuchsia-500/40 text-zinc-100'
+                            : 'bg-black/20 border-white/10 hover:border-white/20 text-zinc-400'
+                        }`}
+                        title={opt.desc}
+                      >
+                        {on ? '✓ ' : ''}{opt.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Claude UI — command field (always visible for native preset) */}
             {NATIVE_PRESET_IDS.includes(motion.presetId) && (

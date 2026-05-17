@@ -302,7 +302,7 @@ export const generateSpeech = async (
     output_format: 'url',
     normalization_setting: {
       enabled: true,
-      target_loudness: -18,
+      target_loudness: -17,
       target_peak: -0.5,
     },
   };

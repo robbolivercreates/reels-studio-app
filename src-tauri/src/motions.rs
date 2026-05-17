@@ -74,7 +74,7 @@ fn write_project_files(dir: &PathBuf, motion_id: &str, html: &str) -> Result<(),
     let meta = format!(r#"{{ "id": "{}", "name": "{}" }}"#, motion_id, motion_id);
     std::fs::write(dir.join("meta.json"), meta)
         .map_err(|e| format!("Falha ao gravar meta.json: {e}"))?;
-    let pkg = r#"{ "name": "motion", "private": true, "type": "module", "scripts": { "render": "npx --yes hyperframes@0.5.0 render" } }"#;
+    let pkg = r#"{ "name": "motion", "private": true, "type": "module", "scripts": { "render": "npx --yes hyperframes@0.6.7 render" } }"#;
     std::fs::write(dir.join("package.json"), pkg)
         .map_err(|e| format!("Falha ao gravar package.json: {e}"))?;
     Ok(())
@@ -223,7 +223,7 @@ pub async fn render_motion(app: AppHandle, motion_id: String) -> Result<MotionRe
             .current_dir(&dir)
             .env("PATH", "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin")
             .arg("--yes")
-            .arg("hyperframes@0.5.0")
+            .arg("hyperframes@0.6.7")
             .arg("lint")
             .arg("--json")
             .stdout(Stdio::piped())
@@ -299,7 +299,7 @@ pub async fn render_motion(app: AppHandle, motion_id: String) -> Result<MotionRe
     cmd.current_dir(&dir)
         .env("PATH", "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin")
         .arg("--yes")
-        .arg("hyperframes@0.5.0")
+        .arg("hyperframes@0.6.7")
         .arg("render")
         .arg("-o")
         .arg("output.mp4")

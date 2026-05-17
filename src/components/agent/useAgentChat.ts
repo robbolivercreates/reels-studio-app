@@ -309,6 +309,10 @@ function deleteSessionFor(projectKey: string): void {
 export function useAgentChat(locale: Locale, projectKey: string = '_default') {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
+  /** ChatGPT-style "is it stuck?" indicator. True when no stdout chunk
+   *  has arrived for STALL_SECS (Rust-side watchdog, default 30s).
+   *  Cleared automatically when a chunk arrives, or when the run ends. */
+  const [stale, setStale] = useState(false);
   // Session id is scoped to the current project. When the user switches
   // projects (projectKey changes), we reload the matching saved id so the
   // agent picks up the prior conversation. The actual conversation history
@@ -537,6 +541,7 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
         'agent://run-ended',
         () => {
           setBusy(false);
+          setStale(false);
           setMessages(prev =>
             prev
               .map(m => (m.streaming ? { ...m, streaming: false } : m))
@@ -544,6 +549,16 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
           );
           streamMapRef.current.clear();
         },
+      ));
+
+      await installed(listen<{ run_id: string; silent_secs: number }>(
+        'agent://stale-warning',
+        () => setStale(true),
+      ));
+
+      await installed(listen<{ run_id: string }>(
+        'agent://stale-cleared',
+        () => setStale(false),
       ));
 
       await installed(listen<ApprovalRequestEvent>('agent://approval-request', e => {
@@ -796,6 +811,7 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
   return {
     messages,
     busy,
+    stale,
     send,
     cancel,
     approve,

@@ -18,6 +18,11 @@ export type StylePresetId =
   | 'cinematic-dark'
   | 'apple-system'
   | 'warm-editorial'
+  | 'social-cta-follow'
+  | 'counter-reveal'
+  | 'notification-pop'
+  | 'map-zoom'
+  | 'logo-outro'
   | 'claude-ui';
 
 /**
@@ -45,6 +50,27 @@ export interface AtmospherePalette {
   vignetteIntensity: number;
 }
 
+/**
+ * Narrative role this preset fulfills in an explanatory reel. User picks "Hook"
+ * or "Estatística", not "bold-pop" — the mapping is internal. Multiple presets
+ * may share the same role (variants), but each preset has ONE primary role.
+ */
+export type NarrativeRole =
+  | 'hook'
+  | 'concept'
+  | 'problem'
+  | 'stat'
+  | 'step'
+  | 'comparison'
+  | 'example'
+  | 'quote'
+  | 'geo'
+  | 'list'
+  | 'reflection'
+  | 'cta'
+  | 'outro'
+  | 'command'; // claude-ui
+
 export interface StylePreset {
   id: StylePresetId;
   /** Display name in PT-BR. */
@@ -57,10 +83,23 @@ export interface StylePreset {
   bestFor: string;
   /** Intrinsic mood for fallback decisions. */
   bgType: PresetBgType;
+  /**
+   * Narrative role this preset cumpre. Used by the auto-detector + role-grouped
+   * UI picker. When omitted, falls back to a generic "concept" group.
+   */
+  role?: NarrativeRole;
+  /** Short PT-BR label of the role (what the user sees in the picker). */
+  roleLabel?: string;
   /** Atmosphere baked into the preset (replaces generic ATMOSPHERE BAKE). */
   atmosphere: AtmospherePalette;
   /** Detailed style brief sent to Gemini. Written in English (LLMs respond better). */
   geminiBrief: string;
+  /**
+   * Default typography set when MotionConfig.fontSet is not specified.
+   * See FONT_SETS in motionFontSets.ts for the 6 curated palettes.
+   * When omitted, motionService falls back to 'brand'.
+   */
+  defaultFontSet?: import('./motionLibrary').FontSet;
 }
 
 export const STYLE_PRESETS: StylePreset[] = [
@@ -71,6 +110,9 @@ export const STYLE_PRESETS: StylePreset[] = [
     emoji: '📰',
     bestFor: 'Conteúdo informativo, didático, profissional.',
     bgType: 'light',
+    role: 'concept',
+    roleLabel: 'Conceito',
+    defaultFontSet: 'editorial',
     atmosphere: {
       baseBg: '#fafafa',
       warmGlow: { color: '#000000', alpha: 0.04, pos: '20% 30%' },
@@ -105,6 +147,9 @@ MOTION:
   },
   {
     id: 'bold-pop',
+    role: 'hook',
+    roleLabel: 'Hook',
+    defaultFontSet: 'brand',
     label: 'Bold pop',
     description: 'Cores vibrantes, transições rápidas, energia alta.',
     emoji: '🔥',
@@ -146,6 +191,9 @@ MOTION:
   },
   {
     id: 'glass-tech',
+    role: 'step',
+    roleLabel: 'Passo',
+    defaultFontSet: 'tech',
     label: 'Glass tech',
     description: 'Frosted glass, gradiente cyan, vibe tecnológica.',
     emoji: '💎',
@@ -187,6 +235,9 @@ MOTION:
   },
   {
     id: 'kinetic-bold',
+    role: 'comparison',
+    roleLabel: 'Comparação',
+    defaultFontSet: 'brand',
     label: 'Kinetic bold',
     description: 'Tipografia como protagonista, palavras explodindo.',
     emoji: '🎯',
@@ -228,6 +279,9 @@ MOTION:
   },
   {
     id: 'soft-pastel',
+    role: 'reflection',
+    roleLabel: 'Reflexão',
+    defaultFontSet: 'display',
     label: 'Suave pastel',
     description: 'Tons claros, animações orgânicas, lifestyle.',
     emoji: '🌸',
@@ -270,6 +324,9 @@ MOTION:
   },
   {
     id: 'cinematic-dark',
+    role: 'problem',
+    roleLabel: 'Problema',
+    defaultFontSet: 'editorial',
     label: 'Cinemático escuro',
     description: 'Filmico, vinheta, baixo contraste, dramático.',
     emoji: '🎬',
@@ -312,6 +369,9 @@ MOTION:
   },
   {
     id: 'apple-system',
+    role: 'list',
+    roleLabel: 'Lista',
+    defaultFontSet: 'apple',
     label: 'Sistema Apple',
     description: 'Precisão de OS, glass frosted, easing suave.',
     emoji: '🍎',
@@ -368,6 +428,9 @@ VOICE:
   },
   {
     id: 'warm-editorial',
+    role: 'quote',
+    roleLabel: 'Citação',
+    defaultFontSet: 'editorial',
     label: 'Editorial aquecido',
     description: 'Cream paper, terracotta, motion contemplativo.',
     emoji: '🍂',
@@ -414,6 +477,214 @@ MOTION:
 VOICE:
   Warm, human, unhurried. Think the opening of a travel documentary or a
   perfume ad — the motion supports a feeling, doesn't shout for attention.`.trim(),
+  },
+
+  // ─── HyperFrames-inspired presets (Onda 11) ──────────────────────────
+
+  {
+    id: 'social-cta-follow',
+    role: 'cta',
+    roleLabel: 'CTA Social',
+    defaultFontSet: 'social',
+    label: 'Social CTA Follow',
+    description: 'Card bottom estilo Instagram/TikTok — slide-in + botão "Seguir".',
+    emoji: '👥',
+    bestFor: 'CTA final do reel: "siga @handle". Estética autêntica de overlay social.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: 'transparent',
+      warmGlow: { color: '#000000', alpha: 0, pos: '0 0' },
+      coolGlow: { color: '#000000', alpha: 0, pos: '0 0' },
+      vignetteIntensity: 0,
+    },
+    geminiBrief: `
+PALETTE: Authentic social overlay. Card black #1a1a1a, accent depends on platform:
+  Instagram → #0095f6 (blue)
+  TikTok    → #fe2c55 (pink/red)
+  YouTube   → #ff0000 (red)
+  Generic   → use brandPrimaryColor
+
+LAYOUT (CRITICAL — match the HyperFrames reference exactly):
+  - Card pill at bottom: position: absolute; bottom: 160px; left: 50%; translateX(-50%)
+  - Pill: background #1a1a1a, border-radius 75px, padding 25px 40px 25px 25px, box-shadow 0 8px 40px rgba(0,0,0,0.4)
+  - Inside (flex row, gap 30px, center): avatar circle 120px → profile-info (display-name + handle + follower-count) → follow-btn pill
+  - Avatar: circle 120px, border 3px solid #333. If no real avatar available, render a CSS gradient placeholder.
+  - Display name 42px weight 700 white + verified badge 34px (SVG check on platform color)
+  - Handle 28px weight 400 #a0a0a0
+  - Followers 25px weight 400 #737373
+  - Follow button: width 250px height 80px border-radius 40px, platform color → on press transition to dark gray #2f2f2f with chevron
+
+MOTION (5s timeline):
+  - 0.0-0.6s: card slides in from y:300, opacity 0→1, ease "power3.out"
+  - 1.0s: button press scale 0.92, duration 0.15, ease "power2.out"
+  - 1.15s: button release with elastic.out(1, 0.4), background instant change to #2f2f2f
+  - 1.15-1.22s: "Follow" text fades out, "Following ✓" fades in
+  - 3.8-4.05s: card slides back to y:300, opacity 1→0
+
+VOICE: Authentic social platform overlay — viewers should feel they're seeing a real Instagram/TikTok notification, not a designed graphic.`.trim(),
+  },
+
+  {
+    id: 'counter-reveal',
+    role: 'stat',
+    roleLabel: 'Estatística',
+    defaultFontSet: 'apple',
+    label: 'Counter reveal',
+    description: 'Apple Money Count — número conta de 0 a X com green flash + burst.',
+    emoji: '💰',
+    bestFor: 'Stats reveal: "1M views", "R$ 50K em 30 dias", "+247% growth". Vibe finance Apple.',
+    bgType: 'light',
+    atmosphere: {
+      baseBg: '#fdfefe',
+      warmGlow: { color: '#30d158', alpha: 0.08, pos: '50% 50%' },
+      coolGlow: { color: '#000000', alpha: 0.03, pos: '50% 50%' },
+      vignetteIntensity: 0.2,
+    },
+    geminiBrief: `
+PALETTE: Apple finance style.
+  bg: #fdfefe (off-white)
+  text: #111315 (near black)
+  flash accent: #30d158 (Apple green — fires during the count climax)
+  shadow: rgba(7, 84, 31, 0.2) (green-tinted, anchors the cash icons)
+
+LAYOUT:
+  - Stage centered. Single hero element: the number, .font-tech with tabular-nums, size 190px, weight 900.
+  - Letter-spacing 0, line-height 0.9. Text-shadow: 0 3px 0 rgba(255,255,255,0.58), 0 18px 36px rgba(17,19,21,0.14), 0 42px 92px rgba(17,19,21,0.1).
+  - Optional caption above (24-32px .font-body weight 600, color #111315 60% alpha) — "R$ ganhos em 30 dias", "Views totais", etc.
+  - Money/coin icons: 6-12 SVG bills (96×52, #30d158 rounded 10px) + coins (64px radial gradient #fff7a6 → #ffd54f → #d9a514). Hidden until climax.
+
+MOTION (5s timeline) — copy this exact rhythm from Apple Money Count:
+  - 0.0-0.3s: number appears at scale 0.6, opacity 0 → scale 1, opacity 1, ease "back.out(1.4)"
+  - 0.3-3.5s: number counts from 0 to target value with ease "power2.out". Use gsap.to(obj, { value: target, onUpdate: () => el.textContent = formatted }). For currency, format with thousands separator.
+  - 3.5-3.65s: green flash overlay (#30d158, opacity 0 → 0.7 → 0 in 150ms total)
+  - 3.55-4.5s: money/coin icons burst from center, each with random angle 0-360deg, distance 200-500px, rotation -180-180deg, opacity 1 → 0, duration 0.7-0.9s, ease "power2.out". Stagger 0.02s between particles.
+  - 4.5-5.0s: final hold + tiny scale pulse 1 → 1.04 → 1
+
+VOICE: Confident, decisive, premium. The number is the hero — everything else supports it.`.trim(),
+  },
+
+  {
+    id: 'notification-pop',
+    role: 'example',
+    roleLabel: 'Exemplo',
+    defaultFontSet: 'apple',
+    label: 'Notification pop',
+    description: 'Banner estilo macOS notification — pop top-right + ícone + mensagem.',
+    emoji: '🔔',
+    bestFor: 'Hook "olha o que recebi": DM, comment, payment notification, news alert.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: 'transparent',
+      warmGlow: { color: '#000000', alpha: 0.4, pos: '50% 50%' },
+      coolGlow: { color: '#000000', alpha: 0.2, pos: '50% 50%' },
+      vignetteIntensity: 0.5,
+    },
+    geminiBrief: `
+PALETTE: macOS Sonoma glass notification.
+  bg behind: subtle dark blur (composition has avatar/broll behind, so transparent)
+  banner: background rgba(30, 30, 30, 0.82), backdrop-filter blur(20px) saturate(180%)
+  border: 1px solid rgba(255, 255, 255, 0.1)
+  text white: #ffffff
+  text secondary: rgba(255, 255, 255, 0.7)
+
+LAYOUT:
+  - Banner pill positioned absolute top: 80px, right: 60px (or centered if motion is replace-layer)
+  - Width 720px, padding 20px 28px, border-radius 22px
+  - Inside flex row gap 18px: app-icon (72px square rounded 16px with brand color or SVG logo) + content (flex column gap 4px): app-name (.font-body 16px weight 500 secondary) + title (.font-display 22px weight 600 white) + message (.font-body 18px weight 400 secondary)
+  - Optional timestamp top-right small (14px, very subtle "agora")
+
+MOTION (5s timeline) — Apple notification rhythm:
+  - 0.0-0.55s: banner slides in from y:-120, opacity 0 → y:0, opacity 1, ease "expo.out". slight x:30 jitter at end for organic landing.
+  - 0.55s: subtle scale 1 → 1.015 → 1 over 0.3s (settle bounce)
+  - 0.85-3.8s: hold (this is where the viewer reads). Optional: small float y:0 → 2 → 0 every 1.5s for life.
+  - 3.8-4.4s: tiny press scale 0.98 ease "power2.in" then continue
+  - 4.4-5.0s: banner slides up to y:-120, opacity 1 → 0, ease "power3.in"
+
+VOICE: Native macOS, real notification — not a designed graphic. Restraint over flash.`.trim(),
+  },
+
+  {
+    id: 'map-zoom',
+    role: 'geo',
+    roleLabel: 'Geografia',
+    defaultFontSet: 'editorial',
+    label: 'Map zoom',
+    description: 'Mapa Apple-style com pin + circle + label editorial. Geo content.',
+    emoji: '🗺️',
+    bestFor: 'Locale reveal: "São Paulo, Brasil", trajeto "de X pra Y", country highlight.',
+    bgType: 'light',
+    atmosphere: {
+      baseBg: '#f5f5f7',
+      warmGlow: { color: '#000000', alpha: 0.04, pos: '20% 30%' },
+      coolGlow: { color: '#000000', alpha: 0.06, pos: '80% 70%' },
+      vignetteIntensity: 0.35,
+    },
+    geminiBrief: `
+PALETTE: Apple Maps + editorial overlay.
+  bg: #f5f5f7 (Apple system gray)
+  map area: render an abstract topographic CSS gradient (no real image — soft layered radial gradients in muted gray-greens like #d4d8d3, #b8c4b8) covering 70% of viewport
+  ocean overlay: linear-gradient at low opacity to suggest water mass
+  pin/marker: red dot #ff3b30 with white center, drop-shadow 0 8px 24px rgba(255,59,48,0.4)
+  scribble/route: SVG path stroked in #ff3b30 width 6px, stroke-dasharray for hand-drawn feel
+  label: pop-up card white #fff with 1px border rgba(0,0,0,0.08), padding 16px 24px, border-radius 18px, drop-shadow
+
+LAYOUT:
+  - Background: 1080×1920 with abstract map gradient (subdivide into 3-5 radial gradients overlapping for organic terrain)
+  - SVG route or scribble drawn on top: use stroke-dasharray + stroke-dashoffset for "drawing" animation
+  - One pin/marker at the focal point of the journey/location
+  - Label pop-up appears near the pin: contains location name (.font-display Libre Baskerville 64-80px) + optional subtitle (.font-body Libre Franklin 24px weight 500)
+
+MOTION (varies with duration, default 6s):
+  - 0.0-1.2s: map appears via clip-path inset reveal from center, scale 1.05 → 1, opacity 0 → 1, ease "expo.out"
+  - 1.2-2.8s: SVG route/scribble draws in via stroke-dashoffset, ease "power2.inOut"
+  - 2.8-3.2s: pin drops in from y:-80, scale 0 → 1, ease "back.out(2)" with bounce
+  - 3.2-3.6s: pulse ring expands around pin: scale 0.4 → 2.5, opacity 0.6 → 0, repeated 2x with stagger 0.4s
+  - 3.6-4.4s: label pop-up slides in y:20, opacity 0 → 1, ease "expo.out"
+  - hold remaining time
+
+VOICE: Editorial documentary — like a New York Times interactive map. Premium, considered, not gimmicky.`.trim(),
+  },
+
+  {
+    id: 'logo-outro',
+    role: 'outro',
+    roleLabel: 'Outro',
+    defaultFontSet: 'brand',
+    label: 'Logo outro',
+    description: 'Logo assembly piece-by-piece + glow bloom + tagline. Encerramento brand.',
+    emoji: '🎬',
+    bestFor: 'Fim de reel com identidade da marca, transition pra sign-off, brand outro.',
+    bgType: 'dark',
+    atmosphere: {
+      baseBg: '#0a0a0f',
+      warmGlow: { color: '#ff3b30', alpha: 0.15, pos: '50% 50%' },
+      coolGlow: { color: '#0080ff', alpha: 0.1, pos: '50% 50%' },
+      vignetteIntensity: 0.7,
+    },
+    geminiBrief: `
+PALETTE: Dark cinematic with brand-glow center.
+  bg: deep #0a0a0f
+  glow ring: radial-gradient(circle at 50% 50%, brandPrimaryColor at 25% alpha 0%, transparent 70%) — bloom anchor for logo
+  logo color: use brandPrimaryColor or pure white if no brand
+  tagline: white at 70% alpha
+  URL pill: rgba(255,255,255,0.08) bg, 1px solid rgba(255,255,255,0.15) border
+
+LAYOUT:
+  - Stage 100% centered, vertically aligned middle
+  - Logo: build out of 3-5 geometric pieces (circles, rectangles, diagonals) that assemble into a single shape. If brand has a real wordmark, use that as the LOGO TEXT in .font-display (Anton) at 180-220px. If pure logomark, build it from <div> shapes with brand color fills.
+  - Tagline below: .font-body 36-48px weight 500, letter-spacing 0.02em, color rgba(255,255,255,0.7), 1 line max
+  - URL pill below tagline: padding 14px 28px, border-radius 999px, .font-tech 22px weight 500. Examples: "instagram.com/@handle", "site.com.br"
+
+MOTION (6s timeline) — assembly + bloom rhythm:
+  - 0.0-1.2s: pieces fly in from random off-screen positions (random angle 0-360°, distance 1200-1800px), each piece staggered 0.08-0.12s, rotation -180-180deg, ease "expo.out"
+  - 1.2-1.5s: pieces snap to final positions with subtle scale 1.05 → 1 settle, drop-shadow grows
+  - 1.5-2.3s: glow bloom expands behind logo: radial-gradient layer scales 0.3 → 1.8, opacity 0 → 0.6 → 0.3, slow "power1.inOut"
+  - 2.3-3.0s: tagline fades in y:30 → y:0, opacity 0 → 1, ease "power3.out"
+  - 3.0-3.6s: URL pill slides in y:20 → y:0, opacity 0 → 1, scale 0.94 → 1, ease "back.out(1.4)"
+  - 3.6-5.4s: everything holds. Optional subtle floating: tagline y:0 → 2 → 0 cycle 3s.
+  - 5.4-6.0s: whole composition fades to opacity 0 + slight scale 1 → 1.02 zoom-out feel
+
+VOICE: Final beat — brand asserts itself, audience leaves with the name embedded. Cinematic, controlled.`.trim(),
   },
 ];
 
@@ -466,7 +737,7 @@ FORBIDDEN — your output MUST NOT contain:
 - setTimeout, setInterval — use GSAP timelines only
 - requestAnimationFrame — let GSAP drive it
 - external image URLs from the internet (http://, https://) — EXCEPTION: asset:// URLs provided in PROJECT ASSETS are allowed
-- adding NEW external font URLs in the HTML body. The host page already preloads Inter, Anton, and Space Grotesk via <link> tags in <head>. Use ONLY those three families (and "system-ui"/"sans-serif" as last-resort fallbacks). Do not add @import of fonts.googleapis.com — they will fail at render time and the text will fall back to a generic sans.
+- adding NEW external font URLs in the HTML body. The host page preloads the active TYPOGRAPHY SET (see the TYPOGRAPHY section of your brief) plus Inter as fallback. Use ONLY the .font-display / .font-tech / .font-body convenience classes defined in <style>, or "system-ui"/"sans-serif" as last-resort fallbacks. Do not add @import of fonts.googleapis.com — they will fail at render time and the text will fall back to a generic sans.
 - video or audio tags — motion is visual only · EXCEPTION: when PINNED ASSET is a video, ONE <video muted autoplay loop playsinline> tag is allowed (the asset itself).
 - any feature that depends on user interaction (click, hover, scroll)
 - console.log, alert, debugger
@@ -492,6 +763,8 @@ export const NATIVE_PRESET_IDS: StylePresetId[] = ['claude-ui'];
 // Append the claude-ui entry to the canonical preset list.
 STYLE_PRESETS.push({
   id: 'claude-ui',
+  role: 'command',
+  roleLabel: 'Comando',
   label: 'Claude UI',
   description: 'Interface escura do Claude com digitação do comando e resposta animada.',
   emoji: '🤖',

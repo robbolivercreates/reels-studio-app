@@ -15,7 +15,9 @@
  */
 
 import { GoogleGenAI, Type } from '@google/genai';
-import type { MotionConfig } from '../components/reelsStudio/motionLibrary';
+import type { MotionConfig, FontSet } from '../components/reelsStudio/motionLibrary';
+import { buildFontSetHead, FONT_SETS_PROMPT_TABLE } from '../components/reelsStudio/motionFontSets';
+import { buildOverlays, OVERLAYS_PROMPT_HINT } from '../components/reelsStudio/motionOverlays';
 import {
   STYLE_PRESETS,
   ANIMATION_GRAMMAR_BRIEF,
@@ -91,33 +93,29 @@ Rules of thumb:
 - One word can be HIGHLIGHTED — different weight, accent color, or a thick underline that draws itself across it
 
 ═══════════════════════════════════════════════════════════
- TYPOGRAPHY STACK — three fonts, three roles (DON'T MIX RANDOMLY)
+ TYPOGRAPHY STACK — pick the font SET, then use the three roles
 ═══════════════════════════════════════════════════════════
-The render-time HTML pre-loads 3 fonts. PICK INTENTIONALLY based on the role:
+Every composition declares ONE active typography set in the host page. The set
+determines which families are loaded by the time you render. You DO NOT pick
+families — you pick ROLES via three CSS classes, and the set decides which
+family backs each role:
 
   ┌────────────────────────────────────────────────────────────────┐
-  │ ROLE          │ FONT             │ CSS CLASS    │ USE FOR     │
+  │ ROLE          │ CSS CLASS         │ USE FOR                   │
   ├────────────────────────────────────────────────────────────────┤
-  │ Display HERO  │ Anton (cond.)    │ .font-display│ giant       │
-  │               │ single weight    │              │ headlines,  │
-  │               │ caps natural     │              │ caption-    │
-  │               │                  │              │ style "REEL │
-  │               │                  │              │ TYPOGRAPHY" │
-  ├────────────────────────────────────────────────────────────────┤
-  │ Tech/Number   │ Space Grotesk    │ .font-tech   │ stats,      │
-  │               │ 400-700          │              │ counters,   │
-  │               │ geometric tight  │              │ quotes,     │
-  │               │                  │              │ techy vibe  │
-  ├────────────────────────────────────────────────────────────────┤
-  │ Body/UI       │ Inter            │ .font-body   │ subtitles,  │
-  │               │ 400-900          │              │ captions,   │
-  │               │ neutral          │              │ explainers  │
+  │ Display HERO  │ .font-display     │ giant headlines, big words│
+  │ Tech/Number   │ .font-tech        │ stats, counters, labels   │
+  │ Body/UI       │ .font-body        │ subtitles, captions       │
   └────────────────────────────────────────────────────────────────┘
 
-CONTRAST RULE — every motion should pair AT LEAST TWO of these for visual hierarchy:
-- "ANTON HERO" (display, 200px, uppercase) above "small inter caption" (24px) = pro look
-- "Space Grotesk 88" (counter big) + "Inter caption" (16px label below) = data slide
-- AVOID single-font motions — they read as "Bootstrap default" instead of "produced reel"
+The active set is one of: brand, social, apple, editorial, tech, display.
+You'll see "TYPOGRAPHY SET: <name>" in the user brief — write CSS that
+respects the set's vibe.
+
+CONTRAST RULE — pair AT LEAST TWO of the three roles in every motion:
+- .font-display (200px) above .font-body (24px caption) = pro hierarchy
+- .font-tech (88px counter) + .font-body (16px label below) = data slide
+- AVOID single-class motions — they read flat. Hierarchy is the point.
 
 EXAMPLES:
 
@@ -682,6 +680,23 @@ export interface GenerateMotionInput {
    * their text to near-black. Light presets are unaffected.
    */
   motionColorMode?: 'dark' | 'light';
+  /**
+   * Energy/pacing nudge. 'minimal' = slow, restraint, fewer particles.
+   * 'energetic' = fast, kinetic, more punch. Applied as a single paragraph
+   * appended to the system prompt. Default behaviour (omitted) = 'energetic'.
+   */
+  motionEnergy?: 'minimal' | 'energetic';
+  /**
+   * Typography palette to use. Overrides the preset's defaultFontSet when
+   * provided. When omitted, the preset's defaultFontSet (or 'brand') wins.
+   */
+  fontSet?: FontSet;
+  /**
+   * Premium polish overlays to enable. Forwarded into the rendered HTML;
+   * Gemini is told via the prompt which are active so it can add the
+   * `.shimmer-sweep-target` class where appropriate.
+   */
+  overlays?: { grain?: boolean; vignette?: boolean; shimmer?: boolean };
 }
 
 // ─── Step 1: Brand research via Google Search grounding ───────────────────────
@@ -1576,21 +1591,29 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     // overlay
     return [
       `╔══════════════════════════════════════════════════════╗`,
-      `  CANVAS SLOT — OVERLAY (screen blend over avatar)`,
+      `  CANVAS SLOT — FLOATING OVERLAY (mobile vertical short-form)`,
       `╚══════════════════════════════════════════════════════╝`,
-      `This composition is blended over the avatar using SCREEN blend mode at 88% opacity.`,
-      `DESIGN RULES FOR OVERLAY:`,
-      `• Background MUST be #000000 or very dark — dark pixels become transparent in screen blend`,
-      `• Only bright/colored elements will be visible over the avatar`,
-      `• Text: white or bright brand color, large, with strong glow/shadow`,
-      `• Decorative shapes: bright, colored, at 60-80% opacity — avoid white which washes out`,
-      `• NO background fills over 15% brightness — they will wash out the avatar face`,
-      `• Think: floating text and glowing elements that appear to hover over the person`,
+      `This composition floats over a talking presenter in 9:16 vertical video (Reels/TikTok/Shorts).`,
+      `Think: Submagic-style caption card, Hormozi pop-text, floating data card centered over the lower-mid frame.`,
+      `NOT a broadcast TV lower-third (those occupy the bottom 20% — but the bottom 15-20% of mobile vertical`,
+      `video is OCCLUDED by platform UI: likes, comments, caption rail, progress bar).`,
+      `Composited with SCREEN blend, so #000000 backgrounds become transparent.`,
       ``,
-      `📐 SAFE AREA (overlay, 1080×1920):`,
-      `  Avatar face typically lives in y:480–1240. KEEP THAT ZONE CLEAR of large opaque graphics.`,
-      `  Place text/badges in y:200–460 (above face) or y:1280–1540 (below face).`,
-      `  Decorative particles can drift across the face zone but must stay sparse and never opaque.`,
+      `DESIGN RULES — FLOATING OVERLAY:`,
+      `• Background MUST be pure #000000 — dark pixels become transparent under screen blend`,
+      `• ALL primary content lives in y:1114–1536 (the floating-card zone, 22% height of the canvas)`,
+      `• y:0–1100 (top 57%) MUST be pure black — that's where the presenter's face/chest live; nothing visible there`,
+      `• y:1536–1920 (bottom 20%) MUST be pure black — that's the platform UI occlusion zone, anything there gets hidden by the app chrome on upload`,
+      `• Text: white or bright brand color, bold sans, strong drop shadow so it reads over the moving presenter behind`,
+      `• Energy: a single hero element (headline / stat / label) — NOT a dense composition. Mobile = one idea per overlay.`,
+      `• NO atmospheric gradients/glows outside y:1114–1536 — they'd brighten the face or get clipped`,
+      ``,
+      `📐 SAFE AREA (floating overlay card, 1080×1920):`,
+      `  Primary content: x:80–1000, y:1114–1536 (the mobile-safe floating zone)`,
+      `  Black-only zones (KEEP PURE BLACK):`,
+      `    • y:0–1100 (top — presenter zone)`,
+      `    • y:1536–1920 (bottom — platform UI occlusion zone)`,
+      `  Soft fade buffer: 40px (~y:1080–1120 and ~y:1500–1540) — atmosphere/particles only, no text.`,
     ].join('\n');
   })();
 
@@ -1605,32 +1628,43 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     const b = parseInt(m.length === 3 ? m[2] + m[2] : m.slice(4, 6), 16);
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   };
+  // When the reel is in LIGHT mode, override the atmosphere's bg + glow alphas
+  // so the snippet itself is light. Otherwise the dark preset's `baseBg` would
+  // get rendered into the HTML literally, overriding the lightModeSection above
+  // it (Gemini follows the most concrete CSS — and the atmosphere snippet IS
+  // copy-paste CSS). vignette is suppressed in light mode (dark vignettes on
+  // white look filthy).
+  const forceLight = input.motionColorMode === 'light' && preset.bgType === 'dark';
+  const atmBg = forceLight ? '#ffffff' : atm.baseBg;
+  const atmWarmAlpha = forceLight ? Math.min(atm.warmGlow.alpha, 0.06) : atm.warmGlow.alpha;
+  const atmCoolAlpha = forceLight ? Math.min(atm.coolGlow.alpha, 0.06) : atm.coolGlow.alpha;
+  const atmVignette = forceLight ? 0 : atm.vignetteIntensity;
   const atmosphereSection = [
     `╔══════════════════════════════════════════════════════╗`,
     `  🎨 ATMOSPHERE — copy this snippet for track 0`,
     `╚══════════════════════════════════════════════════════╝`,
-    `Preset "${preset.label}" declares this atmosphere palette. Use it AS-IS for the`,
-    `track-0 background — do not invent another colour scheme. Then add the vignette`,
-    `pass below as a sibling (track 1, full duration).`,
+    forceLight
+      ? `User is in LIGHT MODE. The atmosphere below has already been re-tinted to a bright palette — use it AS-IS, don't restore the preset's dark colours.`
+      : `Preset "${preset.label}" declares this atmosphere palette. Use it AS-IS for the track-0 background — do not invent another colour scheme. Then add the vignette pass below as a sibling (track 1, full duration).`,
     ``,
     `Track 0 — atmosphere base:`,
     `  <div id="atmos-bg" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="0"`,
-    `       style="position:absolute; inset:0; background:${atm.baseBg};`,
+    `       style="position:absolute; inset:0; background:${atmBg};`,
     `              background-image:`,
-    `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atm.warmGlow.alpha)} 0%, transparent 60%),`,
-    `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atm.coolGlow.alpha)} 0%, transparent 65%);"></div>`,
+    `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atmWarmAlpha)} 0%, transparent 60%),`,
+    `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atmCoolAlpha)} 0%, transparent 65%);"></div>`,
     ``,
-    atm.vignetteIntensity > 0
+    atmVignette > 0
       ? [
           `Track 1 — vignette pass (anchors the eye, looks expensive):`,
           `  <div id="atmos-vignette" class="clip atmos-vignette" data-start="0" data-duration="${input.durationSec}" data-track-index="1"`,
-          `       style="opacity:${atm.vignetteIntensity};"></div>`,
+          `       style="opacity:${atmVignette};"></div>`,
           ``,
         ].join('\n')
       : '',
-    `The base bg color "${atm.baseBg}" is the canvas. ALL other elements should harmonise`,
-    `with it: text colours that contrast 7:1+ against it, accents that sit warmly on it,`,
-    `shadows tinted to its hue (warm bg → warm shadows, NEVER black shadows on cream).`,
+    forceLight
+      ? `The base bg color is "${atmBg}" (white). ALL other elements should harmonise with a bright canvas: dark text (#1d1d1f), subtle shadows tinted with the brand accent, NEVER pure black shadows on white. NO dark vignettes.`
+      : `The base bg color "${atmBg}" is the canvas. ALL other elements should harmonise with it: text colours that contrast 7:1+ against it, accents that sit warmly on it, shadows tinted to its hue (warm bg → warm shadows, NEVER black shadows on cream).`,
     ``,
   ].filter(Boolean).join('\n');
 
@@ -1663,6 +1697,21 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
     `--- STYLE PRESET: ${preset.label} (use brand colors above if available) ---`,
     preset.geminiBrief,
+    '',
+    `--- TYPOGRAPHY SET: ${input.fontSet ?? preset.defaultFontSet ?? 'brand'} ---`,
+    FONT_SETS_PROMPT_TABLE,
+    '',
+    input.overlays && (input.overlays.grain || input.overlays.vignette || input.overlays.shimmer)
+      ? `--- ACTIVE OVERLAYS ---\nActive: ${[
+          input.overlays.grain && 'grain',
+          input.overlays.vignette && 'vignette',
+          input.overlays.shimmer && 'shimmer',
+        ].filter(Boolean).join(', ')}\n${OVERLAYS_PROMPT_HINT}`
+      : '',
+    `--- ENERGY: ${input.motionEnergy ?? 'energetic'} ---`,
+    input.motionEnergy === 'minimal'
+      ? 'Pacing slow and restrained. Fewer particles, longer holds (each beat 0.4-0.8s longer than default). Prefer fade + small translate over scale/rotate. Avoid overshoot, avoid kinetic bursts, avoid stagger faster than 0.08s. Single focal element per moment. Think Apple keynote, NYT, perfume ad.'
+      : 'Pacing fast and kinetic. More particles, shorter holds. Use scale/rotate freely. Overshoot with back.out / elastic.out is welcome. Stagger 0.03-0.06s. Multiple elements can move at once. Think viral Reels, Buck/Oddfellows, Nike commercial.',
     '',
     ANIMATION_GRAMMAR_BRIEF,
     '',
@@ -1729,6 +1778,15 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
   const isSplit = motion.layer === 'split-bottom' || motion.layer === 'split-top';
   const canvasH = isSplit ? 960 : canvasAspect === '4:5' ? 1350 : 1920;
   const isLight = motionColorMode === 'light';
+
+  // Font set resolution: explicit on motion → preset default → 'brand' fallback.
+  const preset = findStylePreset(motion.presetId);
+  const fontSet: FontSet = motion.fontSet ?? preset.defaultFontSet ?? 'brand';
+  const { links: fontLinks, css: fontCss } = buildFontSetHead(fontSet);
+
+  // Overlays (grain / vignette / shimmer) — all optional, default off.
+  const overlay = buildOverlays(motion.overlays);
+
   return `<!doctype html>
 <html lang="pt-BR">
   <head>
@@ -1737,7 +1795,9 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
     <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <!-- Inter is ALWAYS loaded as a safety fallback so first-frame text never renders generic sans. -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=block" rel="stylesheet" />
+    ${fontLinks}
     <style>
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
@@ -1758,10 +1818,7 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
         transform-style: preserve-3d;
       }
       .clip { will-change: opacity, transform; }
-      /* Convenience classes the prompt encourages Gemini to use. */
-      .font-display { font-family: "Anton", "Inter", system-ui, sans-serif; letter-spacing: -0.01em; text-transform: uppercase; }
-      .font-tech    { font-family: "Space Grotesk", "Inter", system-ui, sans-serif; letter-spacing: -0.02em; }
-      .font-body    { font-family: "Inter", system-ui, sans-serif; }
+      ${fontCss}
       /* Cinematic atmosphere helper — see ATMOSPHERE section in prompt.
          Dark mode: strong black inset shadow anchors the eye to centre.
          Light mode: very subtle warm-grey inset so edges don't blow out. */
@@ -1771,6 +1828,7 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
           ? 'inset 0 0 160px rgba(0,0,0,0.10), inset 0 0 60px rgba(0,0,0,0.06)'
           : 'inset 0 0 240px rgba(0,0,0,0.65), inset 0 0 80px rgba(0,0,0,0.45)'};
       }
+      ${overlay.css}
     </style>
   </head>
   <body>
@@ -1784,6 +1842,8 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
     >
 ${motion.html}
     </div>
+    ${overlay.html}
+    ${overlay.script ? `<script>${overlay.script}</script>` : ''}
   </body>
 </html>`;
 };

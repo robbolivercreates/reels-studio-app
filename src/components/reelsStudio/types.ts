@@ -19,7 +19,7 @@ export type BlockLayout = 'avatar-only' | 'media-only' | 'avatar-top' | 'media-t
  *  - dissolve: cross-dissolve avatar A → avatar B over ~333ms with audio cross-fade
  * undefined = 'fade' (current behaviour, kept for back-compat).
  */
-export type BlockTransition = 'cut' | 'fade' | 'dissolve';
+export type BlockTransition = 'cut' | 'fade' | 'dissolve' | 'whip-pan' | 'zoom-blur' | 'glitch' | 'light-flash';
 
 /**
  * Tone override applied when regenerating a script in the preview panel.
@@ -305,6 +305,8 @@ export type MotionColorMode = 'dark' | 'light';
 export type AppTheme = 'dark' | 'light';
 
 export interface ReelsState {
+  /** Stable identifier for this project in the named_projects store. Set on creation/migration; never changes after that. */
+  activeProjectId: string | null;
   projectName: string;
   blocks: ScriptBlock[];
   audio: AudioState;
@@ -317,8 +319,21 @@ export interface ReelsState {
   activeTakeId: string | null;
   /** Global light/dark mode for motion generation. Default: 'dark'. */
   motionColorMode: MotionColorMode;
+  /**
+   * Energy/pacing nudge for motion generation. 'minimal' = slow, restraint,
+   * fewer particles. 'energetic' = fast, kinetic, more punch. Default: 'energetic'.
+   * Cascades into the system prompt as a single paragraph instruction.
+   */
+  motionEnergy: 'minimal' | 'energetic';
   /** App UI theme (top bar, panels, modals). Default: 'dark'. */
   appTheme: AppTheme;
+  /**
+   * Sticky layout for new avatar blocks. Whenever the user changes the layout
+   * of an avatar block, this is updated; new avatar blocks (via add-block or
+   * resplit-blocks) inherit this value instead of falling back to a hardcoded
+   * default. Default: 'avatar-top'.
+   */
+  lastAvatarLayout: BlockLayout;
   /** Most recent video-reference analysis. Cleared by `replace-blocks` only when not provided. */
   lastAnalysis?: PersistedAnalysis;
   /** History of analyses (newest first). Capped to keep storage bounded. */
@@ -339,6 +354,7 @@ export interface ReelsState {
 
 export type ReelsAction =
   | { type: 'set-name'; name: string }
+  | { type: 'set-active-project-id'; id: string | null }
   | { type: 'add-block'; afterId?: string }
   | { type: 'duplicate-block'; id: string }
   | { type: 'remove-block'; id: string }
@@ -369,6 +385,7 @@ export type ReelsAction =
   | { type: 'set-voice-speed'; speed: number }
   | { type: 'set-aspect'; aspect: ReelsState['aspect'] }
   | { type: 'set-motion-color-mode'; mode: MotionColorMode }
+  | { type: 'set-motion-energy'; energy: 'minimal' | 'energetic' }
   | { type: 'set-app-theme'; theme: AppTheme }
   | { type: 'audio-start' }
   | { type: 'audio-success'; url: string; duration: number; peaks: number[]; words: WordTimestamp[]; voiceId: string }

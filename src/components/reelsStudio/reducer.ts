@@ -9,6 +9,7 @@ const DEFAULT_BLOCKS: ScriptBlock[] = [
 ];
 
 export const INITIAL_STATE: ReelsState = {
+  activeProjectId: null,
   projectName: 'Reel sem título',
   blocks: DEFAULT_BLOCKS,
   audio: {
@@ -36,7 +37,9 @@ export const INITIAL_STATE: ReelsState = {
   voiceSpeed: 1.0,
   analyses: [],
   motionColorMode: 'dark',
+  motionEnergy: 'energetic',
   appTheme: 'dark',
+  lastAvatarLayout: 'avatar-top',
 };
 
 const ANALYSIS_HISTORY_LIMIT = 20;
@@ -62,8 +65,22 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
     case 'set-name':
       return { ...state, projectName: action.name };
 
+    case 'set-active-project-id':
+      return { ...state, activeProjectId: action.id };
+
     case 'add-block': {
-      const newBlock: ScriptBlock = { id: uid(), kind: 'avatar', text: '', start: 0, end: 0 };
+      const newBlock: ScriptBlock = {
+        id: uid(),
+        kind: 'avatar',
+        text: '',
+        start: 0,
+        end: 0,
+        // Sticky layout: new avatar blocks inherit the last layout the user chose.
+        // 'avatar-only' is the implicit fallback when state has no preference yet.
+        ...(state.lastAvatarLayout && state.lastAvatarLayout !== 'avatar-only'
+          ? { layout: state.lastAvatarLayout }
+          : {}),
+      };
       if (!action.afterId) return { ...state, blocks: [...state.blocks, newBlock] };
       const idx = state.blocks.findIndex(b => b.id === action.afterId);
       const next = [...state.blocks];
@@ -234,8 +251,15 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
     }
 
     case 'set-block-layout': {
+      const targetBlock = state.blocks.find(b => b.id === action.id);
+      // When the user changes the layout of an avatar block, remember the choice
+      // so future avatar blocks (add/resplit/replace) start with the same layout.
+      const stickyUpdate = targetBlock?.kind === 'avatar'
+        ? { lastAvatarLayout: action.layout }
+        : {};
       return {
         ...state,
+        ...stickyUpdate,
         blocks: state.blocks.map(b => {
           if (b.id !== action.id) return b;
           if (action.layout === 'avatar-only') {
@@ -453,9 +477,18 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
           nextClips[newId] = clip;
         }
       }
+      // Apply sticky avatar layout: any new avatar block coming in without
+      // an explicit layout inherits the user's last choice. Existing avatar
+      // blocks with their own layout are untouched.
+      const sticky = state.lastAvatarLayout;
+      const stickyApplied = (sticky && sticky !== 'avatar-only')
+        ? action.blocks.map(b =>
+            b.kind === 'avatar' && b.layout === undefined ? { ...b, layout: sticky } : b
+          )
+        : action.blocks;
       return {
         ...state,
-        blocks: action.blocks,
+        blocks: stickyApplied,
         audio: { ...state.audio, words: action.words },
         avatarClips: nextClips,
       };
@@ -547,6 +580,9 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
 
     case 'set-aspect':
       return { ...state, aspect: action.aspect };
+
+    case 'set-motion-energy':
+      return { ...state, motionEnergy: action.energy };
 
     case 'set-motion-color-mode':
       return { ...state, motionColorMode: action.mode };

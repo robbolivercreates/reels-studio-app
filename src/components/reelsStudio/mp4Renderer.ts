@@ -74,13 +74,21 @@ interface FrameLayer {
   box: LayoutBox;           // 0..1 normalized
   zoom?: number;            // optional center-zoom factor (1 = no zoom)
   offsetY?: number;         // vertical shift within box (-0.5..0.5 fraction of box height)
+  offsetX?: number;         // horizontal shift within box (-1..1 fraction of viewport width) — used by whip-pan
   alpha?: number;           // 0..1 global opacity for this layer (default 1)
   blend?: BlendMode;        // canvas globalCompositeOperation (default source-over)
+  /** Optional per-frame filter for transition effects (CSS filter syntax). */
+  filter?: string;
+  /** Optional RGB split for glitch transitions — offsets in pixels for R, G, B channels. */
+  rgbSplit?: { r: number; g: number; b: number };
 }
 
 interface FrameDecoration {
-  kind: 'bottom-gradient' | 'split-seam' | 'vignette';
+  kind: 'bottom-gradient' | 'split-seam' | 'vignette' | 'flash';
   splitY?: number; // for split-seam only (0..1 normalized)
+  /** Flash overlay: hex colour + alpha 0..1. */
+  flashColor?: string;
+  flashAlpha?: number;
 }
 
 interface FrameComposition {
@@ -93,14 +101,50 @@ const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
 
 const FADE_FRAMES = 6; // ~200ms at 30fps — modern Reels/TikTok pacing
 
+/**
+ * For an avatar clip whose actual MP4 duration is shorter than the block's
+ * audio (HeyGen often delivers ~50–150ms shorter than the audio because it
+ * trims trailing silence), return an alpha multiplier in 0..1 that:
+ *   - = 1 while localT is within the clip's playable range
+ *   - fades down to 0 across the overrun (instead of holding a frozen final frame)
+ * The fade window is short (3 frames) so the avatar disappears smoothly into
+ * whatever's behind (motion / black / next block via cross-dissolve).
+ */
+const AVATAR_OVERRUN_FADE = 3 / FRAMERATE;
+const avatarOverrunAlpha = (localT: number, clipDur: number | undefined): number => {
+  if (!clipDur || !Number.isFinite(clipDur) || clipDur <= 0) return 1;
+  const slack = clipDur - localT;
+  if (slack >= AVATAR_OVERRUN_FADE) return 1;
+  if (slack <= 0) return 0;
+  return slack / AVATAR_OVERRUN_FADE;
+};
+
 /** Render layers + decorations for a single block at a given local time (no fade logic). */
 const composeForBlock = (
   block: ScriptBlock,
   localT: number,
   inputs: RenderInputs,
   motionUrls: Map<string, string>,
+  clipDurations: Map<string, number>,
 ): { layers: FrameLayer[]; decorations: FrameDecoration[] } => {
-  const motionLayer = block.motion?.layer;
+  // Derive motion layer from block.layout — the layout is the user's current
+  // intent, while motion.layer was captured at generation time (often before
+  // the user chose the final layout). Without this, generating a motion under
+  // "split-bottom" and later switching to "avatar-only" would still render
+  // 50/50 in the export, mismatching what the preview shows. Mirrors the
+  // preview's derivation in ReelsStudio.tsx so preview and export agree.
+  const motionLayer: NonNullable<ScriptBlock['motion']>['layer'] | undefined = (() => {
+    const raw = block.motion?.layer;
+    if (!raw) return undefined;
+    if (block.kind === 'broll') return raw;
+    switch (block.layout) {
+      case 'avatar-only': return 'overlay';
+      case 'avatar-top':  return 'split-bottom';
+      case 'media-top':   return 'split-top';
+      case 'media-only':  return 'replace';
+      default:            return raw;
+    }
+  })();
   const motionUrl = motionUrls.get(block.id);
   const motionDur = block.motion?.durationSec || 4;
   // Motion plays ONCE and freezes on its last frame for the rest of the block.
@@ -124,7 +168,10 @@ const composeForBlock = (
     const clip = block.kind === 'avatar' ? inputs.avatarClips[block.id] : null;
     if (clip?.videoUrl) {
       const zoom = block.avatarZoom ?? 1;
-      layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: avatarBox, zoom, offsetY: block.avatarOffsetY });
+      const alpha = avatarOverrunAlpha(localT, clipDurations.get(clip.videoUrl));
+      if (alpha > 0) {
+        layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: avatarBox, zoom, offsetY: block.avatarOffsetY, alpha });
+      }
     }
     layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: motionBox });
     return { layers, decorations: [{ kind: 'split-seam', splitY: 0.5 }] };
@@ -142,7 +189,10 @@ const composeForBlock = (
       const clip = inputs.avatarClips[block.id];
       if (clip?.videoUrl) {
         const zoom = block.avatarZoom ?? defaultAvatarZoom(inputs.aspect, block.layout);
-        layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: slots.avatar, zoom, offsetY: block.avatarOffsetY });
+        const alpha = avatarOverrunAlpha(localT, clipDurations.get(clip.videoUrl));
+        if (alpha > 0) {
+          layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: slots.avatar, zoom, offsetY: block.avatarOffsetY, alpha });
+        }
       }
     } else if (inputs.activeTake) {
       const localBroll = localT - (block.avatarVisibleSec ?? 0);
@@ -155,9 +205,23 @@ const composeForBlock = (
     layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localT, inputs.activeTake), box: slots.media });
   }
 
-  // Motion overlay: screen blend at 0.88 alpha — mixes with avatar instead of covering it.
+  // Motion overlay — lower-third style: lives in the bottom 33% so the
+  // avatar's face stays clean (TV news kicker pattern). Screen blend + contrast
+  // tweak makes the motion's black backdrop disappear so the type/graphics
+  // float over the bottom of the frame like a real broadcast lower-third.
   if (motionLayer === 'overlay' && motionUrl) {
-    layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME, alpha: 0.88, blend: 'screen' });
+    // Floating overlay band (NOT a TV-style lower-third). Lives at y:0.58–0.80
+    // of the frame — center-lower, above the platform UI zone (bottom 15-20%
+    // of Reels/TikTok/Shorts is occluded by likes/comments/caption rail).
+    const LOWER_THIRD: LayoutBox = { x: 0, y: 0.58, w: 1, h: 0.22 };
+    layers.push({
+      videoUrl: motionUrl,
+      sourceSeek: motionSeek,
+      box: LOWER_THIRD,
+      alpha: 1,
+      blend: 'screen',
+      filter: 'contrast(1.35) brightness(1.05)',
+    });
   }
 
   // Decorations.
@@ -173,6 +237,7 @@ const frameAtProjectTime = (
   inputs: RenderInputs,
   layout: ReturnType<typeof computeLayout>,
   motionUrls: Map<string, string>,
+  clipDurations: Map<string, number>,
 ): FrameComposition => {
   const empty: FrameComposition = { layers: [], decorations: [], fadeAlpha: 1 };
   const hit = hitTest(layout, t);
@@ -200,52 +265,193 @@ const frameAtProjectTime = (
   const inFadeRegion = localFrame < FADE_FRAMES;
   const outFadeRegion = localFrame > totalBlockFrames - FADE_FRAMES;
 
-  const own = composeForBlock(block, localT, inputs, motionUrls);
+  const own = composeForBlock(block, localT, inputs, motionUrls, clipDurations);
   const layers: FrameLayer[] = [...own.layers];
   const decorations: FrameDecoration[] = [...own.decorations];
 
-  // Black fade-to/fade-from logic. 'cut' skips it. 'dissolve' replaces it with cross-blend.
+  // Transition logic — black fade / cross-blend / new effects.
+  // For "fancy" transitions (whip-pan, zoom-blur, glitch, light-flash) we still
+  // use cross-blend as the base but tweak layer offsets/filters for the effect.
   let fadeAlpha = 1;
   if (inFadeRegion) {
     if (incomingTransition === 'fade' || (!prevBlock && true)) {
       fadeAlpha = Math.min(fadeAlpha, localFrame / FADE_FRAMES);
-    } else if (incomingTransition === 'dissolve' && prevBlock && prevSlot) {
-      // Cross-dissolve: previous block layers underneath at decreasing alpha.
+    } else if (prevBlock && prevSlot && incomingTransition !== 'cut') {
       const prevLocalT = (prevSlot.sourceEnd - prevSlot.sourceStart) - ((FADE_FRAMES - localFrame) / FRAMERATE);
-      const prev = composeForBlock(prevBlock, Math.max(0, prevLocalT), inputs, motionUrls);
-      // Prev fades OUT (alpha 1 → 0); current fades IN (we draw full opacity, but composite by drawing prev FIRST).
-      const t = localFrame / FADE_FRAMES; // 0..1
-      const prevAlpha = 1 - t;
-      for (const lyr of prev.layers) {
-        layers.unshift({ ...lyr, alpha: (lyr.alpha ?? 1) * prevAlpha });
-      }
-      // Current layers drawn at increasing alpha so the cross-blend looks right.
-      for (let i = prev.layers.length; i < layers.length; i++) {
-        layers[i] = { ...layers[i], alpha: (layers[i].alpha ?? 1) * t };
-      }
+      const prev = composeForBlock(prevBlock, Math.max(0, prevLocalT), inputs, motionUrls, clipDurations);
+      const t = localFrame / FADE_FRAMES; // 0..1 (going from prev → current)
+      applyTransition(incomingTransition, prev.layers, layers, decorations, t, 'in');
     }
     // 'cut': nothing extra — just show this frame at full alpha.
   }
   if (outFadeRegion) {
     if (outgoingTransition === 'fade' || !nextBlock) {
       fadeAlpha = Math.min(fadeAlpha, (totalBlockFrames - localFrame) / FADE_FRAMES);
-    } else if (outgoingTransition === 'dissolve' && nextBlock && nextSlot) {
-      // Cross-dissolve: next block layers on top at increasing alpha.
+    } else if (nextBlock && nextSlot && outgoingTransition !== 'cut') {
       const nextLocalT = ((localFrame - (totalBlockFrames - FADE_FRAMES)) / FRAMERATE);
-      const next = composeForBlock(nextBlock, Math.max(0, nextLocalT), inputs, motionUrls);
-      const t = (localFrame - (totalBlockFrames - FADE_FRAMES)) / FADE_FRAMES; // 0..1
-      const ownAlpha = 1 - t;
-      for (let i = 0; i < layers.length; i++) {
-        layers[i] = { ...layers[i], alpha: (layers[i].alpha ?? 1) * ownAlpha };
-      }
-      for (const lyr of next.layers) {
-        layers.push({ ...lyr, alpha: (lyr.alpha ?? 1) * t });
-      }
+      const next = composeForBlock(nextBlock, Math.max(0, nextLocalT), inputs, motionUrls, clipDurations);
+      const t = (localFrame - (totalBlockFrames - FADE_FRAMES)) / FADE_FRAMES; // 0..1 (going from current → next)
+      applyTransition(outgoingTransition, layers, next.layers, decorations, t, 'out');
     }
   }
   fadeAlpha = Math.max(0, Math.min(1, fadeAlpha));
 
   return { layers, decorations, fadeAlpha };
+};
+
+/**
+ * Apply a transition effect during the FADE_FRAMES window.
+ * - `incoming` (mode='in'):  fromLayers = prev (going OUT), toLayers = own (already in `layers`, COMING IN). t goes 0→1.
+ * - `outgoing` (mode='out'): fromLayers = own (going OUT, already in `layers`), toLayers = next (COMING IN). t goes 0→1.
+ *
+ * For 'in' mode we PREPEND prev layers (drawn first / underneath).
+ * For 'out' mode we APPEND next layers (drawn last / on top).
+ *
+ * The layers param is mutated in-place to keep allocations down — this runs
+ * inside the per-frame hot path.
+ */
+const applyTransition = (
+  type: BlockTransition,
+  fromLayers: FrameLayer[],
+  toLayers: FrameLayer[],
+  decorations: FrameDecoration[],
+  t: number,
+  mode: 'in' | 'out',
+): void => {
+  // Helper: prepend (incoming mode) or no-op (outgoing — fromLayers IS toLayers already).
+  const prependFrom = (mutators: (l: FrameLayer) => FrameLayer) => {
+    if (mode === 'in') {
+      for (let i = fromLayers.length - 1; i >= 0; i--) {
+        toLayers.unshift(mutators(fromLayers[i]));
+      }
+    } else {
+      // mode === 'out': toLayers already contains "from" — mutate in place.
+      for (let i = 0; i < toLayers.length; i++) {
+        toLayers[i] = mutators(toLayers[i]);
+      }
+    }
+  };
+  const appendTo = (mutators: (l: FrameLayer) => FrameLayer) => {
+    if (mode === 'in') {
+      // mode === 'in': toLayers already contains "to" (after the prepend). Walk from the offset.
+      const start = fromLayers.length;
+      for (let i = start; i < toLayers.length; i++) {
+        toLayers[i] = mutators(toLayers[i]);
+      }
+    } else {
+      for (const lyr of fromLayers) {
+        // fromLayers here is the SECOND parameter (next block) — APPEND it.
+        toLayers.push(mutators(lyr));
+      }
+    }
+  };
+
+  // Naming shim: in 'out' mode the function was called with (fromLayers=own, toLayers=next),
+  // but here it's cleaner to think of "leaving" (own) and "entering" (next).
+  // Re-bind so the math below reads naturally regardless of mode.
+  const leaving = mode === 'in' ? fromLayers : fromLayers; // fromLayers param ALWAYS = the block that's leaving the screen
+  const entering = mode === 'in' ? toLayers : fromLayers;  // dummy — actual entering is handled by prepend/append
+  void leaving; void entering;
+
+  switch (type) {
+    case 'dissolve': {
+      // Cross-blend: leaving fades 1→0, entering fades 0→1.
+      const leavingAlpha = 1 - t;
+      const enteringAlpha = t;
+      prependFrom(l => ({ ...l, alpha: (l.alpha ?? 1) * leavingAlpha }));
+      appendTo(l => ({ ...l, alpha: (l.alpha ?? 1) * enteringAlpha }));
+      return;
+    }
+
+    case 'whip-pan': {
+      // Horizontal whip — leaving slides left, entering enters from right.
+      // Both keep full alpha; motion is felt through translation + slight blur.
+      const motionBlur = Math.sin(t * Math.PI) * 8; // peak blur at midpoint
+      const blurFilter = motionBlur > 0.5 ? `blur(${motionBlur}px)` : undefined;
+      prependFrom(l => ({
+        ...l,
+        offsetX: (l.offsetX ?? 0) - t,           // -0 → -1 (off-screen left)
+        filter: blurFilter,
+      }));
+      appendTo(l => ({
+        ...l,
+        offsetX: (l.offsetX ?? 0) + (1 - t),     // +1 → 0
+        filter: blurFilter,
+      }));
+      return;
+    }
+
+    case 'zoom-blur': {
+      // Dramatic zoom — leaving shrinks + blurs out, entering blows up + blurs in.
+      const leavingZoom = 1 + t * 0.4;            // 1.0 → 1.4 (zoom IN as it leaves)
+      const enteringZoom = 1.3 - t * 0.3;         // 1.3 → 1.0
+      const leavingBlur = t * 18;                  // 0 → 18px
+      const enteringBlur = (1 - t) * 18;           // 18 → 0
+      prependFrom(l => ({
+        ...l,
+        zoom: (l.zoom ?? 1) * leavingZoom,
+        alpha: (l.alpha ?? 1) * (1 - t),
+        filter: leavingBlur > 0.5 ? `blur(${leavingBlur}px)` : undefined,
+      }));
+      appendTo(l => ({
+        ...l,
+        zoom: (l.zoom ?? 1) * enteringZoom,
+        alpha: (l.alpha ?? 1) * t,
+        filter: enteringBlur > 0.5 ? `blur(${enteringBlur}px)` : undefined,
+      }));
+      return;
+    }
+
+    case 'glitch': {
+      // Digital RGB split + frame jitter. Deterministic — uses t to seed a
+      // pseudo-random shift so each frame in the transition is consistent.
+      // We base the jitter on t so it's reproducible across renders.
+      const intensity = Math.sin(t * Math.PI); // peaks at midpoint
+      const seed = Math.floor(t * 6) / 6;       // 6 discrete jitter steps across the window
+      const rgbR = (seed * 17) % 1 * 12 - 6;    // -6..+6 px R offset
+      const rgbB = (seed * 13) % 1 * 12 - 6;    // -6..+6 px B offset
+      const xJitter = ((seed * 11) % 1) * 0.04 - 0.02; // ±2% width
+      const split = {
+        r: rgbR * intensity,
+        g: 0,
+        b: rgbB * intensity,
+      };
+      const leavingAlpha = 1 - t;
+      const enteringAlpha = t;
+      prependFrom(l => ({
+        ...l,
+        offsetX: (l.offsetX ?? 0) + xJitter,
+        alpha: (l.alpha ?? 1) * leavingAlpha,
+        rgbSplit: split,
+      }));
+      appendTo(l => ({
+        ...l,
+        offsetX: (l.offsetX ?? 0) + xJitter,
+        alpha: (l.alpha ?? 1) * enteringAlpha,
+        rgbSplit: split,
+      }));
+      return;
+    }
+
+    case 'light-flash': {
+      // White flash at the midpoint + cross-blend.
+      const leavingAlpha = 1 - t;
+      const enteringAlpha = t;
+      prependFrom(l => ({ ...l, alpha: (l.alpha ?? 1) * leavingAlpha }));
+      appendTo(l => ({ ...l, alpha: (l.alpha ?? 1) * enteringAlpha }));
+      // Flash peaks at t=0.5, fades fast on both sides.
+      const flashAlpha = Math.max(0, 1 - Math.abs(t - 0.5) * 4); // 0 at t=0.25/0.75, 1 at t=0.5
+      if (flashAlpha > 0) {
+        decorations.push({ kind: 'flash', flashColor: '#ffffff', flashAlpha });
+      }
+      return;
+    }
+
+    default: {
+      // 'cut' and 'fade' are handled outside this function.
+      return;
+    }
+  }
 };
 
 const mapBrollTime = (localT: number, take: ScreenTake): number => {
@@ -447,6 +653,13 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       }
     }
     console.log('[render] videoMap loaded:', videoMap.size, 'of', uniqueUrls.length);
+    // Snapshot each video's actual MP4 duration so the composer can detect
+    // overrun (audio longer than HeyGen clip) and fade the avatar out instead
+    // of holding a frozen final frame.
+    const clipDurations = new Map<string, number>();
+    for (const [url, v] of videoMap.entries()) {
+      if (Number.isFinite(v.duration) && v.duration > 0) clipDurations.set(url, v.duration);
+    }
     // Reset per-video timeout counters so retries don't inherit prior broken-marks.
     resetVideoHealth(Array.from(videoMap.values()));
 
@@ -599,11 +812,21 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       ctx.fillRect(0, 0, width, height);
     };
 
-    /** Draw a video frame into a normalized box with cover-fit (crop). Respects alpha + blend mode + offsetY. */
-    const drawIntoBox = (v: HTMLVideoElement, box: LayoutBox, zoom = 1, alpha = 1, blend: BlendMode = 'source-over', offsetY = 0) => {
+    /** Draw a video frame into a normalized box with cover-fit (crop). Respects alpha + blend + offsetY/X + filter + rgbSplit. */
+    const drawIntoBox = (
+      v: HTMLVideoElement,
+      box: LayoutBox,
+      zoom = 1,
+      alpha = 1,
+      blend: BlendMode = 'source-over',
+      offsetY = 0,
+      offsetX = 0,
+      filter?: string,
+      rgbSplit?: { r: number; g: number; b: number },
+    ) => {
       const srcW = v.videoWidth;
       const srcH = v.videoHeight;
-      const dx = box.x * width;
+      const dx = box.x * width + offsetX * width;
       const dy = box.y * height + offsetY * box.h * height;
       const dw = box.w * width;
       const dh = box.h * height;
@@ -632,7 +855,26 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       }
       ctx.globalAlpha = alpha;
       ctx.globalCompositeOperation = blend;
-      ctx.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh);
+      if (filter) ctx.filter = filter;
+      if (rgbSplit) {
+        // Cheap RGB channel split: 3 passes with channel-tinted compositing.
+        // Each pass offsets the frame slightly in x for that channel. Cost: 3x drawImage
+        // but only runs during a transition window (~6 frames), so the total per-render
+        // cost is negligible.
+        ctx.globalCompositeOperation = 'lighter';
+        // Red channel
+        ctx.filter = `${filter ?? ''} url(#__no_red__)`.trim();
+        // Without SVG filters, we approximate by tinting via globalCompositeOperation 'lighter'
+        // and drawing 3 offset copies — the visual effect of RGB shear is good enough.
+        ctx.drawImage(v, sx, sy, sw, sh, dx + rgbSplit.r, dy, dw, dh);
+        ctx.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh);
+        ctx.drawImage(v, sx, sy, sw, sh, dx + rgbSplit.b, dy, dw, dh);
+        ctx.filter = 'none';
+        ctx.globalCompositeOperation = blend;
+      } else {
+        ctx.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh);
+      }
+      ctx.filter = 'none';
       ctx.globalAlpha = 1;
       ctx.globalCompositeOperation = 'source-over';
     };
@@ -652,7 +894,7 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
 
       const outT = frame / FRAMERATE;
       const projT = mapOutToProject(outT);
-      const composition = frameAtProjectTime(projT, inputs, layout, motionUrls);
+      const composition = frameAtProjectTime(projT, inputs, layout, motionUrls, clipDurations);
 
       drawBlackFrame();
 
@@ -676,14 +918,20 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         const v = videoMap.get(lyr.videoUrl);
         if (!v) continue;
         await seekVideo(v, lyr.sourceSeek, cancelSignal);
-        drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0);
+        drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0, lyr.offsetX ?? 0, lyr.filter, lyr.rgbSplit);
       }
 
-      // Draw decorations (gradients, seam, vignette) on top of video layers.
+      // Draw decorations (gradients, seam, vignette, transition flash) on top of video layers.
       for (const dec of composition.decorations) {
         if (dec.kind === 'bottom-gradient') drawBottomGradient();
         else if (dec.kind === 'vignette') drawVignette();
         else if (dec.kind === 'split-seam' && dec.splitY != null) drawSplitSeam(dec.splitY * height);
+        else if (dec.kind === 'flash' && dec.flashAlpha != null) {
+          ctx.globalAlpha = dec.flashAlpha;
+          ctx.fillStyle = dec.flashColor ?? '#ffffff';
+          ctx.fillRect(0, 0, width, height);
+          ctx.globalAlpha = 1;
+        }
       }
 
       // Cross-fade: black overlay that fades in/out at block boundaries.

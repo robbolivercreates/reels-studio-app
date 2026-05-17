@@ -319,9 +319,27 @@ pub async fn agent_send(
         serde_json::json!({ "run_id": run_id }),
     );
 
+    // Stall detection (ChatGPT-style "ainda está respondendo?" feedback).
+    // Watches the gap between stdout chunks. After STALL_SECS without one,
+    // emits `agent://stale-warning`; clears with `agent://stale-cleared`
+    // as soon as a chunk arrives. UI surfaces this as a banner. The
+    // counter is purely passive — it never talks to Claude (zero tokens).
+    use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+    const STALL_SECS: u64 = 30;
+    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let last_chunk_ms = Arc::new(AtomicU64::new(now_ms));
+    let stream_done = Arc::new(AtomicBool::new(false));
+    let stale_emitted = Arc::new(AtomicBool::new(false));
+
     // stdout drain — JSONL parser
     let app_for_out = app.clone();
     let run_id_for_out = run_id.clone();
+    let last_chunk_for_out = last_chunk_ms.clone();
+    let stream_done_for_out = stream_done.clone();
+    let stale_emitted_for_out = stale_emitted.clone();
+    let app_for_clear = app.clone();
+    let run_id_for_clear = run_id.clone();
     tokio::spawn(async move {
         let mut reader = BufReader::new(stdout).lines();
         loop {
@@ -330,6 +348,16 @@ pub async fn agent_send(
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
                         continue;
+                    }
+                    // Refresh the "alive" timestamp on every chunk.
+                    let ts = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                    last_chunk_for_out.store(ts, Ordering::Relaxed);
+                    // Clear any previous stale banner.
+                    if stale_emitted_for_out.swap(false, Ordering::Relaxed) {
+                        let _ = app_for_clear.emit(
+                            "agent://stale-cleared",
+                            serde_json::json!({ "run_id": run_id_for_clear }),
+                        );
                     }
                     handle_stdout_line(&app_for_out, &run_id_for_out, trimmed);
                 }
@@ -344,6 +372,36 @@ pub async fn agent_send(
                     );
                     break;
                 }
+            }
+        }
+        stream_done_for_out.store(true, Ordering::Relaxed);
+    });
+
+    // Watchdog: polls every 5s; emits stale-warning once when the stream
+    // has gone silent for >= STALL_SECS. Self-terminates when stream ends.
+    let app_for_watch = app.clone();
+    let run_id_for_watch = run_id.clone();
+    let last_chunk_for_watch = last_chunk_ms.clone();
+    let stream_done_for_watch = stream_done.clone();
+    let stale_emitted_for_watch = stale_emitted.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            if stream_done_for_watch.load(Ordering::Relaxed) {
+                break;
+            }
+            let last = last_chunk_for_watch.load(Ordering::Relaxed);
+            let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+            let silent_secs = now.saturating_sub(last) / 1000;
+            if silent_secs >= STALL_SECS && !stale_emitted_for_watch.load(Ordering::Relaxed) {
+                stale_emitted_for_watch.store(true, Ordering::Relaxed);
+                let _ = app_for_watch.emit(
+                    "agent://stale-warning",
+                    serde_json::json!({
+                        "run_id": run_id_for_watch,
+                        "silent_secs": silent_secs,
+                    }),
+                );
             }
         }
     });

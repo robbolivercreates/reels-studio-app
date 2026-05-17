@@ -133,7 +133,7 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
     [locale],
   );
 
-  const { messages, busy, send, cancel, approve, pick, proposeDraft, resolveDraft, updateDraft, proposeSetup, resolveSetup, clear, model, setModel } = useAgentChat(locale, projectKey);
+  const { messages, busy, stale, send, cancel, approve, pick, proposeDraft, resolveDraft, updateDraft, proposeSetup, resolveSetup, clear, model, setModel } = useAgentChat(locale, projectKey);
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -513,7 +513,7 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
           />
         ))}
 
-        {busy && (
+        {busy && !stale && (
           <div
             className="flex items-center gap-2.5 text-[11.5px] mt-2"
             style={{ color: tokens.text.tertiary }}
@@ -529,6 +529,27 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
               style={{ color: tokens.text.secondary }}
               onMouseEnter={e => { e.currentTarget.style.color = tokens.status.err; e.currentTarget.style.backgroundColor = tokens.bg.hover; }}
               onMouseLeave={e => { e.currentTarget.style.color = tokens.text.secondary; e.currentTarget.style.backgroundColor = 'transparent'; }}
+            >
+              {t('busy.cancel')}
+            </button>
+          </div>
+        )}
+
+        {busy && stale && (
+          <div
+            className="flex items-center gap-2.5 text-[11.5px] mt-2 px-3 py-2 rounded-lg"
+            style={{
+              color: tokens.status.warn ?? '#fbbf24',
+              backgroundColor: (tokens.status.warn ?? '#fbbf24') + '15',
+              border: `1px solid ${(tokens.status.warn ?? '#fbbf24')}30`,
+            }}
+          >
+            <span>⚠</span>
+            <span className="flex-1">{locale === 'pt' ? 'Sem resposta há um tempo. Esperar mais ou cancelar?' : 'No response for a while. Wait or cancel?'}</span>
+            <button
+              onClick={cancel}
+              className="px-2 py-0.5 text-[10.5px] rounded-md font-semibold transition-colors"
+              style={{ color: tokens.status.err, backgroundColor: tokens.status.err + '15', border: `1px solid ${tokens.status.err}40` }}
             >
               {t('busy.cancel')}
             </button>

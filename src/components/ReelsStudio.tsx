@@ -3,7 +3,8 @@ import { flushSync } from 'react-dom';
 import { reducer, INITIAL_STATE } from './reelsStudio/reducer';
 import { useHistoryReducer } from './reelsStudio/useHistoryReducer';
 import { generateProjectAudio, estimateScriptDuration } from './reelsStudio/audioEngine';
-import { saveAudioBlob, saveClipBlob, saveNamedProject, listNamedProjects, loadNamedProject, deleteNamedProject, type NamedProjectMeta } from './reelsStudio/persistence';
+import { saveAudioBlob, saveClipBlob, saveNamedProject, listNamedProjects, loadNamedProject, deleteNamedProject, renameNamedProject, loadAudioBlob, loadAllClipBlobs, loadAllTakeBlobs, type NamedProjectMeta } from './reelsStudio/persistence';
+import { buildStateFromSnapshot } from './reelsStudio/useReelsPersistence';
 import { VOICE_OPTIONS, getVoice } from './reelsStudio/voices';
 import type { ScriptBlock, ScreenTake } from './reelsStudio/types';
 import {
@@ -16,6 +17,7 @@ import { SaveVoiceModal } from './reelsStudio/SaveVoiceModal';
 import { ReferencesModal } from './reelsStudio/ReferencesModal';
 import type { PersistedAnalysis } from './reelsStudio/types';
 import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
+import { ClipRescueModal } from './reelsStudio/ClipRescueModal';
 import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
 import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
@@ -90,6 +92,18 @@ export const ReelsStudio: React.FC = () => {
   // answer `list_blocks` / `read_block` without a roundtrip back to React.
   useAgentSnapshotPublisher(state, projectName);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
+  /** Multi-selection. UI-only (not persisted). Shift/Cmd+click adds/ranges. ESC clears. */
+  const [multiSelectIds, setMultiSelectIds] = useState<Set<string>>(() => new Set());
+  // ESC clears multi-select. Doesn't conflict with other ESC handlers because
+  // it only fires when there IS a selection to clear.
+  useEffect(() => {
+    if (multiSelectIds.size === 0) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMultiSelectIds(new Set());
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [multiSelectIds.size]);
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
 
   const [scriptOpen, setScriptOpen] = useState(true);
@@ -107,6 +121,7 @@ export const ReelsStudio: React.FC = () => {
   const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [overflowMenuOpen, setOverflowMenuOpen] = useState(false);
+  const [clipRescueOpen, setClipRescueOpen] = useState(false);
   const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [saveVoiceModalOpen, setSaveVoiceModalOpen] = useState(false);
@@ -161,8 +176,10 @@ export const ReelsStudio: React.FC = () => {
   const [settingsTab, setSettingsTab] = useState<'api-keys' | 'voice'>('api-keys');
   const [projectsOpen, setProjectsOpen] = useState(false);
   const [savedProjects, setSavedProjects] = useState<NamedProjectMeta[]>([]);
-  const [savingNamed, setSavingNamed] = useState(false);
   const [loadingProjectId, setLoadingProjectId] = useState<string | null>(null);
+  const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [carouselExportStatus, setCarouselExportStatus] = useState<string | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardInitialFormat, setWizardInitialFormat] = useState<'reel' | 'carousel' | undefined>(undefined);
@@ -384,77 +401,46 @@ export const ReelsStudio: React.FC = () => {
     setProjectsOpen(true);
   };
 
-  const handleSaveNamed = async () => {
-    setSavingNamed(true);
-    try {
-      await saveNamedProject(state);
-      const list = await listNamedProjects();
-      setSavedProjects(list);
-    } catch (err) {
-      console.error('[reels/save-named]', err);
-      alert('Erro ao salvar projeto: ' + (err instanceof Error ? err.message : String(err)));
-    } finally {
-      setSavingNamed(false);
+  /** Revoke all object URLs currently held by the in-memory state so the next project starts clean. */
+  const revokeStateUrls = (s: ReelsState) => {
+    try { if (s.audio.url?.startsWith('blob:')) URL.revokeObjectURL(s.audio.url); } catch { /* ignore */ }
+    for (const c of Object.values(s.avatarClips)) {
+      try { if (c.videoUrl?.startsWith('blob:')) URL.revokeObjectURL(c.videoUrl); } catch { /* ignore */ }
+    }
+    for (const t of s.takes) {
+      try { if (t.url?.startsWith('blob:')) URL.revokeObjectURL(t.url); } catch { /* ignore */ }
     }
   };
 
   const handleLoadNamedProject = async (id: string) => {
+    if (id === state.activeProjectId) {
+      setProjectsOpen(false);
+      return;
+    }
     setLoadingProjectId(id);
     try {
       const data = await loadNamedProject(id);
       if (!data) { alert('Projeto não encontrado.'); return; }
       const { snapshot, audioBlob } = data;
 
-      let audioUrl: string | null = null;
-      let peaks: number[] = snapshot.audio.peaks;
-      let duration = snapshot.audio.duration;
+      const clipBlobs = await loadAllClipBlobs();
+      const takeBlobs = await loadAllTakeBlobs();
+      const restoredState = await buildStateFromSnapshot(snapshot, id, audioBlob, clipBlobs, takeBlobs);
 
+      revokeStateUrls(state);
+      // Cross-project bleed prevention: STORE_AUDIO and the cutSession singleton
+      // are project-agnostic. If we leave them as-is, silence cut / export on the
+      // newly-opened project will keep reading the previous project's audio.
+      audioBlobRef.current = audioBlob;
+      clearCutSession();
       if (audioBlob) {
-        audioUrl = URL.createObjectURL(audioBlob);
-        if (!peaks || peaks.length === 0) {
-          try {
-            const AC = (window.AudioContext as typeof AudioContext | undefined) ??
-              ((window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext);
-            const ctx = new AC();
-            const ab = await audioBlob.arrayBuffer();
-            const buffer = await ctx.decodeAudioData(ab.slice(0));
-            const { computePeaks } = await import('./reelsStudio/audioEngine');
-            peaks = computePeaks(buffer);
-            duration = buffer.duration;
-            ctx.close().catch(() => {});
-          } catch { /* peaks stay empty */ }
-        }
+        // Sync STORE_AUDIO['current'] to this project's audio so any caller
+        // that still uses loadAudioBlob() (e.g. ExportRenderModal) gets the right one.
+        try { await saveAudioBlob(audioBlob); } catch { /* non-fatal */ }
+      } else {
+        try { const { clearAudioBlob } = await import('./reelsStudio/persistence'); await clearAudioBlob(); } catch { /* non-fatal */ }
       }
-
-      const restoredState = {
-        ...snapshot,
-        audio: {
-          ...snapshot.audio,
-          url: audioUrl,
-          peaks,
-          duration,
-          applyingCuts: false,
-          cutsApplied: false,
-          originalBlocks: undefined,
-          originalWords: undefined,
-          originalDuration: undefined,
-          originalPeaks: undefined,
-          status: (audioBlob ? 'ready' : 'idle') as 'ready' | 'idle',
-          silenceCut: snapshot.audio.silenceCut ?? false,
-          silencePreset: snapshot.audio.silencePreset ?? 'fast' as const,
-          keepSegments: snapshot.audio.keepSegments ?? [],
-          detectedSilenceSec: snapshot.audio.detectedSilenceSec ?? 0,
-          detectingSilence: false,
-        },
-        avatarClips: {},
-        takes: [],
-        activeTakeId: null,
-        emotion: snapshot.emotion ?? 'neutral',
-        voiceSpeed: snapshot.voiceSpeed ?? 1.0,
-        analyses: snapshot.analyses ?? (snapshot.lastAnalysis ? [snapshot.lastAnalysis] : []),
-        motionColorMode: (snapshot as unknown as ReelsState).motionColorMode ?? 'dark',
-        appTheme: (snapshot as unknown as ReelsState).appTheme ?? 'dark',
-      };
+      try { window.localStorage.setItem('reels.activeProjectId', id); } catch { /* ignore */ }
       dispatch({ type: 'hydrate', state: restoredState });
       setProjectsOpen(false);
     } catch (err) {
@@ -465,9 +451,52 @@ export const ReelsStudio: React.FC = () => {
     }
   };
 
+  /** Creates a fresh empty project and switches to it immediately, in-place (no reload). */
+  const handleNewProject = async () => {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${pad(now.getDate())}/${pad(now.getMonth() + 1)} ${pad(now.getHours())}h${pad(now.getMinutes())}`;
+    const newName = `Reel · ${stamp}`;
+
+    revokeStateUrls(state);
+    // Reset all cross-project audio carriers — same reasoning as handleLoadNamedProject.
+    audioBlobRef.current = null;
+    clearCutSession();
+    try { const { clearAudioBlob } = await import('./reelsStudio/persistence'); await clearAudioBlob(); } catch { /* non-fatal */ }
+    // Start from INITIAL_STATE so all transient flags reset; auto-save will create the named entry.
+    const empty: ReelsState = { ...INITIAL_STATE, projectName: newName, activeProjectId: null };
+    try { window.localStorage.removeItem('reels.activeProjectId'); } catch { /* ignore */ }
+    dispatch({ type: 'hydrate', state: empty });
+
+    // Refresh the modal list if it's open.
+    if (projectsOpen) {
+      const list = await listNamedProjects();
+      setSavedProjects(list);
+    }
+  };
+
   const handleDeleteNamedProject = async (id: string) => {
     await deleteNamedProject(id);
     setSavedProjects(prev => prev.filter(p => p.id !== id));
+    // If the deleted project was the active one → switch to the most recent or create a new empty.
+    if (id === state.activeProjectId) {
+      const list = await listNamedProjects();
+      if (list.length > 0) {
+        await handleLoadNamedProject(list[0].id);
+      } else {
+        await handleNewProject();
+      }
+    }
+  };
+
+  const handleRenameNamedProject = async (id: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    await renameNamedProject(id, trimmed);
+    setSavedProjects(prev => prev.map(p => p.id === id ? { ...p, name: trimmed } : p));
+    if (id === state.activeProjectId) {
+      dispatch({ type: 'set-name', name: trimmed });
+    }
   };
 
   const activeTake = state.takes.find(t => t.id === state.activeTakeId) ?? null;
@@ -1031,6 +1060,7 @@ export const ReelsStudio: React.FC = () => {
         // Reuse the reel's brand identity so all motions stay visually consistent.
         existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
         motionColorMode: state.motionColorMode ?? 'dark',
+        motionEnergy: state.motionEnergy ?? 'energetic',
         // Match motion text language to the script language (TTS override wins
         // over the active voice profile, same precedence used for audio).
         outputLanguage: (() => {
@@ -1479,14 +1509,16 @@ export const ReelsStudio: React.FC = () => {
       text: s.text,
       start: 0,
       end: 0,
-      layout: s.kind === 'avatar' ? ('avatar-top' as const) : undefined,
+      // Sticky avatar layout: respect user's last choice instead of forcing avatar-top.
+      // Falls back to 'avatar-top' for projects that haven't set one yet (default initial state).
+      layout: s.kind === 'avatar' ? (state.lastAvatarLayout ?? 'avatar-top') : undefined,
     }));
     dispatch({ type: 'replace-blocks', blocks: newBlocks });
     return {
       splitsApplied: splits.length - blocks.length,
       newBlockCount: newBlocks.length,
     };
-  }, [state.audio.status, blocks, audio.words, dispatch]);
+  }, [state.audio.status, state.lastAvatarLayout, blocks, audio.words, dispatch]);
 
   useAgentToolBridge({
     state,
@@ -1516,6 +1548,11 @@ export const ReelsStudio: React.FC = () => {
     if (!audio.url) return;
     const el = new Audio(audio.url);
     el.preload = 'auto';
+    // Defensive: a recent regression silently muted preview audio after some
+    // play/pause cycles. Set both explicitly on every audio swap so neither
+    // can drift to a wrong state from a prior session.
+    el.muted = false;
+    el.volume = 1;
     audioElRef.current = el;
     return () => {
       el.pause();
@@ -1990,18 +2027,46 @@ export const ReelsStudio: React.FC = () => {
   }, []);
 
   // Sync preview <video> with playhead.
+  // Master clock = the <audio> element. The avatar <video> chases its currentTime.
+  //
+  // Pitfall avoided here:
+  // - The effect runs on every playhead tick (~60Hz). Each tick measured the
+  //   gap and force-seeked if > 80ms. But on WebKit/HEVC HeyGen output, a seek
+  //   costs 100-400ms — during which playhead keeps advancing — so the next
+  //   tick saw an even bigger gap and seeked again. Result: constant stutter.
+  // - Fix: only force-seek on discrete events (play start, block change, big
+  //   jumps from a manual scrub). During steady playback we trust the <video>
+  //   to keep its own time once the initial seek lands.
+  const wasPlayingRef = useRef(false);
+  const lastSyncedBlockIdRef = useRef<string | null>(null);
   useEffect(() => {
     const v = previewVideoRef.current;
     if (!v || !currentBlock || currentBlock.kind !== 'avatar') return;
     if (!currentClip || currentClip.status !== 'ready') return;
     const slot = slotById.get(currentBlock.id);
     if (!slot) return;
-    // Local time within the avatar block.
     const target = Math.max(0, playhead - slot.projectStart);
-    // Only seek when significantly off — avoids the popping caused by frequent seeks.
-    if (Math.abs(v.currentTime - target) > 0.4) {
-      try { v.currentTime = target; } catch { /* ignore */ }
+    const gap = Math.abs(v.currentTime - target);
+
+    const justStartedPlaying = playing && !wasPlayingRef.current;
+    const blockChanged = lastSyncedBlockIdRef.current !== currentBlock.id;
+    // BIG jump = user scrubbed the timeline. Anything under 350ms while
+    // playing is treated as natural drift and left alone, so the <video>
+    // can play smoothly without being re-seeked every frame.
+    const bigJump = gap > 0.35;
+
+    if (justStartedPlaying || blockChanged || bigJump || !playing) {
+      // While paused we ALSO sync at fine granularity so the scrubber updates
+      // the preview frame as the user drags. The expensive seek-loop only
+      // happens during playback — and there we now hold steady.
+      if (!playing && gap < 0.05) {
+        // already aligned
+      } else {
+        try { v.currentTime = target; } catch { /* ignore */ }
+      }
     }
+    wasPlayingRef.current = playing;
+    lastSyncedBlockIdRef.current = currentBlock.id;
     if (playing && v.paused) v.play().catch(() => {});
     if (!playing && !v.paused) v.pause();
   }, [playhead, playing, currentBlock, currentClip, slotById]);
@@ -2048,8 +2113,8 @@ export const ReelsStudio: React.FC = () => {
           borderBottom: `1px solid ${tokens.border.subtle}`,
         }}
       >
-        {/* Left: project name */}
-        <div className="flex items-center min-w-0">
+        {/* Left: project name + save indicator */}
+        <div className="flex items-center min-w-0 gap-1.5">
           <input
             value={projectName}
             onChange={e => dispatch({ type: 'set-name', name: e.target.value })}
@@ -2059,6 +2124,31 @@ export const ReelsStudio: React.FC = () => {
             onBlur={e => e.currentTarget.style.backgroundColor = 'transparent'}
             placeholder="Projeto sem nome"
           />
+          {/* Save indicator — Figma/Notion-style. Shows while saving, fades to "salvo" after. */}
+          {saving ? (
+            <span
+              className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md"
+              style={{ color: tokens.text.tertiary }}
+              title="Salvando..."
+            >
+              <span
+                className="w-1.5 h-1.5 rounded-full animate-pulse"
+                style={{ backgroundColor: tokens.status.warn }}
+              />
+              salvando
+            </span>
+          ) : savedAt ? (
+            <span
+              className="flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded-md"
+              style={{ color: tokens.text.secondary }}
+              title={`Salvo ${formatRelativeTime(savedAt)}`}
+            >
+              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                <path d="M2.5 6.5L4.8 8.8L9.5 3.5" stroke={tokens.status.ok} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              salvo
+            </span>
+          ) : null}
         </div>
 
         {/* Center: status pill (dot + text, no background) */}
@@ -2068,12 +2158,6 @@ export const ReelsStudio: React.FC = () => {
             style={{ backgroundColor: tokens.status[statusPill.dotColor] }}
           />
           <span className="tabular-nums">{statusPill.text}</span>
-          {saving && (
-            <span className="ml-2" style={{ color: tokens.text.tertiary }}>· salvando…</span>
-          )}
-          {!saving && savedAt && (
-            <span className="ml-2" style={{ color: tokens.text.tertiary }}>· salvo {formatRelativeTime(savedAt)}</span>
-          )}
         </div>
 
         {/* Right: aspect, overflow menu, export */}
@@ -2154,21 +2238,8 @@ export const ReelsStudio: React.FC = () => {
                 style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}` }}
                 onMouseLeave={() => setOverflowMenuOpen(false)}
               >
-                {/* Group: Project */}
+                {/* Group: Project — auto-save means no manual "save" button. */}
                 <div className="px-3 pb-1 text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>Projeto</div>
-                <button
-                  onClick={() => { setOverflowMenuOpen(false); handleSaveNamed(); }}
-                  disabled={savingNamed}
-                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors disabled:opacity-50"
-                  style={{ color: tokens.text.primary }}
-                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
-                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
-                >
-                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" />
-                  </svg>
-                  <span>Salvar projeto</span>
-                </button>
                 <button
                   onClick={() => { setOverflowMenuOpen(false); handleOpenProjects(); }}
                   className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
@@ -2182,7 +2253,7 @@ export const ReelsStudio: React.FC = () => {
                   <span>Meus projetos</span>
                 </button>
                 <button
-                  onClick={() => { setOverflowMenuOpen(false); setConfirmClearMode('new'); setConfirmClearOpen(true); }}
+                  onClick={() => { setOverflowMenuOpen(false); handleNewProject(); }}
                   className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
                   style={{ color: tokens.text.primary }}
                   onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
@@ -2192,6 +2263,19 @@ export const ReelsStudio: React.FC = () => {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
                   <span>Novo projeto</span>
+                </button>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); setClipRescueOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  title="Reassocia vídeos de avatar que ficaram órfãos depois de splits ou edições"
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a4 4 0 014 4v2M3 10l4-4m-4 4l4 4" />
+                  </svg>
+                  <span>Recuperar clips perdidos</span>
                 </button>
 
                 <div className="my-1.5" style={{ borderTop: `1px solid ${tokens.border.subtle}` }} />
@@ -2229,12 +2313,19 @@ export const ReelsStudio: React.FC = () => {
 
                 {/* Group: System */}
                 <div className="px-3 pb-1 text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>Sistema</div>
-                {/* App theme segmented control */}
+                {/* App theme segmented control. Light/Dark here is the SINGLE
+                    source of truth — it also drives motionColorMode so motions
+                    generated after the toggle follow the chosen scheme. Earlier
+                    they were independent and users were surprised to see motions
+                    stay dark after switching the UI to light. */}
                 <div className="px-3 py-1.5">
-                  <div className="text-[10px] mb-1" style={{ color: tokens.text.secondary }}>Tema do app</div>
+                  <div className="text-[10px] mb-1" style={{ color: tokens.text.secondary }}>Tema</div>
                   <div className="flex rounded-md p-0.5" style={{ backgroundColor: tokens.bg.hover }}>
                     <button
-                      onClick={() => dispatch({ type: 'set-app-theme', theme: 'light' })}
+                      onClick={() => {
+                        dispatch({ type: 'set-app-theme', theme: 'light' });
+                        dispatch({ type: 'set-motion-color-mode', mode: 'light' });
+                      }}
                       className="flex-1 px-2 py-1 rounded text-[11px] flex items-center justify-center gap-1 transition-colors"
                       style={{
                         backgroundColor: isLight ? tokens.bg.surface : 'transparent',
@@ -2248,7 +2339,10 @@ export const ReelsStudio: React.FC = () => {
                       Claro
                     </button>
                     <button
-                      onClick={() => dispatch({ type: 'set-app-theme', theme: 'dark' })}
+                      onClick={() => {
+                        dispatch({ type: 'set-app-theme', theme: 'dark' });
+                        dispatch({ type: 'set-motion-color-mode', mode: 'dark' });
+                      }}
                       className="flex-1 px-2 py-1 rounded text-[11px] flex items-center justify-center gap-1 transition-colors"
                       style={{
                         backgroundColor: !isLight ? tokens.bg.surface : 'transparent',
@@ -2260,6 +2354,31 @@ export const ReelsStudio: React.FC = () => {
                       </svg>
                       Escuro
                     </button>
+                  </div>
+                </div>
+                {/* Motion energy segmented control — minimal vs energetic pacing */}
+                <div className="px-3 py-1.5">
+                  <div className="text-[10px] mb-1" style={{ color: tokens.text.secondary }}>Vibe dos motions</div>
+                  <div className="flex rounded-md p-0.5" style={{ backgroundColor: tokens.bg.hover }}>
+                    {([
+                      { id: 'minimal', label: '🪶 Minimal' },
+                      { id: 'energetic', label: '🔥 Energético' },
+                    ] as const).map(opt => {
+                      const active = (state.motionEnergy ?? 'energetic') === opt.id;
+                      return (
+                        <button
+                          key={opt.id}
+                          onClick={() => dispatch({ type: 'set-motion-energy', energy: opt.id })}
+                          className="flex-1 px-2 py-1 rounded text-[11px] flex items-center justify-center gap-1 transition-colors"
+                          style={{
+                            backgroundColor: active ? tokens.bg.surface : 'transparent',
+                            color: active ? tokens.text.primary : tokens.text.secondary,
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 <button
@@ -2555,13 +2674,17 @@ export const ReelsStudio: React.FC = () => {
                 </div>
               ) : null
             ) : currentBlock?.kind === 'avatar' ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-amber-500/20 via-zinc-900 to-zinc-950">
+              // Avatar-not-yet-generated placeholder. Doubles as a backdrop for
+              // motion overlays so the user can preview their motion before
+              // committing to a HeyGen render. Kept visually muted (silhouette
+              // on dark gradient) so the motion stays the visual focus.
+              <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-b from-zinc-800 via-zinc-900 to-black z-[15]">
                 <div className="text-center px-6">
-                  <div className="w-32 h-32 rounded-full bg-gradient-to-br from-amber-300 to-amber-600 mx-auto mb-4 flex items-center justify-center shadow-2xl">
-                    <svg className="w-16 h-16 text-white/90" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+                  {/* Silhouette avatar — neutral grey so motion overlays (screen blend) read well over it */}
+                  <div className="w-40 h-40 rounded-full bg-gradient-to-b from-zinc-600 to-zinc-700 mx-auto mb-5 flex items-center justify-center opacity-60">
+                    <svg className="w-20 h-20 text-zinc-900/40" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                   </div>
-                  <div className="text-xs uppercase tracking-widest text-amber-300/70">Avatar Clip</div>
-                  <div className="text-sm text-zinc-300 mt-1 max-w-[80%] mx-auto">{currentBlock.text.slice(0, 80)}{currentBlock.text.length > 80 ? '…' : ''}</div>
+                  <div className="text-[10px] uppercase tracking-widest text-zinc-500">Preview · sem avatar ainda</div>
                   {state.avatarClips[currentBlock.id] && state.avatarClips[currentBlock.id].status !== 'ready' && (
                     <div className="mt-3 text-[11px] text-violet-300">⏳ {state.avatarClips[currentBlock.id].message ?? state.avatarClips[currentBlock.id].status}</div>
                   )}
@@ -2602,7 +2725,13 @@ export const ReelsStudio: React.FC = () => {
                   default:            return 'overlay';
                 }
               })();
-              if (displayLayer === 'overlay') return null;
+              // Overlay used to early-return here (the assumption was that
+              // when the avatar <video> exists, screen-blend renders the motion
+              // on top of it as a sibling). But before the avatar clip is
+              // generated, that path skipped the motion entirely — leaving the
+              // user staring at the avatar placeholder with no preview of
+              // their motion. Now we always render; the placeholder behind
+              // doubles as a "what this could look like" mockup.
               // Map the project playhead into "seconds since this block
               // started", so MotionLayerOverlay can keep its <video>
               // element seeked to the right frame even when the
@@ -2965,7 +3094,78 @@ export const ReelsStudio: React.FC = () => {
               );
             })()}
 
-            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2.5">
+            <div className="flex-1 overflow-y-auto px-4 py-4 space-y-2.5 relative">
+              {/* Multi-select floating toolbar — appears when 2+ blocks are selected via shift/cmd+click. */}
+              {multiSelectIds.size > 1 && (
+                <div
+                  className="sticky top-0 z-30 flex items-center gap-2 px-3 py-2 rounded-lg shadow-lg backdrop-blur"
+                  style={{
+                    backgroundColor: 'rgba(15,15,18,0.92)',
+                    border: `1px solid ${tokens.border.subtle}`,
+                  }}
+                >
+                  <span className="text-xs font-semibold" style={{ color: tokens.text.primary }}>
+                    {multiSelectIds.size} blocos selecionados
+                  </span>
+                  <div className="h-4 w-px" style={{ backgroundColor: tokens.border.subtle }} />
+                  <select
+                    onChange={e => {
+                      const layout = e.target.value as BlockLayout;
+                      for (const id of multiSelectIds) dispatch({ type: 'set-block-layout', id, layout });
+                      e.target.value = '';
+                    }}
+                    defaultValue=""
+                    className="bg-transparent text-xs px-1.5 py-1 rounded outline-none"
+                    style={{ color: tokens.text.primary, border: `1px solid ${tokens.border.subtle}` }}
+                  >
+                    <option value="" disabled>📐 Layout</option>
+                    <option value="avatar-only">Avatar only</option>
+                    <option value="media-only">Media only</option>
+                    <option value="avatar-top">Avatar top / Media bottom</option>
+                    <option value="media-top">Media top / Avatar bottom</option>
+                  </select>
+                  <select
+                    onChange={e => {
+                      const transition = e.target.value as BlockTransition;
+                      for (const id of multiSelectIds) dispatch({ type: 'set-block-transition', id, transition });
+                      e.target.value = '';
+                    }}
+                    defaultValue=""
+                    className="bg-transparent text-xs px-1.5 py-1 rounded outline-none"
+                    style={{ color: tokens.text.primary, border: `1px solid ${tokens.border.subtle}` }}
+                  >
+                    <option value="" disabled>▾ Transição</option>
+                    <option value="cut">╳ Cut</option>
+                    <option value="fade">▾ Fade</option>
+                    <option value="dissolve">◐ Dissolve</option>
+                    <option value="whip-pan">↔ Whip pan</option>
+                    <option value="zoom-blur">⊕ Zoom blur</option>
+                    <option value="glitch">⚡ Glitch</option>
+                    <option value="light-flash">✶ Light flash</option>
+                  </select>
+                  <select
+                    onChange={e => {
+                      const preset = e.target.value as StylePresetId;
+                      for (const id of multiSelectIds) dispatch({ type: 'set-block-style-preset', id, preset });
+                      e.target.value = '';
+                    }}
+                    defaultValue=""
+                    className="bg-transparent text-xs px-1.5 py-1 rounded outline-none"
+                    style={{ color: tokens.text.primary, border: `1px solid ${tokens.border.subtle}` }}
+                  >
+                    <option value="" disabled>🎭 Papel</option>
+                    {STYLE_PRESETS.filter(p => p.id !== 'claude-ui').map(p => (
+                      <option key={p.id} value={p.id}>{p.emoji} {p.roleLabel ?? p.label}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setMultiSelectIds(new Set())}
+                    className="ml-auto w-6 h-6 rounded flex items-center justify-center"
+                    style={{ color: tokens.text.tertiary }}
+                    title="Limpar seleção (ESC)"
+                  >×</button>
+                </div>
+              )}
               {aspect === 'carousel' ? (
 
                 // ── CAROUSEL MODE: dedicated CarouselSlideCard, no avatar/layout/audio ──
@@ -3055,9 +3255,36 @@ export const ReelsStudio: React.FC = () => {
                     onSetAvatarPhoto: (photoId: string | undefined) => dispatch({ type: 'set-block-avatar-photo', id: b.id, photoId }),
                     defaultZoom: defaultAvatarZoom(state.aspect, b.layout),
                     isCurrent: currentBlock?.id === b.id,
-                    isSelected: selectedBlockId === b.id,
+                    isSelected: selectedBlockId === b.id || multiSelectIds.has(b.id),
                     compact: isCompact,
-                    onSelect: () => selectAndSeekBlock(b.id),
+                    onSelect: (e?: React.MouseEvent) => {
+                      const isShift = !!e?.shiftKey;
+                      const isMeta = !!(e?.metaKey || e?.ctrlKey);
+                      if (isShift && selectedBlockId) {
+                        // Range select between previously focused block and this one.
+                        const anchorIdx = blocks.findIndex(x => x.id === selectedBlockId);
+                        const targetIdx = blocks.findIndex(x => x.id === b.id);
+                        if (anchorIdx >= 0 && targetIdx >= 0) {
+                          const [from, to] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
+                          const range = new Set<string>();
+                          for (let i = from; i <= to; i++) range.add(blocks[i].id);
+                          setMultiSelectIds(range);
+                          return;
+                        }
+                      }
+                      if (isMeta) {
+                        setMultiSelectIds(prev => {
+                          const next = new Set(prev);
+                          if (next.has(b.id)) next.delete(b.id);
+                          else next.add(b.id);
+                          return next;
+                        });
+                        return;
+                      }
+                      // Plain click → clear multi-select and select this one.
+                      if (multiSelectIds.size > 0) setMultiSelectIds(new Set());
+                      selectAndSeekBlock(b.id);
+                    },
                     onJumpTo: () => selectAndSeekBlock(b.id),
                     onOpenMotion: () => {
                       const m = b.motion;
@@ -3221,6 +3448,9 @@ export const ReelsStudio: React.FC = () => {
               }).length;
               const motionBusyCount = Object.keys(motionBusyByBlock).length;
               const motionBusy = motionBusyCount > 0;
+              // Blocks that have no motion at all yet — candidates for "Gerar todos".
+              const blocksWithoutMotion = blocks.filter(b => !b.motion?.html);
+              const generateAllCount = blocksWithoutMotion.length;
 
               const items: Array<{
                 key: string;
@@ -3279,14 +3509,34 @@ export const ReelsStudio: React.FC = () => {
                   visible: avatarBlocks.length > 0,
                 },
                 {
+                  key: 'generate-all-motions',
+                  icon: '⚡',
+                  label: motionBusy
+                    ? `Gerando motions… (${motionBusyCount})`
+                    : `Gerar todos os motions (${generateAllCount})`,
+                  hint: 'Gemini cria HTML + HyperFrames renderiza MP4 pra cada bloco sem motion',
+                  onClick: () => {
+                    if (motionBusy || generateAllCount === 0) return;
+                    console.log('[generate-all-motions] iniciando em', generateAllCount, 'blocos');
+                    void handleAutoMotionMany(blocksWithoutMotion.map(b => b.id));
+                  },
+                  disabled: motionBusy || generateAllCount === 0,
+                  disabledHint: motionBusy
+                    ? 'Geração em andamento…'
+                    : generateAllCount === 0
+                    ? 'Todos os blocos já têm motion'
+                    : undefined,
+                  visible: blocks.length > 0,
+                },
+                {
                   key: 'motions',
-                  icon: '🎨',
+                  icon: '🎬',
                   label: motionBusy
                     ? `Renderizando motions… (${motionBusyCount})`
                     : motionPendingCount > 0
-                    ? `Renderizar motions (${motionPendingCount})`
+                    ? `Regenerar pendentes (${motionPendingCount})`
                     : `Motions prontos (${allMotions.length})`,
-                  hint: 'HyperFrames → MP4 para cada motion do roteiro',
+                  hint: 'HyperFrames → MP4 pra motions com HTML novo ou stale',
                   onClick: () => {
                     if (!motionBusy && motionPendingCount > 0) void handleRenderAllMotions();
                   },
@@ -3304,6 +3554,29 @@ export const ReelsStudio: React.FC = () => {
                   label: 'Abrir pasta de assets',
                   hint: 'Coloque imagens e clipes pra usar no projeto',
                   onClick: () => invoke('reveal_assets_dir', { projectName: state.projectName }),
+                },
+                {
+                  key: 'suggest-roles',
+                  icon: '🎭',
+                  label: 'Sugerir papéis nos blocos',
+                  hint: 'Detecta hook/estatística/CTA pelo conteúdo e aplica o preset certo',
+                  onClick: async () => {
+                    const { detectRolesForBlocks } = await import('./reelsStudio/roleDetector');
+                    const suggestions = detectRolesForBlocks(blocks);
+                    console.log('[suggest-roles] detectado:', blocks.map(b => ({
+                      id: b.id.slice(-6),
+                      text: b.text.slice(0, 40),
+                      atual: b.stylePresetOverride ?? '(default)',
+                      sugerido: suggestions[b.id],
+                    })));
+                    // Apply ALL suggestions (overrides any current preset). User can undo via Ctrl+Z.
+                    console.log('[suggest-roles] aplicando em', blocks.length, 'blocos');
+                    for (const b of blocks) {
+                      const sugg = suggestions[b.id];
+                      if (sugg) dispatch({ type: 'set-block-style-preset', id: b.id, preset: sugg });
+                    }
+                  },
+                  disabled: blocks.length === 0,
                 },
                 {
                   key: 'resplit',
@@ -3936,9 +4209,13 @@ export const ReelsStudio: React.FC = () => {
             const leftPct = viewPct(slot.projectEnd);
             const current: BlockTransition = fromBlock.transition ?? 'fade';
             const opts: { value: BlockTransition; label: string; desc: string }[] = [
-              { value: 'cut',      label: '╳ Cut',       desc: 'Corte seco, sem transição' },
-              { value: 'fade',     label: '▾ Fade',      desc: 'Fade pro preto (~333ms)' },
-              { value: 'dissolve', label: '◐ Dissolve',  desc: 'Cross-dissolve com áudio' },
+              { value: 'cut',         label: '╳ Cut',         desc: 'Corte seco, sem transição' },
+              { value: 'fade',        label: '▾ Fade',        desc: 'Fade pro preto (~333ms)' },
+              { value: 'dissolve',    label: '◐ Dissolve',    desc: 'Cross-dissolve com áudio' },
+              { value: 'whip-pan',    label: '↔ Whip pan',    desc: 'Câmera varrendo lateral com motion blur' },
+              { value: 'zoom-blur',   label: '⊕ Zoom blur',   desc: 'Zoom dramático com blur' },
+              { value: 'glitch',      label: '⚡ Glitch',      desc: 'RGB split + jitter digital' },
+              { value: 'light-flash', label: '✶ Light flash', desc: 'Flash branco no meio do corte' },
             ];
             return (
               <>
@@ -4101,7 +4378,8 @@ export const ReelsStudio: React.FC = () => {
             block={block}
             brandIdentity={state.brandIdentity}
             onBrandLearned={(brand) => dispatch({ type: 'set-brand-identity', brand })}
-            motionColorMode={state.motionColorMode ?? 'dark'}
+            motionColorMode={state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')}
+            motionEnergy={state.motionEnergy ?? 'energetic'}
             onSetMotionColorMode={(mode) => dispatch({ type: 'set-motion-color-mode', mode })}
             appTheme={state.appTheme ?? 'dark'}
             onClose={() => setMotionPickerBlockId(null)}
@@ -4146,6 +4424,14 @@ export const ReelsStudio: React.FC = () => {
         />
       )}
 
+      <ClipRescueModal
+        open={clipRescueOpen}
+        onClose={() => setClipRescueOpen(false)}
+        blocks={blocks}
+        avatarClips={state.avatarClips}
+        dispatch={dispatch}
+        appTheme={state.appTheme}
+      />
       {referencesModalOpen && (
         <ReferencesModal
           appTheme={state.appTheme ?? 'dark'}
@@ -4362,55 +4648,141 @@ export const ReelsStudio: React.FC = () => {
           >
             <div className="flex items-center justify-between px-5 pt-5 pb-4 shrink-0">
               <div>
-                <div className="text-sm font-semibold text-zinc-100">Projetos salvos</div>
-                <div className="text-[11px] text-zinc-500 mt-0.5">Clique em Abrir para carregar um projeto</div>
+                <div className="text-sm font-semibold" style={{ color: tokens.text.primary }}>Projetos</div>
+                <div className="text-[11px] mt-0.5" style={{ color: tokens.text.tertiary }}>Tudo salva automático. Abra um projeto antigo a qualquer momento.</div>
               </div>
-              <button onClick={() => setProjectsOpen(false)} className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors text-lg leading-none">×</button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={async () => { await handleNewProject(); setProjectsOpen(false); }}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                  style={{ backgroundColor: tokens.accent.focus, color: 'white' }}
+                  onMouseEnter={e => e.currentTarget.style.opacity = '0.9'}
+                  onMouseLeave={e => e.currentTarget.style.opacity = '1'}
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                  </svg>
+                  Novo projeto
+                </button>
+                <button onClick={() => setProjectsOpen(false)} className="w-7 h-7 rounded-full bg-white/5 hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-zinc-200 transition-colors text-lg leading-none">×</button>
+              </div>
             </div>
             <div className="overflow-y-auto flex-1 px-5 pb-5">
               {savedProjects.length === 0 ? (
                 <div className="text-center py-10">
                   <div className="text-2xl mb-2">📁</div>
-                  <div className="text-sm text-zinc-500">Nenhum projeto salvo ainda.</div>
-                  <div className="text-[11px] text-zinc-600 mt-1">Clique em "Salvar" no header para guardar o projeto atual.</div>
+                  <div className="text-sm" style={{ color: tokens.text.secondary }}>Nenhum projeto ainda.</div>
+                  <div className="text-[11px] mt-1" style={{ color: tokens.text.tertiary }}>Comece editando — o auto-save vai criar o primeiro.</div>
                 </div>
               ) : (
                 <div className="flex flex-col gap-2">
-                  {savedProjects.map(p => (
-                    <div key={p.id} className="flex items-center gap-3 px-4 py-3 rounded-xl bg-white/5 border border-white/[0.06] hover:border-violet-500/30 transition-colors group">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-semibold text-zinc-100 truncate">{p.name}</div>
-                        <div className="text-[10px] text-zinc-500 mt-0.5 flex items-center gap-2">
-                          <span>{p.blockCount} bloco{p.blockCount !== 1 ? 's' : ''}</span>
-                          <span>·</span>
-                          <span>{p.aspect}</span>
-                          {p.durationSec > 0 && <><span>·</span><span>{Math.round(p.durationSec)}s</span></>}
-                          <span>·</span>
-                          <span>{formatRelativeTime(p.savedAt)}</span>
+                  {savedProjects.map(p => {
+                    const isActive = p.id === state.activeProjectId;
+                    const isRenaming = renamingProjectId === p.id;
+                    const isPendingDelete = deleteConfirmId === p.id;
+                    return (
+                      <div
+                        key={p.id}
+                        className="flex items-center gap-3 px-4 py-3 rounded-xl transition-colors group"
+                        style={{
+                          backgroundColor: isActive ? `${tokens.accent.focus}1a` : tokens.bg.hover,
+                          border: `1px solid ${isActive ? tokens.accent.focus : tokens.border.subtle}`,
+                        }}
+                      >
+                        <div className="flex-1 min-w-0">
+                          {isRenaming ? (
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              onChange={e => setRenameDraft(e.target.value)}
+                              onBlur={async () => {
+                                if (renameDraft.trim() && renameDraft.trim() !== p.name) {
+                                  await handleRenameNamedProject(p.id, renameDraft);
+                                }
+                                setRenamingProjectId(null);
+                              }}
+                              onKeyDown={async e => {
+                                if (e.key === 'Enter') {
+                                  if (renameDraft.trim() && renameDraft.trim() !== p.name) {
+                                    await handleRenameNamedProject(p.id, renameDraft);
+                                  }
+                                  setRenamingProjectId(null);
+                                } else if (e.key === 'Escape') {
+                                  setRenamingProjectId(null);
+                                }
+                              }}
+                              className="w-full bg-transparent text-sm font-semibold outline-none border-b"
+                              style={{ color: tokens.text.primary, borderColor: tokens.accent.focus }}
+                            />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm font-semibold truncate" style={{ color: tokens.text.primary }}>{p.name}</div>
+                              {isActive && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: `${tokens.accent.focus}33`, color: tokens.accent.focus }}>Aberto</span>
+                              )}
+                            </div>
+                          )}
+                          <div className="text-[10px] mt-0.5 flex items-center gap-2" style={{ color: tokens.text.tertiary }}>
+                            <span>{p.blockCount} bloco{p.blockCount !== 1 ? 's' : ''}</span>
+                            <span>·</span>
+                            <span>{p.aspect}</span>
+                            {p.durationSec > 0 && <><span>·</span><span>{Math.round(p.durationSec)}s</span></>}
+                            <span>·</span>
+                            <span>{formatRelativeTime(p.savedAt)}</span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {isPendingDelete ? (
+                            <>
+                              <button
+                                onClick={() => setDeleteConfirmId(null)}
+                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                                style={{ backgroundColor: tokens.bg.hover, color: tokens.text.secondary }}
+                              >Cancelar</button>
+                              <button
+                                onClick={async () => { setDeleteConfirmId(null); await handleDeleteNamedProject(p.id); }}
+                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-white transition-colors"
+                                style={{ backgroundColor: tokens.status.err }}
+                              >Excluir</button>
+                            </>
+                          ) : !isRenaming ? (
+                            <>
+                              {!isActive && (
+                                <button
+                                  onClick={() => handleLoadNamedProject(p.id)}
+                                  disabled={loadingProjectId === p.id}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                                  style={{ backgroundColor: `${tokens.accent.focus}33`, color: tokens.accent.focus }}
+                                >
+                                  {loadingProjectId === p.id ? (
+                                    <span className="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                                  ) : 'Abrir'}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => { setRenamingProjectId(p.id); setRenameDraft(p.name); }}
+                                className="w-7 h-7 rounded-lg bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-zinc-200 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                                title="Renomear"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => setDeleteConfirmId(p.id)}
+                                className="w-7 h-7 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 text-zinc-500 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                                title="Excluir projeto"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
+                                </svg>
+                              </button>
+                            </>
+                          ) : null}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => handleLoadNamedProject(p.id)}
-                          disabled={loadingProjectId === p.id}
-                          className="px-3 py-1.5 rounded-lg bg-violet-500/20 hover:bg-violet-500/30 text-xs font-semibold text-violet-300 transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                        >
-                          {loadingProjectId === p.id ? (
-                            <span className="w-3 h-3 border border-violet-400 border-t-transparent rounded-full animate-spin" />
-                          ) : 'Abrir'}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteNamedProject(p.id)}
-                          className="w-7 h-7 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 text-zinc-500 flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
-                          title="Excluir projeto"
-                        >
-                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M1 7h22M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -4705,7 +5077,8 @@ interface BlockCardProps {
   isCurrent: boolean;
   isSelected: boolean;
   compact?: boolean;
-  onSelect: () => void;
+  /** Click handler — receives the event so the parent can read shift/meta keys for multi-select. */
+  onSelect: (e?: React.MouseEvent) => void;
   onJumpTo: () => void;
   onOpenMotion: () => void;
   onOpenMotionAdvanced: () => void;
@@ -5540,43 +5913,65 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         </div>
       )}
 
-      {expanded && isAvatar && (
+      {expanded && isAvatar && (() => {
+        // Sliders go from 1.0 (no zoom — works for natively-vertical clips like
+        // Avatar V) up to 2.4 (tight crop). Earlier the min was clamped to the
+        // aspect's "auto" zoom (1.78x for 9:16) on the assumption that all
+        // HeyGen clips were 16:9 — but Avatar V is 9:16 native, so the clamp
+        // forced an unwanted scale-up on those.
+        const zoomMin = 1.0;
+        const zoomMax = 2.4;
+        const zoomStep = 0.02;
+        const zoomValue = b.avatarZoom ?? defaultZoom;
+        const clampedZoomValue = Math.max(zoomMin, Math.min(zoomMax, zoomValue));
+        // "At auto" when the value is within one slider step of the default —
+        // covers both undefined and the explicit value if the user dragged back to it.
+        const atAuto = Math.abs(zoomValue - defaultZoom) < zoomStep;
+        // Vertical offset reduced from ±0.5 → ±0.25. The old wide range made
+        // tiny slider moves shove the avatar offscreen.
+        const offsetY = b.avatarOffsetY ?? 0;
+        return (
         <div className="px-3 py-2 border-t border-white/5 space-y-1.5">
           <div className="flex items-center justify-between text-[10px]">
             <span className="text-zinc-400">🔍 Zoom do avatar</span>
-            <span className={`font-mono ${(b.avatarZoom ?? defaultZoom) > defaultZoom + 0.05 ? 'text-violet-300' : 'text-zinc-300'}`}>
-              {(b.avatarZoom ?? defaultZoom).toFixed(2)}x
-              {b.avatarZoom === undefined && <span className="text-zinc-600 ml-1">(auto)</span>}
+            <span className={`font-mono ${atAuto ? 'text-zinc-300' : 'text-violet-300'}`}>
+              {zoomValue.toFixed(2)}x
+              {atAuto && <span className="text-zinc-600 ml-1">(preenche)</span>}
             </span>
           </div>
           <input
             type="range"
-            min={0.7}
-            max={3}
-            step={0.05}
-            value={b.avatarZoom ?? defaultZoom}
+            min={zoomMin}
+            max={zoomMax}
+            step={zoomStep}
+            value={clampedZoomValue}
             onChange={(e) => onSetAvatarZoom(parseFloat(e.target.value))}
+            onDoubleClick={() => onSetAvatarZoom(defaultZoom)}
+            title="Duplo-clique pra voltar ao zoom que preenche o frame"
             className="w-full h-1 accent-violet-400 cursor-pointer"
           />
-          <div className="text-[9px] text-zinc-500">HeyGen rende em 16:9; ajuste o zoom pra encaixar no aspect do reel.</div>
+          <div className="text-[9px] text-zinc-500">Mínimo já preenche o frame · arraste pra fechar mais no rosto. Duplo-clique reseta.</div>
           {/* Vertical position slider */}
           <div className="flex items-center justify-between text-[10px] mt-2">
             <span className="text-zinc-400">↕️ Posição vertical</span>
             <span className="font-mono text-zinc-300">
-              {b.avatarOffsetY === undefined || b.avatarOffsetY === 0 ? 'centro' : b.avatarOffsetY > 0 ? `+${(b.avatarOffsetY * 100).toFixed(0)}% ↓` : `${(b.avatarOffsetY * 100).toFixed(0)}% ↑`}
+              {offsetY === 0 ? 'centro' : offsetY > 0 ? `+${(offsetY * 100).toFixed(0)}% ↓` : `${(offsetY * 100).toFixed(0)}% ↑`}
             </span>
           </div>
           <input
             type="range"
-            min={-0.5}
-            max={0.5}
-            step={0.02}
-            value={b.avatarOffsetY ?? 0}
+            min={-0.25}
+            max={0.25}
+            step={0.01}
+            value={Math.max(-0.25, Math.min(0.25, offsetY))}
             onChange={(e) => onSetAvatarOffsetY(parseFloat(e.target.value))}
+            onDoubleClick={() => onSetAvatarOffsetY(0)}
+            title="Duplo-clique para centralizar"
             className="w-full h-1 accent-violet-400 cursor-pointer"
           />
         </div>
-      )}
+        );
+      })()}
 
       <div className="px-3 py-2 border-t border-white/5 flex items-center justify-between text-[10px] text-zinc-500 font-mono">
         <span>{formatTime(b.start)} → {formatTime(b.end)}{b.dirty && <span className="ml-1.5 text-amber-400">· alterado</span>}</span>

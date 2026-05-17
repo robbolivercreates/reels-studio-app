@@ -444,10 +444,21 @@ Other rules for "blocks[].text":
 - Spell out numbers in words ("dois milhões" not "2.000.000", "cinquenta por cento" not "50%").
 - Spell out symbols and currencies ("dólares" not "$", "arroba" not "@").
 - Spell out abbreviations on first mention ("inteligência artificial" not "IA", unless the abbreviation is itself pronounced as a word).
+- Letter-by-letter acronyms must be written PHONETICALLY in pt-BR so Minimax pronounces them correctly. The TTS engine reads raw letters as a single broken word ("UX" → "ucs"). Write them spelled out instead:
+  ✓ "u-éqis"  (not "UX")
+  ✓ "i-á"     (not "IA")
+  ✓ "ei-ai"   (not "AI")
+  ✓ "pê-dê-éfe" (not "PDF")
+  ✓ "cê-tê-á" (not "CTA")
+  ✓ "u-ai"    (not "UI")
+  ✓ "sé-ó"    (not "SEO")
+  ✓ "êa-pi-i" (not "API")
+  Exception — acronyms that are pronounced as a single word (LASER, NASA, UNESCO, GIF, JPEG) stay as-is. When unsure, ask: "does a Brazilian say each letter separately, or as one word?" If letter-by-letter, spell phonetically.
 - No emojis, no parentheses, no brackets, no hashtags, no URLs, no markdown formatting.
 - KEEP all standard punctuation: periods, commas, question marks, exclamation marks, colons, semicolons, em-dashes.
 - Avoid ellipses ("...") — Minimax over-extends pauses on them. Use a period instead.
 - Capitalize the first letter of each sentence and proper nouns. Do not write in all-caps.
+- EMPHASIS rule: NEVER use ALL CAPS to emphasize words, and NEVER repeat "!!!". Minimax reads CAPS as letter-by-letter and ignores extra exclamation marks. If a word needs emphasis, use REPETITION ("é simples, simples mesmo", "muito bom, muito bom"), or intensifiers ("muito", "demais", "absurdamente"), or rely on the emotion macro (happy / surprised) which carries the energy. The user can also request explicit emphasis later — when they do, lean on repetition, not formatting tricks.
 - The "transcript" field stays faithful to the original audio for reference — these rules apply ONLY to "blocks[].text".`.trim();
 
 /**

@@ -147,10 +147,26 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer, lo
         zIndex: 30,
       }
     : layer === 'overlay'
-    ? { position: 'absolute', inset: 0, opacity: 0.88, mixBlendMode: 'screen', zIndex: 30 }
+    ? {
+        // Mobile-first floating overlay (Submagic / Hormozi style): the motion
+        // floats over the presenter's chest area, NOT in the bottom-third.
+        // Why bottom: '20%' and not 0: Reels/TikTok/Shorts UI (likes, comments,
+        // caption rail, progress bar) eats the bottom ~15-20% of the frame, so
+        // any content placed there gets occluded once the video is uploaded.
+        // The 22% height + 20% bottom puts the overlay center at ~y:0.69 of the
+        // frame — well inside the cross-platform safe zone (y:0.11-0.80).
+        position: 'absolute', left: 0, right: 0, bottom: '20%', height: '22%',
+        opacity: 1, mixBlendMode: 'screen', zIndex: 30,
+        filter: 'contrast(1.35) brightness(1.05)',
+      }
     : { position: 'absolute', inset: 0, opacity: 1, zIndex: 30 }; // replace
 
-  const videoStyle: React.CSSProperties = { width: '100%', height: '100%', objectFit: 'cover' };
+  // Overlay (lower-third) needs `contain` — `cover` would crop the motion's
+  // sides off; here we want the whole motion squeezed into the bottom band.
+  const videoStyle: React.CSSProperties = {
+    width: '100%', height: '100%',
+    objectFit: layer === 'overlay' ? 'contain' : 'cover',
+  };
 
   const mediaEl = mp4Url ? (
     <video

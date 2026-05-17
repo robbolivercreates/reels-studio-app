@@ -95,7 +95,9 @@ export interface PersistedProject {
   emotion?: ReelsState['emotion'];
   voiceSpeed?: number;
   motionColorMode?: ReelsState['motionColorMode'];
+  motionEnergy?: ReelsState['motionEnergy'];
   appTheme?: ReelsState['appTheme'];
+  lastAvatarLayout?: ReelsState['lastAvatarLayout'];
   savedAt: number;
 }
 
@@ -142,7 +144,9 @@ export const saveProject = async (state: ReelsState): Promise<void> => {
     emotion: state.emotion,
     voiceSpeed: state.voiceSpeed,
     motionColorMode: state.motionColorMode,
+    motionEnergy: state.motionEnergy,
     appTheme: state.appTheme,
+    lastAvatarLayout: state.lastAvatarLayout,
     savedAt: Date.now(),
   };
   await reqOf(STORE_PROJECT, 'readwrite', s => s.put(snapshot, PROJECT_KEY));
@@ -228,6 +232,36 @@ const reviveStoredBlob = async (raw: unknown, defaultMime: string): Promise<Blob
 export const saveClipBlob = async (blockId: string, blob: Blob): Promise<void> => {
   const buffer = await blob.arrayBuffer();
   await reqOf(STORE_CLIPS, 'readwrite', s => s.put({ buffer, type: blob.type || 'video/mp4' }, blockId));
+};
+
+/**
+ * Move a clip blob from one key to another atomically. Used to recover from
+ * the split-block bug where the reducer assigned the clip to a new blockId
+ * in state but never migrated the IndexedDB row, so it stayed orphaned under
+ * the original blockId.
+ */
+export const renameClipBlob = async (oldBlockId: string, newBlockId: string): Promise<void> => {
+  if (oldBlockId === newBlockId) return;
+  const db = await openDB();
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_CLIPS, 'readwrite');
+    const s = tx.objectStore(STORE_CLIPS);
+    const getReq = s.get(oldBlockId);
+    getReq.onsuccess = () => {
+      const value = getReq.result;
+      if (value == null) { resolve(); return; }
+      s.put(value, newBlockId);
+      s.delete(oldBlockId);
+    };
+    getReq.onerror = () => reject(getReq.error);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error('rename aborted'));
+  });
+};
+
+export const deleteClipBlob = async (blockId: string): Promise<void> => {
+  await reqOf(STORE_CLIPS, 'readwrite', s => s.delete(blockId));
 };
 
 export const loadClipBlob = async (blockId: string): Promise<Blob | null> => {
@@ -402,8 +436,15 @@ interface NamedProjectRecord {
   audioType?: string;
 }
 
-export const saveNamedProject = async (state: ReelsState): Promise<string> => {
-  const id = `project_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+/**
+ * Save a project to the named_projects store.
+ * - When `existingId` is provided, the slot is updated in place (auto-save flow).
+ * - When omitted, a fresh id is generated (manual "save as" / "new project" flow).
+ * Audio is inlined as ArrayBuffer; clips/takes live in their global stores
+ * (keyed by blockId/takeId which are globally unique uids).
+ */
+export const saveNamedProject = async (state: ReelsState, existingId?: string): Promise<string> => {
+  const id = existingId ?? `project_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
   const snapshot: PersistedProject = {
     projectName: state.projectName,
@@ -441,7 +482,9 @@ export const saveNamedProject = async (state: ReelsState): Promise<string> => {
     emotion: state.emotion,
     voiceSpeed: state.voiceSpeed,
     motionColorMode: state.motionColorMode,
+    motionEnergy: state.motionEnergy,
     appTheme: state.appTheme,
+    lastAvatarLayout: state.lastAvatarLayout,
     savedAt: Date.now(),
   };
 
@@ -511,6 +554,19 @@ export const loadNamedProject = async (id: string): Promise<{ snapshot: Persiste
 
 export const deleteNamedProject = async (id: string): Promise<void> => {
   await reqOf(STORE_NAMED_PROJECTS, 'readwrite', s => s.delete(id));
+};
+
+/** Patch only the project name in both the meta and the snapshot, without rewriting audio/blocks. */
+export const renameNamedProject = async (id: string, newName: string): Promise<void> => {
+  const result = await reqOf(STORE_NAMED_PROJECTS, 'readonly', s => s.get(id));
+  if (!result) return;
+  const record = result as NamedProjectRecord;
+  const updated: NamedProjectRecord = {
+    ...record,
+    meta: { ...record.meta, name: newName, savedAt: Date.now() },
+    snapshot: { ...record.snapshot, projectName: newName },
+  };
+  await reqOf(STORE_NAMED_PROJECTS, 'readwrite', s => s.put(updated, id));
 };
 
 // ─── HARD RESET ──────────────────────────────────────────────────
