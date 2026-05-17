@@ -265,37 +265,75 @@ NEVER:
     bgType: 'dark',
     atmosphere: {
       baseBg: '#08080f',
-      warmGlow: { color: '#7850c8', alpha: 0.18, pos: '20% 30%' },
+      // Swapped #7850c8 (purple, banned) for tech-cyan complementary to warm amber.
+      warmGlow: { color: '#0ea5e9', alpha: 0.18, pos: '20% 30%' },
       coolGlow: { color: '#ff8c3c', alpha: 0.14, pos: '80% 70%' },
       vignetteIntensity: 0.7,
     },
     geminiBrief: `
-PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
-  bg: radial-gradient(ellipse at top, brandBackgroundColor 0%, #000 80%)
-  text: brandTextColor
-  accent: brandPrimaryColor
-  glow: brandPrimaryColor at 60% alpha (use rgba conversion)
-  glass-bg: rgba(255,255,255,0.08)
-  glass-border: rgba(255,255,255,0.18)
+PALETTE: Frosted glass, cool tech, premium materials.
+  bg: radial-gradient(ellipse at top, brandBackgroundColor 0%, #050510 80%).
+      Fallback if brand bg is light: force '#08080f' (deep tech blue-black).
+  text: brandTextColor.
+      Fallback if unset OR < 7:1: '#e8edf5' (cool off-white — never pure #ffffff).
+  accent: brandPrimaryColor.
+      If brand is in 250-345 hue band (banned), force '#0ea5e9' (tech cyan).
+  glow on accent: ${'$\{accent\} at alpha 0.6'} — write the literal rgba()
+      conversion by splitting the hex into r,g,b and using "rgba(r, g, b, 0.6)".
+      DO NOT write "brandPrimaryColor at 60% alpha" — Gemini must emit literal CSS.
+  glass-bg: rgba(255,255,255,0.06) — slightly darker than 0.08 to feel premium
+  glass-border: rgba(255,255,255,0.14) (was 0.18 — too bright)
+  glass-highlight-edge: rgba(255,255,255,0.22) — 1px top edge only, simulates light
+  grid lines: rgba(255,255,255,0.06) — 1px @ 6% alpha
 
 TYPOGRAPHY:
-  primary: "Inter", system-ui, sans-serif
-  weights: 500, 700
-  display sizes: 80-160px
-  letter-spacing: -1.5 to -2.5
+  primary: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif (class="font-tech")
+  weights: 500 (body), 600 (display)
+  display sizes: 88-160px
+  letter-spacing: -0.02em to -0.03em on display, -0.01em on body
+  line-height: 1.08 on display, 1.45 on body
+  numerals: use tabular-nums (font-variant-numeric: tabular-nums) for stats
 
 LAYOUT:
-  frosted glass cards (backdrop-filter: blur(20px))
-  thin glowing borders in brandPrimaryColor
-  brandPrimaryColor accent particles drifting in background
-  grid lines very faint at 8% opacity
+  frosted glass cards: backdrop-filter: blur(20px) saturate(180%); background
+      glass-bg; border 1px solid glass-border; rounded corners 16-20px
+  inner highlight: ::before { top: 0; left: 8px; right: 8px; height: 1px;
+      background: glass-highlight-edge } — sells the "glass" feel
+  card padding: 32-48px (generous)
+  thin glowing borders on focus elements: 1px solid accent at 50% alpha,
+      with 0 0 24px <accent> at 30% box-shadow
+  faint grid lines in bg: 1px @ 6% alpha, 64px spacing (tech-blueprint feel)
+  accent particles: 3-6 dots, diameter 4-8px, color accent, opacity 0.5-0.7,
+      drifting yoyo on translateY ±20px over 4-6s
+  NO blobs, NO decorative shapes outside grid + particles (tech is geometric)
 
 MOTION:
-  ease: power2.inOut, sine.inOut
-  durations: 0.8-1.5s (calm, deliberate)
-  prefer opacity + filter (blur 20px → 0)
-  subtle floating animation on glass cards (continuous)
-  glow pulse on accents (yoyo)`.trim(),
+  ease: power2.inOut, sine.inOut, power3.out (entries)
+  durations: 0.8-1.4s (calm, deliberate)
+  ENTRIES: opacity 0→1 + filter: blur(20px) → blur(0) + translateY(20px → 0)
+      over 1.0-1.4s ease power3.out
+  glass cards subtle floating: translateY ±4px yoyo over 5s sine.inOut
+  glow pulse on accents: box-shadow alpha 0.3 ↔ 0.6 yoyo over 2s sine.inOut
+  particles drift: translateY ±20px yoyo over 4-6s, opacity 0.5↔0.7 sync
+  staggers: 0.05-0.08s on glass card reveals
+
+VOICE:
+  Frio, futuro, técnico-aspiracional. Material design encontra Apple Pro.
+  Esse preset é pra produtos onde "qualidade" e "confiança" são o pitch —
+  IA empresarial, hardware premium, ferramenta dev. Calma deliberada, não
+  urgência. Cada elemento tem peso, profundidade, e justifica seu espaço.
+
+NEVER:
+  • gradient nas glass cards (glass = uniform com highlight, não gradient)
+  • saturação > 70% em qualquer elemento (tech é dessaturado por princípio)
+  • animação de qualquer elemento > 1.5s (exceto idle floats)
+  • decoração orgânica: blobs, paint splashes, curves — tech é geométrico
+  • easing back.out, elastic — quebram o feel premium
+  • box-shadow preto puro (rgba(0,0,0,X)) — sempre use accent-tinted shadows
+  • cores purple/magenta/rose no bg ou accent (PRINCIPLE 6 — usa cyan/blue/teal)
+  • mais de 2 glass cards simultaneamente no mesmo frame (depth confusion)
+  • backdrop-filter < 16px (não lê como glass) ou > 30px (overkill)
+  • text-shadow em texto — tech é tipografia precisa, não brilhante`.trim(),
   },
   {
     id: 'kinetic-bold',
