@@ -120,30 +120,60 @@ export const STYLE_PRESETS: StylePreset[] = [
       vignetteIntensity: 0.3,
     },
     geminiBrief: `
-PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
-  bg: brandBackgroundColor
-  text: brandTextColor
-  accent: brandPrimaryColor (sparingly)
-  muted: brandSecondaryColor
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE.
+  bg: brandBackgroundColor.
+      Fallback if unset OR brand bg is busy/saturated: '#f5f5f5' (clean light neutral).
+  text: brandTextColor.
+      Fallback if unset OR < 7:1 contrast: '#1a1a1a' (near-black, NEVER pure #000).
+  accent: brandPrimaryColor — used SPARINGLY (one hot-spot per beat, max).
+      Editorial limpo means accent is the exception, not the rule.
+  muted: brandSecondaryColor at 50% alpha, OR '#86868b' (neutral gray) if unset.
+  separator: '#1a1a1a' at 8% alpha (hairline)
 
 TYPOGRAPHY:
-  primary: "Inter", system-ui, sans-serif
-  weights: 400 (body), 600 (headings), 800 (display)
-  display sizes: 96-180px
-  letter-spacing: -2 to -4 on display
-  line-height: 1.05 on display, 1.4 on body
+  primary: "Inter", "Helvetica Neue", system-ui, sans-serif
+  weights: 400 (body), 600 (subhead), 800 (display headlines)
+  display sizes: 96-160px (BIG but not screaming — restraint over impact)
+  body sizes: 32-48px
+  letter-spacing: -0.03em to -0.04em on display, normal on body
+  line-height: 1.05 on display, 1.45 on body
+  text-align: left OR center; NEVER right-aligned
 
 LAYOUT:
-  generous whitespace, content centered or thirds
-  no decorative borders, minimal use of accent color
-  one focal element at a time
+  generous breathing room — minimum 64px gutters
+  content anchors to thirds (top-third headline, middle-third value, bottom-third caption)
+  one focal element per beat (NEVER stack 2 headlines simultaneously)
+  rounded corners: 4-6px on any card (clean = geometric, NOT pill-shaped)
+  thin 1px hairline dividers in separator color at 8% alpha
+  NO decorative borders, NO drop shadows on text, NO gradient bgs
+  asset images (when present) get 8px rounded corners, max-width 70% canvas
 
 MOTION:
-  ease: power3.inOut, power2.out
-  durations: 0.6-1.2s for entries, 0.4-0.8s for exits
-  prefer fade + small translate (8-20px) over scale
-  no rotation, no overshoot
-  staggered reveals (0.04-0.08s stagger)`.trim(),
+  ease: power3.out, power2.out, expo.out (for entries)
+  ease for exits: power3.in
+  durations: 0.6-1.0s for entries, 0.4-0.6s for exits
+  fade + translate (8-16px upward) is the default entry — NEVER scale > 1.04
+  staggered word reveals: 0.04-0.06s stagger, 0.5s per word fade
+  exit before next entry — NEVER simultaneous in/out (clean = sequential)
+  no rotation, no overshoot, no clip-path snap
+
+VOICE:
+  Profissional, editorial, invisível. Tipografia trabalha; motion serve.
+  Pensa Bloomberg, Monocle, New York Times Magazine — o motion não compete
+  com o conteúdo, ele enquadra. Se um elemento decorativo pode sair sem
+  prejuízo, sai. Limpeza > criatividade visual.
+
+NEVER:
+  • gradients no background (clean significa flat)
+  • drop-shadow ou text-shadow em texto (digital, não editorial)
+  • glow em qualquer elemento
+  • rotation de texto ou cards
+  • scale > 1.04 em qualquer entrada
+  • pure #000 background ou #fff text — sempre off-tints
+  • mais de 1 cor accent por bloco
+  • text-align: right
+  • pill-shaped cards (rounded > 12px)
+  • decorative dots, blobs, particles — clean é austero por definição`.trim(),
   },
   {
     id: 'bold-pop',
