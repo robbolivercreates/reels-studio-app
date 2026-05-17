@@ -4373,9 +4373,11 @@ export const ReelsStudio: React.FC = () => {
       {motionPickerBlockId && (() => {
         const block = blocks.find(b => b.id === motionPickerBlockId);
         if (!block) return null;
+        const isLastBlock = blocks.length > 0 && blocks[blocks.length - 1].id === block.id;
         return (
           <MotionPickerModal
             block={block}
+            isLastBlock={isLastBlock}
             brandIdentity={state.brandIdentity}
             onBrandLearned={(brand) => dispatch({ type: 'set-brand-identity', brand })}
             motionColorMode={state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')}

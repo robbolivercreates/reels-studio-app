@@ -10,8 +10,9 @@ import {
   type MinimaxCloneModel,
 } from '../services/minimaxService';
 import { AgentSettingsTab } from './agent/AgentSettingsTab';
+import { loadUserIdentity, saveUserIdentity, type UserIdentity } from './reelsStudio/userIdentity';
 
-export type SettingsTab = 'api-keys' | 'voice' | 'voices' | 'agents';
+export type SettingsTab = 'api-keys' | 'voice' | 'voices' | 'agents' | 'identity';
 
 interface Props {
   isOpen: boolean;
@@ -138,6 +139,30 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
 
   const refreshClonedVoices = () => setClonedVoices(loadClonedVoices());
 
+  // Creator identity (used by social CTA motions — follow card etc).
+  const [identity, setIdentity] = useState<UserIdentity>(() => loadUserIdentity());
+  const [identitySaved, setIdentitySaved] = useState(false);
+  const patchIdentity = (patch: Partial<UserIdentity>) => {
+    setIdentity(prev => ({ ...prev, ...patch }));
+    setIdentitySaved(false);
+  };
+  const handleIdentitySave = () => {
+    saveUserIdentity(identity);
+    setIdentitySaved(true);
+  };
+  const handleAvatarUpload = (file: File) => {
+    if (!file.type.startsWith('image/')) return;
+    if (file.size > 2 * 1024 * 1024) {
+      alert('Imagem maior que 2MB. Use uma foto menor.');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') patchIdentity({ avatarDataUrl: reader.result });
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleAddVoice = () => {
     const name = newVoiceName.trim();
     const voiceId = newVoiceId.trim();
@@ -174,6 +199,8 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
     if (!isOpen) return;
     setActiveTab(initialTab);
     refreshClonedVoices();
+    setIdentity(loadUserIdentity());
+    setIdentitySaved(false);
     const next: Record<string, FieldState> = {};
     for (const k of KEYS) {
       const stored = localStorage.getItem(k.storageKey) ?? '';
@@ -194,6 +221,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
   const isVoice = activeTab === 'voice';
   const isVoices = activeTab === 'voices';
   const isAgents = activeTab === 'agents';
+  const isIdentity = activeTab === 'identity';
   const widthClass = isVoice ? 'max-w-5xl' : 'max-w-lg';
 
   const patchField = (storageKey: string, patch: Partial<FieldState>) => {
@@ -272,6 +300,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
 
         <div className="px-6 pb-3 flex items-center gap-2 border-b border-white/5">
           {tabBtn('api-keys', 'Chaves de API')}
+          {tabBtn('identity', 'Identidade')}
           {tabBtn('voice', 'Voz e estilo')}
           {tabBtn('voices', `Vozes${clonedVoices.length > 0 ? ` (${clonedVoices.length})` : ''}`)}
           {tabBtn('agents', 'Agents')}
@@ -282,6 +311,158 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
           <AgentSettingsTab />
           <div className="px-6 py-4 border-t border-white/5 bg-black/30 flex gap-2">
             <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Fechar</button>
+          </div>
+          </>
+        ) : isIdentity ? (
+          <>
+          <div className="px-6 pt-4 pb-4 flex-1 overflow-y-auto space-y-5">
+            <div className="text-xs leading-relaxed text-zinc-400">
+              Sua identidade nas redes — aparece nos motions de CTA tipo "siga @perfil" no fim do reel.
+              Salva no dispositivo, vale pra todos os projetos.
+            </div>
+
+            <div className="rounded-lg border border-white/10 bg-white/[0.03] p-4 space-y-3">
+              <div className="flex items-start gap-4">
+                {/* Avatar preview + upload */}
+                <div className="shrink-0">
+                  <label className="cursor-pointer group">
+                    <div
+                      className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 group-hover:border-violet-400 flex items-center justify-center overflow-hidden bg-white/5 transition-colors"
+                      title="Clique pra escolher uma foto"
+                    >
+                      {identity.avatarDataUrl ? (
+                        <img src={identity.avatarDataUrl} alt="avatar" className="w-full h-full object-cover" />
+                      ) : (
+                        <span className="text-[10px] text-zinc-500 text-center px-2">
+                          Foto<br/>de perfil
+                        </span>
+                      )}
+                    </div>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={e => { const f = e.target.files?.[0]; if (f) handleAvatarUpload(f); }}
+                    />
+                  </label>
+                  {identity.avatarDataUrl && (
+                    <button
+                      onClick={() => patchIdentity({ avatarDataUrl: undefined })}
+                      className="mt-1 w-full text-[9px] text-zinc-500 hover:text-red-300 transition-colors"
+                    >
+                      Remover
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex-1 space-y-2.5">
+                  <div>
+                    <label className="text-[10px] text-zinc-500 mb-1 block">Nome de exibição</label>
+                    <input
+                      value={identity.displayName}
+                      onChange={e => patchIdentity({ displayName: e.target.value })}
+                      placeholder="Rob Boliver"
+                      className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-violet-400 focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-zinc-500 mb-1 block">@ do perfil</label>
+                    <input
+                      value={identity.handle}
+                      onChange={e => patchIdentity({ handle: e.target.value })}
+                      placeholder="robboliver"
+                      className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-violet-400 focus:outline-none font-mono"
+                    />
+                    <div className="text-[9px] text-zinc-600 mt-1">O "@" é adicionado automaticamente.</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[10px] text-zinc-500 mb-1 block">Plataforma principal</label>
+                      <select
+                        value={identity.primaryPlatform ?? 'instagram'}
+                        onChange={e => patchIdentity({ primaryPlatform: e.target.value as UserIdentity['primaryPlatform'] })}
+                        className="w-full px-2 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 focus:border-violet-400 focus:outline-none"
+                      >
+                        <option value="instagram">Instagram</option>
+                        <option value="tiktok">TikTok</option>
+                        <option value="youtube">YouTube</option>
+                        <option value="generic">Outra</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="text-[10px] text-zinc-500 mb-1 block">Seguidores <span className="opacity-60">(opcional)</span></label>
+                      <input
+                        value={identity.followerCount ?? ''}
+                        onChange={e => patchIdentity({ followerCount: e.target.value || undefined })}
+                        placeholder="12.4K"
+                        className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-violet-400 focus:outline-none font-mono"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Auto-apply follow CTA toggle. When on, every export auto-injects
+                the social-cta-follow preset into the last block — saves the
+                user from doing it manually on every reel. */}
+            <label className="flex items-start gap-3 rounded-lg border border-white/10 bg-white/[0.03] p-3 cursor-pointer hover:bg-white/[0.05] transition-colors">
+              <input
+                type="checkbox"
+                checked={identity.autoFollowCta ?? true}
+                onChange={e => patchIdentity({ autoFollowCta: e.target.checked })}
+                className="mt-0.5 accent-violet-400"
+              />
+              <div className="flex-1">
+                <div className="text-xs font-medium text-zinc-200">Card "siga @perfil" no final do reel</div>
+                <div className="text-[11px] text-zinc-500 mt-0.5 leading-relaxed">
+                  Aplica automaticamente o template Social Follow no último bloco usando os dados acima.
+                  Desligue se quiser controle manual bloco a bloco.
+                </div>
+              </div>
+            </label>
+
+            {/* Live preview of the follow card so the user sees what motions will render. */}
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">Como vai aparecer no motion</div>
+              <div className="rounded-lg bg-gradient-to-br from-zinc-900 to-black p-4 flex items-center justify-center">
+                <div className="bg-[#1a1a1a] rounded-full px-3 py-2 pr-3 flex items-center gap-3 shadow-lg">
+                  <div className="w-9 h-9 rounded-full overflow-hidden flex items-center justify-center bg-gradient-to-br from-zinc-600 to-zinc-800 shrink-0">
+                    {identity.avatarDataUrl ? (
+                      <img src={identity.avatarDataUrl} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="text-zinc-400 text-sm">👤</div>
+                    )}
+                  </div>
+                  <div className="min-w-[120px]">
+                    <div className="text-white text-xs font-semibold leading-tight">{identity.displayName || 'Seu nome'}</div>
+                    <div className="text-zinc-500 text-[10px] leading-tight">@{(identity.handle.trim().replace(/^@+/, '') || 'seu.perfil')}</div>
+                  </div>
+                  <div
+                    className="text-white text-[11px] font-semibold px-3 py-1.5 rounded-full shrink-0"
+                    style={{
+                      backgroundColor:
+                        identity.primaryPlatform === 'tiktok' ? '#fe2c55'
+                        : identity.primaryPlatform === 'youtube' ? '#ff0000'
+                        : identity.primaryPlatform === 'instagram' ? '#0095f6'
+                        : '#888',
+                    }}
+                  >
+                    Seguir
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="px-6 py-4 border-t border-white/5 bg-black/30 flex gap-2 items-center">
+            {identitySaved && <span className="text-[11px] text-emerald-400">✓ Salvo</span>}
+            <button onClick={onClose} className="ml-auto py-2.5 px-4 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Fechar</button>
+            <button
+              onClick={handleIdentitySave}
+              className="py-2.5 px-5 rounded-lg bg-violet-500 hover:bg-violet-400 text-xs font-semibold text-white transition-colors"
+            >
+              Salvar
+            </button>
           </div>
           </>
         ) : isVoice ? (

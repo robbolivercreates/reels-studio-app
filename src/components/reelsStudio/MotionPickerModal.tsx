@@ -15,9 +15,13 @@ import {
 import { generateMotionHtml, buildFullHtmlDoc } from '../../services/motionService';
 import type { ScriptBlock, MotionColorMode, AppTheme } from './types';
 import { useTheme } from './useTheme';
+import { loadUserIdentity } from './userIdentity';
 
 interface Props {
   block: ScriptBlock;
+  /** True when this is the final block of the reel — used to auto-pick the
+   * social follow CTA preset when the user enabled that in Settings. */
+  isLastBlock?: boolean;
   /** Cached brand identity from the reel; reused so motions stay visually consistent. */
   brandIdentity?: Record<string, unknown>;
   /** Called when generation produced a new brand (first motion of the reel). */
@@ -49,10 +53,12 @@ const deriveDefaultText = (blockText: string): string => {
   return sentence.slice(0, 60).split(' ').slice(0, -1).join(' ') + '…';
 };
 
-export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBrandLearned, motionColorMode, onSetMotionColorMode, motionEnergy, appTheme, onClose, onSave }) => {
+export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandIdentity, onBrandLearned, motionColorMode, onSetMotionColorMode, motionEnergy, appTheme, onClose, onSave }) => {
   const tokens = useTheme(appTheme);
   // Existing motion or fresh draft.
   const initial: MotionConfig = useMemo(() => {
+    const identity = loadUserIdentity();
+    const autoFollowOnLast = !!isLastBlock && identity.autoFollowCta && (!!identity.displayName?.trim() || !!identity.handle?.trim());
     if (block.motion) return block.motion;
     // Default motion layer follows the block's chosen layout — so the motion
     // composes the way the user already framed the block, instead of forcing
@@ -76,11 +82,11 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
     }
     return {
       id: newMotionId(),
-      presetId: 'editorial-clean',
+      presetId: autoFollowOnLast ? 'social-cta-follow' : 'editorial-clean',
       layer: defaultLayer,
       intent: '',
       text: deriveDefaultText(block.text),
-      durationSec: 4,
+      durationSec: autoFollowOnLast ? 5 : 4, // social-cta-follow's timeline is authored at 5s
       html: '',
       status: 'draft',
       createdAt: Date.now(),
@@ -95,6 +101,100 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
   const [previewMode, setPreviewMode] = useState<'live' | 'mp4'>('live');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [followSuggestionDismissed, setFollowSuggestionDismissed] = useState(false);
+
+  // Show the "apply follow CTA" banner when:
+  //   - this is the final block of the reel
+  //   - the user enabled the global toggle in Settings
+  //   - their identity is filled in (otherwise there's nothing to render)
+  //   - the current motion is NOT already the follow preset (don't nag them)
+  //   - they haven't dismissed it this session
+  const shouldSuggestFollow = (() => {
+    if (followSuggestionDismissed) return false;
+    if (!isLastBlock) return false;
+    if (motion.presetId === 'social-cta-follow') return false;
+    const identity = loadUserIdentity();
+    if (!identity.autoFollowCta) return false;
+    if (!identity.displayName?.trim() && !identity.handle?.trim()) return false;
+    return true;
+  })();
+
+  // One-click apply: swap preset → generate HTML → render MP4 → save and close.
+  // Avoids the painful 2-roundtrip ("aplicar, depois gerar, depois salvar") flow.
+  // Runs the same code paths as handleGenerate/handleRender, just glued together
+  // and using a local `nextMotion` instead of waiting for setState to settle.
+  const applyFollowPreset = async () => {
+    setFollowSuggestionDismissed(true);
+    setError(null);
+    const nextMotion: MotionConfig = {
+      ...motion,
+      presetId: 'social-cta-follow',
+      durationSec: 5,
+      html: '',
+      videoPath: undefined,
+      status: 'draft',
+      errorMessage: undefined,
+    };
+    setMotion(nextMotion);
+
+    try {
+      setBusy('Aplicando card de seguir e gerando…');
+      const result = await generateMotionHtml({
+        presetId: nextMotion.presetId,
+        blockText: block.text,
+        text: nextMotion.text,
+        secondaryText: nextMotion.secondaryText,
+        number: nextMotion.number,
+        durationSec: nextMotion.durationSec,
+        compositionId: nextMotion.id,
+        motionLayer: nextMotion.layer,
+        canvasAspect: nextMotion.canvasAspect,
+        existingBrand: brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
+        motionColorMode,
+        motionEnergy,
+        fontSet: nextMotion.fontSet,
+        overlays: nextMotion.overlays,
+        userIdentity: loadUserIdentity(),
+      });
+      if (result.brand && !brandIdentity && onBrandLearned) {
+        onBrandLearned(result.brand as unknown as Record<string, unknown>);
+      }
+      const generated: MotionConfig = {
+        ...nextMotion,
+        intent: result.intent || nextMotion.intent,
+        text: result.text || nextMotion.text,
+        html: result.htmlBody,
+        status: 'ready',
+        generatedAt: Date.now(),
+        errorMessage: undefined,
+      };
+      setMotion(generated);
+
+      setBusy('Renderizando MP4 com HyperFrames…');
+      const fullDoc = buildFullHtmlDoc(generated, generated.canvasAspect, motionColorMode);
+      await invoke('save_motion_html', { motionId: generated.id, html: fullDoc });
+      const rendered = await invoke<{ mp4_path: string; size_bytes: number }>(
+        'render_motion', { motionId: generated.id },
+      );
+      const finalMotion: MotionConfig = {
+        ...generated,
+        videoPath: rendered.mp4_path,
+        status: 'ready',
+        renderedAt: Date.now(),
+      };
+      setMotion(finalMotion);
+      setBusy(null);
+      // Commit + close — same as the green "Salvar" button would do.
+      onSave(finalMotion);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error('[motion/auto-follow] failed', e);
+      setError(`Falhou ao aplicar o card de seguir: ${msg}`);
+      setBusy(null);
+      // Leave the modal open with the preset already swapped so the user can
+      // hit "Gerar" manually and inspect what went wrong.
+    }
+  };
 
   // Subscribe to render progress events from Rust.
   useEffect(() => {
@@ -142,6 +242,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
         motionEnergy,
         fontSet: motion.fontSet,
         overlays: motion.overlays,
+        userIdentity: loadUserIdentity(),
       });
       // First motion of the reel? Cache the brand so subsequent motions reuse it.
       if (result.brand && !brandIdentity && onBrandLearned) {
@@ -286,6 +387,46 @@ export const MotionPickerModal: React.FC<Props> = ({ block, brandIdentity, onBra
             </svg>
           </button>
         </div>
+
+        {/* Auto follow-CTA suggestion banner. Shows only on the last block when
+            the user has enabled the "follow card on every reel" toggle in Settings
+            and the current motion isn't already that preset. Non-destructive: the
+            user clicks Aplicar to swap, or Agora não to keep working. */}
+        {shouldSuggestFollow && (
+          <div
+            className="px-6 py-3 flex items-center justify-between gap-4"
+            style={{
+              backgroundColor: appTheme === 'light' ? 'rgba(168, 85, 247, 0.08)' : 'rgba(168, 85, 247, 0.15)',
+              borderBottom: `1px solid ${tokens.border.subtle}`,
+            }}
+          >
+            <div className="flex items-center gap-2 text-xs" style={{ color: tokens.text.primary }}>
+              <span className="text-base">👥</span>
+              <span>
+                Último bloco do reel. Aplicar o card <strong>"siga @perfil"</strong> com sua identidade? Um clique gera, renderiza e salva.
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => setFollowSuggestionDismissed(true)}
+                disabled={!!busy}
+                className="px-3 py-1 rounded-md text-[11px] transition-colors disabled:opacity-40"
+                style={{ color: tokens.text.tertiary }}
+                onMouseEnter={e => (e.currentTarget.style.backgroundColor = tokens.bg.hover)}
+                onMouseLeave={e => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                Agora não
+              </button>
+              <button
+                onClick={applyFollowPreset}
+                disabled={!!busy}
+                className="px-3 py-1 rounded-md text-[11px] font-semibold bg-violet-500 hover:bg-violet-400 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
+              >
+                {busy ? 'Aplicando…' : 'Aplicar e gerar'}
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="flex flex-1 overflow-hidden">
           {/* Left: form */}

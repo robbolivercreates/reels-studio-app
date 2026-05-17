@@ -687,6 +687,20 @@ export interface GenerateMotionInput {
    */
   motionEnergy?: 'minimal' | 'energetic';
   /**
+   * Creator identity (handle, display name, avatar) for social CTA motions
+   * — the "siga @perfil" follow card uses this so the rendered card is the
+   * real user instead of a fake one Gemini invents from the project name.
+   * When omitted, the existing preset behaviour (Gemini invents a card from
+   * brand colors) still applies.
+   */
+  userIdentity?: {
+    displayName?: string;
+    handle?: string;
+    avatarDataUrl?: string;
+    followerCount?: string;
+    primaryPlatform?: 'instagram' | 'tiktok' | 'youtube' | 'generic';
+  };
+  /**
    * Typography palette to use. Overrides the preset's defaultFontSet when
    * provided. When omitted, the preset's defaultFontSet (or 'brand') wins.
    */
@@ -1671,6 +1685,41 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   const lang = input.outputLanguage ?? 'pt-BR';
   const languageSection = buildMotionLanguageSection(lang);
 
+  // Creator identity — when the user has filled their profile in Settings,
+  // surface it to Gemini so social-flavoured presets (notably the follow card)
+  // render with the REAL handle, name, avatar instead of inventing one from
+  // the project name. Without this, "Claude Acesso" became "@claude.acesso"
+  // on every reel, which was confusing.
+  const id = input.userIdentity;
+  const hasIdentity = !!id && (!!id.displayName?.trim() || !!id.handle?.trim());
+  const userIdentitySection = hasIdentity ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  👤 CREATOR IDENTITY — use these EXACT values`,
+    `╚══════════════════════════════════════════════════════╝`,
+    `The user has configured their identity in Settings. If this motion includes`,
+    `a "follow" card, profile pill, handle badge, or any element that names the`,
+    `creator, you MUST use these values verbatim — do NOT invent a handle from`,
+    `the project name or brand.`,
+    ``,
+    id.displayName?.trim() ? `displayName: ${id.displayName.trim()}` : `displayName: (none — omit or use brand name)`,
+    id.handle?.trim() ? `handle: @${id.handle.trim().replace(/^@+/, '')}` : `handle: (none — omit)`,
+    id.followerCount?.trim() ? `followerCount: ${id.followerCount.trim()} followers` : `followerCount: (omit, don't invent)`,
+    id.primaryPlatform ? `platform: ${id.primaryPlatform} (use its accent color in the follow button)` : ``,
+    id.avatarDataUrl
+      ? [
+        `avatarDataUrl: provided as a base64 data URL — embed via <img src="…" /> inside the profile circle.`,
+        `The exact value to put in the src attribute:`,
+        id.avatarDataUrl,
+      ].join('\n')
+      : `avatarDataUrl: (none — use a CSS gradient placeholder for the avatar circle)`,
+    ``,
+    `CRITICAL RULES:`,
+    `• Copy the values above LITERALLY. Do not alter spelling, capitalisation, or add prefixes/suffixes.`,
+    `• Do NOT show a verified checkmark unless the user explicitly asked.`,
+    `• Do NOT invent a follower count if "followerCount" above says "(omit, don't invent)".`,
+    ``,
+  ].filter(Boolean).join('\n') : '';
+
   const userBrief = [
     languageSection,
     slotSection,
@@ -1680,6 +1729,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     brandSection,
     brandChromeSection,
     atmosphereSection,
+    userIdentitySection,
     assetsSection,
     `--- THIS BLOCK (illustrate this) ---`,
     input.blockText.trim(),
