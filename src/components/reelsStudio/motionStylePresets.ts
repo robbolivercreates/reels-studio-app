@@ -365,33 +365,66 @@ NEVER:
       vignetteIntensity: 0.85,
     },
     geminiBrief: `
-PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
-  bg: brandBackgroundColor → slightly lighter shade (radial)
-  text: brandTextColor
-  accent: brandPrimaryColor (or brandAccentColor for highlights)
-  vignette: rgba(0,0,0,0.6)
+PALETTE: Restrained, low-saturation, deep-cinema.
+  bg: brandBackgroundColor (must be dark — #000 to #1a1a1a range).
+      If brand bg is light, force '#0a0a0a' deep charcoal (NOT pure #000).
+      Apply as radial-gradient from center: brandBackgroundColor 0% → +12% lighter at 80%.
+  text: brandTextColor (must contrast 7:1 on dark bg).
+      If unset OR low-contrast, force '#ebe4d6' (warm off-white — NEVER pure #ffffff,
+      pure white reads as digital, not cinematic).
+  accent: brandPrimaryColor at 60-80% saturation (cinema desaturates everything).
+      Single accent only — no secondary accent appears in any frame.
+  vignette: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.65) 100%).
+      ALWAYS present. Track-index 9. Pointer-events none. Mix-blend-mode multiply.
+  film grain: SVG <feTurbulence baseFrequency="0.9" numOctaves="2"/> as data-URI overlay
+      OR a pre-rendered noise data-URI; opacity 0.04-0.06; mix-blend-mode overlay;
+      position absolute inset:0; pointer-events none.
 
 TYPOGRAPHY:
-  primary: "Inter", system-ui, sans-serif
-  weights: 300 (light), 700 (bold)
-  display sizes: 60-120px
-  letter-spacing: 1-3 (wider, cinematic)
-  uppercase common
-  line-height: 1.5
+  primary: "Inter", "Helvetica Neue", system-ui, sans-serif
+  weights: 300 (display light), 600 (body bold accent only)
+  display sizes: 64-120px (cinema avoids HUGE — restraint is the point)
+  letter-spacing: 0.08em-0.16em on display (wide, breathing, cinematic credits)
+  text-transform: uppercase on display ONLY when ≤ 3 words; mixed case otherwise
+  line-height: 1.4 on display, 1.6 on body
 
 LAYOUT:
-  letterboxed feel (16:9 framing inside the 9:16 canvas)
-  strong vertical asymmetry
-  film grain overlay (very subtle, 4% opacity)
-  vignette on edges
+  letterbox bars top + bottom: 2 black bars, 60-120px each, 100% opacity, NOT transparent
+  vertical asymmetry — anchor content to lower-third (y: 65-75% of canvas)
+  one focal element per beat — no stacking
+  16:9 framing math: bars occupy (1 - 9/16 * 16/9) of height = ~28% total when canvas is 9:16
+  rounded corners: NONE on bars; 2-4px on any card (minimal — cinema is geometric)
+  thin hairlines in accent at 30% alpha as section dividers (1px)
+  NO decorative shapes, blobs, dots, or icons — cinema is austere
 
 MOTION:
-  ease: power3.inOut
-  durations: 1.2-2.0s (slow, deliberate)
-  long fades (0.8-1.5s)
-  almost no movement on text — just opacity
-  background may have very slow zoom (1.0 → 1.05 over 5s)
-  film burn / light leak transitions`.trim(),
+  ease: power3.inOut, power2.out, sine.inOut (NEVER back/elastic/expo)
+  durations: 1.2-2.4s (slow, deliberate)
+  fade durations: 0.8-1.6s (NEVER hard cuts — minimum 0.6s on transitions)
+  text appears: opacity 0→1 over 1.4s + translateY(4px → 0) ease power3.out
+  background slow zoom (Ken Burns): scale 1.0 → 1.04 over the full block duration,
+      ease sine.inOut. Track-0 bg ONLY (vignette + grain stay static).
+  text may have IMPERCEPTIBLE drift: translateY (-1.5px → 0 → -1.5px) yoyo over 6s.
+      Without this, opacity-only fades feel like a slideshow, not cinema.
+  letterbox bars fade in over 0.6s at the start; STAY visible the whole block.
+  staggers: 0.08-0.12s (slow reveals)
+
+VOICE:
+  Documentário longa-metragem. A audiência ganhou o direito de ver isso
+  porque você cuidou de cada elemento. Tudo respira. Nada grita. Cinema é
+  o oposto de TikTok — confia que a pessoa vai ficar até o final do plano.
+  Se um elemento pode ser removido sem perda de significado, REMOVA.
+
+NEVER:
+  • pure #000000 background — sempre #0a0a0a OR brand dark
+  • pure #ffffff text — sempre warm off-white #ebe4d6
+  • hard cuts (durations < 0.6s em transições)
+  • back.out, elastic, expo — fora do vocabulário cinemático
+  • scale punch ou rotation em texto
+  • mais de 1 cor accent por bloco
+  • saturação > 70% em qualquer elemento
+  • blobs, dots, decorative shapes — austeridade absoluta
+  • esquecer o film grain ou a vignette (são identidade do preset)`.trim(),
   },
   {
     id: 'apple-system',
