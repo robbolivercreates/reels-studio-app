@@ -188,36 +188,70 @@ NEVER:
     atmosphere: {
       baseBg: '#0a0a0f',
       warmGlow: { color: '#ff5a3c', alpha: 0.18, pos: '20% 25%' },
-      coolGlow: { color: '#7b3cff', alpha: 0.16, pos: '80% 75%' },
+      // Swapped purple #7b3cff (banned by PRINCIPLE 6) for cyan complementary to orange.
+      coolGlow: { color: '#3ce7ff', alpha: 0.14, pos: '80% 75%' },
       vignetteIntensity: 0.7,
     },
     geminiBrief: `
-PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
-  bg: linear-gradient(135deg, brandBackgroundColor 0%, [a 15% lighter shade of brandBackgroundColor] 100%) — keep it dark, the gradient should be subtle, derived from the brand bg color
-  text: brandTextColor
-  accent1: brandPrimaryColor
-  accent2: brandAccentColor
-  accent3: brandSecondaryColor
+PALETTE: High-energy, high-contrast, pop-art digital.
+  bg: ALWAYS DARK — even when brand bg is light.
+      If brandBackgroundColor is dark (luminance < 25%): use linear-gradient(135deg,
+        brandBackgroundColor 0%, [a 15% lighter shade of same hue] 100%).
+      If brandBackgroundColor is light (luminance ≥ 25%): force '#0f0f1a' (deep
+        midnight) — the preset's mood requires dark, period.
+  text: brandTextColor if it works on dark, OR force '#ffffff' (pure white IS
+      acceptable here because bold-pop is digital-loud by design).
+  accent1: brandPrimaryColor (the hero color — should be vibrant; if brand
+      is muted, INCREASE saturation by 25% mentally to "pop")
+  accent2: brandAccentColor (used on 1 hot-spot per beat)
+  accent3: brandSecondaryColor (used on geometric bg shapes)
+  particle alpha: 0.6-0.85 (visible, not subtle)
+  glow alpha on text: 0.45-0.65 (text-shadow's rgba alpha)
 
 TYPOGRAPHY:
   primary: "Inter", system-ui, sans-serif
-  weights: 700 (body bold), 900 (display)
-  display sizes: 110-220px
-  letter-spacing: -3 to -5
-  text-shadow on display: 0 0 40px accent
+  weights: 800 (body bold), 900 (display heavy)
+  display sizes: 120-220px (HUGE — pop is loud)
+  letter-spacing: -0.04em to -0.06em on display
+  line-height: 0.92-0.98 (tight, packed)
+  text-shadow on display: 0 0 60px <accent>, alpha 0.45-0.6
+  text-transform: UPPERCASE common on display
+  font-style: italic on 1-2 hot words for kinetic feel
 
 LAYOUT:
-  large blocky shapes
-  layered geometric backgrounds (circles, rotated rects)
-  text often has accent box behind it
+  large blocky shapes — circles 200-400px diameter, rotated rects -8° to +8°
+  layered geometric bg: 2-3 shapes overlapping, opacity 0.15-0.30
+  text often has accent box behind it: padding 16px 24px, rounded 8px, accent fill
+  rotation accents on geometric shapes (-12° to +12°, fixed angle not animated)
+  rounded corners: 8-12px on cards (not pills, not sharp)
+  drop-shadow on cards: 0 8px 30px rgba(0,0,0,0.4) — heavier than other presets
+  particle effects on focal moments: 4-8 dots, size 4-10px, opacity 0.6-0.85,
+      burst from a focal point and fade over 0.6s
 
 MOTION:
-  ease: back.out(2), elastic.out, power4.out
-  durations: 0.3-0.7s (fast)
-  use scale (0.5 → 1.05 → 1.0 overshoot)
-  rotation accents (-12deg → 0)
-  particle bursts on focal moments
-  staggered word-by-word reveals`.trim(),
+  ease: back.out(2), elastic.out(1, 0.5), power4.out, expo.out
+  durations: 0.25-0.7s (fast — pop is snappy)
+  ENTRIES use overshoot: scale 0.4 → 1.08 → 1.0 with back.out(2)
+  rotation entries: -12deg → 0 with back.out(1.8)
+  particle bursts on focal beat: stagger 0.02-0.04s, lifespan 0.6s
+  staggered word reveals: 0.05-0.08s stagger, 0.3s per word
+  exits are snappy: 0.2-0.3s with power3.in
+
+VOICE:
+  Hook viral. Urgência. Energia jovem. Pop-art digital. A audiência tem 1.5s
+  pra decidir se continua — o motion grita "PARA!" e segura. Pensa em
+  TikTok publicidade de marca, não NYT. Bold significa que pode exagerar.
+
+NEVER:
+  • easing suaves (sine.*, power1.*, power2.inOut) — não combina com pop
+  • durations > 0.8s em qualquer animação
+  • whitespace generoso — pop é packed, denso
+  • fonts < 800 weight em display
+  • bg gradient com brandBackgroundColor light — force '#0f0f1a' fallback
+  • cores purple/magenta/rose no atmosphere (PRINCIPLE 6 — usa cyan/yellow/orange)
+  • mais de 3 shapes geométricos visíveis ao mesmo tempo
+  • text sem text-shadow no display (digital flat morre nesse preset)
+  • saturação < 60% em qualquer accent`.trim(),
   },
   {
     id: 'glass-tech',
