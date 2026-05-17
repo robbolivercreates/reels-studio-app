@@ -282,45 +282,71 @@ MOTION:
     role: 'reflection',
     roleLabel: 'Reflexão',
     defaultFontSet: 'display',
-    label: 'Suave pastel',
-    description: 'Tons claros, animações orgânicas, lifestyle.',
+    label: 'Pastel quente',
+    description: 'Cream + peach + warm tan. Lifestyle premium, contemplativo.',
     emoji: '🌸',
-    bestFor: 'Conteúdo lifestyle, feminino, beleza, bem-estar.',
+    bestFor: 'Conteúdo lifestyle, beleza, bem-estar, autocuidado, viagem suave.',
     bgType: 'light',
     atmosphere: {
-      baseBg: '#fdf2f8',
-      warmGlow: { color: '#ec4899', alpha: 0.20, pos: '25% 25%' },
-      coolGlow: { color: '#c026d3', alpha: 0.15, pos: '75% 75%' },
-      vignetteIntensity: 0.25,
+      // Paleta peach/cream/tan — alinhada com PRINCIPLE 6 (no rose/pink/magenta).
+      baseBg: '#fef3e8',
+      warmGlow: { color: '#d4a574', alpha: 0.22, pos: '25% 25%' },
+      coolGlow: { color: '#c9956c', alpha: 0.16, pos: '75% 75%' },
+      vignetteIntensity: 0.22,
     },
     geminiBrief: `
-PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE if they fit a soft/pastel mood.
-  Otherwise default to the soft-pastel palette below.
-  bg: linear-gradient(135deg, brandBackgroundColor or #FDF2F8 0%, lighter shade 50%, lighter shade 100%)
-  text: brandTextColor or #831843 (deep rose)
-  accent1: brandPrimaryColor or #EC4899 (pink)
-  accent2: brandAccentColor or #C026D3 (fuchsia)
-  decoration: brandSecondaryColor or #F9A8D4
+PALETTE: Soft warm pastel — cream paper, peach glow, warm tan accent.
+  bg: brandBackgroundColor if it is a warm light tone (#fdf5e8, #fef3e8, #faf3e0 range).
+      OTHERWISE force '#fef3e8' (warm cream) — DO NOT use pure white, DO NOT use any pink/rose/magenta tone.
+  text: brandTextColor if it has 7:1 contrast on cream OR force '#5c3b1e' (warm umber)
+  accent1: brandPrimaryColor if it is a warm earth tone (peach/amber/terracotta/sage).
+      OTHERWISE force '#d4a574' (warm tan)
+  accent2: brandAccentColor or '#c9956c' (deeper tan)
+  decoration: '#e8c89a' (light amber) for blobs and dots
+  shadow: '0 4px 20px rgba(180, 130, 80, 0.15)' — ALWAYS warm-toned shadows, NEVER rgba(0,0,0,...)
 
 TYPOGRAPHY:
-  primary: "Playfair Display", serif (for display)
+  primary display: "Playfair Display", "Cormorant Garamond", serif (use class="font-display")
   body: "Inter", sans-serif
-  weights: 400, 600
-  display sizes: 80-140px
-  italic on display sometimes
-  letter-spacing: -1
+  weights: 400 (body), 500 (italic body), 600 (display)
+  display sizes: 88-140px
+  letter-spacing: -0.01em on display, normal on body
+  line-height: 1.1 on display, 1.5 on body
+  italic only on pull-quotes (1-2 words max)
 
 LAYOUT:
-  organic blob shapes in background (SVG)
-  floating decorative dots
-  soft drop shadows (0 4px 20px rgba)
+  generous breathing room — minimum 56px gutters
+  off-center composition encouraged (golden-ratio feel, not centered grids)
+  organic blob shapes (SVG ellipses with filter: blur(30px)) at opacity 0.35-0.55
+  floating decorative dots — diameter 4-8px, opacity 0.30-0.50, drifting
+  thin 1px hairline dividers in '#a08566' at 25% alpha
+  rounded corners: 12px (cards), 999px (pills)
+  drop-shadows ALWAYS warm: '0 4px 20px rgba(180, 130, 80, 0.15)'
 
 MOTION:
-  ease: sine.inOut, power1.inOut
-  durations: 1.0-1.8s (gentle)
-  vertical drift on background blobs (continuous, slow)
-  fade + scale 0.95 → 1 entries
-  no overshoot, no snap`.trim(),
+  ease: sine.inOut, power1.inOut, power2.out (gentle, never back/elastic)
+  durations: 1.0-1.8s (gentle, never snappy)
+  fade + small scale 0.96→1 entries; translate ≤ 12px
+  background blobs drift vertically (yoyo, 4-6s cycle, ±20px)
+  dots float slowly (yoyo, 3-5s, ±15px)
+  word-by-word reveals with 0.10-0.14s stagger (slow, contemplative)
+  no clip-path snaps, no overshoot, no rotation
+  text appears with translateY(8px → 0) + opacity 0→1 over 1.2s ease power2.out
+
+VOICE:
+  Calmo, contemplativo, lifestyle premium. Pensa "perfume editorial" ou abertura
+  de documentário de viagem — o motion respira, não pula. Audiência aceita 2s
+  pra ler porque a composição está convidando, não exigindo. Menos é mais —
+  se um quadro funciona com 3 elementos, não coloque 5.
+
+NEVER:
+  • pure black text (#000000) — sempre warm umber/brown
+  • cold/black shadows — sempre warm-toned (rgba(180,130,80,X))
+  • snap reveals (clip-path inset → 0)
+  • scale > 1.05 ou translate > 16px
+  • brand colors no espectro 250-345 hue (purple/pink/rose/magenta) — força fallback
+  • saturação > 50% em qualquer elemento (tudo deve parecer "lavado")
+  • easing back.out, elastic, expo — quebra a calma`.trim(),
   },
   {
     id: 'cinematic-dark',
