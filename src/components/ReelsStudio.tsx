@@ -1058,6 +1058,22 @@ export const ReelsStudio: React.FC = () => {
       const reelHasPinnedAssets = blocks.some(b => (b.attachedAssets?.length ?? 0) > 0);
       const universalAssetsToSend = reelHasPinnedAssets ? undefined : projectAssets;
 
+      // Word-level timestamps for this block, rebased to block-local time.
+      // Only forwarded when the audio has timestamps AND the block's slot is
+      // known — otherwise word-sync presets fall back gracefully to staggered
+      // reveals based on durationSec.
+      const blockSlot = slotById.get(blockId);
+      const blockWordTimestamps = (blockSlot && state.audio.words.length > 0)
+        ? state.audio.words
+            .filter(w => w.blockId === blockId)
+            .map(w => ({
+              word: w.word,
+              start: Math.max(0, w.start - blockSlot.projectStart),
+              end: Math.max(0, w.end - blockSlot.projectStart),
+            }))
+            .filter(w => w.end > w.start)
+        : undefined;
+
       const result = await generateMotionHtml({
         presetId: seed.presetId,
         blockText: block.text,
@@ -1067,6 +1083,7 @@ export const ReelsStudio: React.FC = () => {
         canvasAspect,
         projectAssets: hasPinnedAssets ? undefined : universalAssetsToSend,
         pinnedAssets: hasPinnedAssets ? pinnedAssets : undefined,
+        wordTimestamps: blockWordTimestamps,
         reelContext: {
           projectName: state.projectName,
           allBlocks: blocks.map(b => b.text),
@@ -1145,7 +1162,7 @@ export const ReelsStudio: React.FC = () => {
       setBusy(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, dispatch, motionBusyByBlock, state.motionColorMode, state.motionEnergy, state.appTheme, state.brandIdentity, state.projectName, aspect, ttsLanguageOverride]);
+  }, [blocks, dispatch, motionBusyByBlock, state.motionColorMode, state.motionEnergy, state.appTheme, state.brandIdentity, state.projectName, state.audio.words, slotById, aspect, ttsLanguageOverride]);
 
   const handleRenderMotionMp4 = useCallback(async (blockId: string) => {
     const block = blocks.find(b => b.id === blockId);

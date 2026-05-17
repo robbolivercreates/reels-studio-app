@@ -706,6 +706,14 @@ export interface GenerateMotionInput {
    */
   fontSet?: FontSet;
   /**
+   * Word-level timestamps for the spoken audio of this block, with start/end
+   * already REBASED to the block's local time (0 = block start, not project
+   * start). Used by presets that sync visuals to speech (karaoke-captions,
+   * future word-stagger reveals). When omitted, presets degrade to a static
+   * stagger reveal without sync.
+   */
+  wordTimestamps?: Array<{ word: string; start: number; end: number }>;
+  /**
    * Premium polish overlays to enable. Forwarded into the rendered HTML;
    * Gemini is told via the prompt which are active so it can add the
    * `.shimmer-sweep-target` class where appropriate.
@@ -1758,6 +1766,21 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     input.compositionId,
     `window.__timelines["${input.compositionId}"]`,
     '',
+    // Word timestamps — only injected when the caller passes them AND the
+    // preset is one that can benefit (karaoke-captions today; future word-
+    // staggered presets can opt in by reading this section). Already rebased
+    // to block-local time (0 = block start).
+    input.wordTimestamps && input.wordTimestamps.length > 0
+      ? [
+          `--- WORD TIMESTAMPS (block-local seconds, sync to these) ---`,
+          'Each line: <word> @ <start>s → <end>s. Use for karaoke/word-sync presets.',
+          ...input.wordTimestamps.map((w, i) =>
+            `  ${i}: "${w.word}"  @  ${w.start.toFixed(3)}s → ${w.end.toFixed(3)}s`
+          ),
+          `Total: ${input.wordTimestamps.length} words across ${input.durationSec.toFixed(2)}s.`,
+          '',
+        ].join('\n')
+      : '',
     `--- STYLE PRESET: ${preset.label} (use brand colors above if available) ---`,
     preset.geminiBrief,
     '',
