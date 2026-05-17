@@ -823,6 +823,26 @@ export const ReelsStudio: React.FC = () => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
 
+  const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewZoomHudVisible, setPreviewZoomHudVisible] = useState(false);
+  const previewZoomHudTimer = useRef<number | null>(null);
+  const flashPreviewZoomHud = useCallback(() => {
+    setPreviewZoomHudVisible(true);
+    if (previewZoomHudTimer.current) window.clearTimeout(previewZoomHudTimer.current);
+    previewZoomHudTimer.current = window.setTimeout(() => setPreviewZoomHudVisible(false), 1400);
+  }, []);
+  const bumpPreviewZoom = useCallback((factor: number) => {
+    setPreviewZoom(z => {
+      const next = Math.max(0.5, Math.min(4, +(z * factor).toFixed(3)));
+      return next;
+    });
+    flashPreviewZoomHud();
+  }, [flashPreviewZoomHud]);
+  const resetPreviewZoom = useCallback(() => {
+    setPreviewZoom(1);
+    flashPreviewZoomHud();
+  }, [flashPreviewZoomHud]);
+
   const audioElRef = useRef<HTMLAudioElement | null>(null);
   const audioBlobRef = useRef<Blob | null>(null);
   // Holds the cut audio blob whenever cuts are applied. Independent of
@@ -1902,6 +1922,8 @@ export const ReelsStudio: React.FC = () => {
     blocks,
     history,
     dispatch,
+    bumpPreviewZoom,
+    resetPreviewZoom,
   });
   shortcutRefs.current = {
     playing,
@@ -1915,6 +1937,8 @@ export const ReelsStudio: React.FC = () => {
     blocks,
     history,
     dispatch,
+    bumpPreviewZoom,
+    resetPreviewZoom,
   };
 
   useEffect(() => {
@@ -1953,6 +1977,25 @@ export const ReelsStudio: React.FC = () => {
         if (inEditable) return;
         e.preventDefault();
         r.history.redo();
+        return;
+      }
+
+      // ⌘+ / ⌘= / ⌘- / ⌘0 — preview zoom (Apple-standard). Works even while a
+      // text field is focused if the user holds ⌘, since these are deliberate
+      // OS-level gestures.
+      if (mod && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        r.bumpPreviewZoom(1.25);
+        return;
+      }
+      if (mod && e.key === '-') {
+        e.preventDefault();
+        r.bumpPreviewZoom(1 / 1.25);
+        return;
+      }
+      if (mod && e.key === '0') {
+        e.preventDefault();
+        r.resetPreviewZoom();
         return;
       }
 
@@ -2565,14 +2608,28 @@ export const ReelsStudio: React.FC = () => {
       {/* ─── PREVIEW + SCRIPT ───────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
         <div
-          className="flex-1 flex flex-col items-center justify-center p-6 overflow-hidden"
+          className="flex-1 flex flex-col items-center justify-center p-6 overflow-hidden relative"
           style={{ backgroundColor: tokens.bg.canvas }}
+          onWheel={(e) => {
+            // macOS trackpad pinch arrives as wheel + ctrlKey. We swallow it
+            // so the browser doesn't try to zoom the whole page, and translate
+            // the delta into a smooth previewZoom multiplier. Step is small
+            // because pinch fires many events per gesture.
+            if (e.ctrlKey) {
+              e.preventDefault();
+              const factor = e.deltaY < 0 ? 1.04 : 1 / 1.04;
+              bumpPreviewZoom(factor);
+            }
+          }}
         >
           <div
             className={`relative ${aspectClass} bg-black rounded-2xl overflow-hidden`}
             style={{
               boxShadow: isLight ? '0 12px 40px rgba(0,0,0,0.18)' : '0 30px 80px rgba(0,0,0,0.8)',
               border: `1px solid ${tokens.border.subtle}`,
+              transform: `scale(${previewZoom})`,
+              transformOrigin: 'center center',
+              transition: 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
             }}
           >
             {aspect === 'carousel' ? (
@@ -2782,6 +2839,63 @@ export const ReelsStudio: React.FC = () => {
             })()}
             </>)}
           </div>
+
+          {/* Zoom controls — bottom-right of the preview area. Sketch / Final
+              Cut style: − [100%] + grouped in a single pill. The center label
+              is a button (click = reset). Hidden during playback so it doesn't
+              compete with the video. */}
+          {!playing && aspect !== 'carousel' && (
+            <div
+              className="absolute bottom-4 right-4 flex items-center select-none"
+              style={{
+                backgroundColor: isLight ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.55)',
+                border: `1px solid ${isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.12)'}`,
+                borderRadius: 999,
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                padding: 2,
+                opacity: previewZoomHudVisible ? 1 : 0.55,
+                transition: 'opacity 200ms ease',
+              }}
+              onMouseEnter={() => setPreviewZoomHudVisible(true)}
+              onMouseLeave={() => setPreviewZoomHudVisible(false)}
+            >
+              <button
+                onClick={() => bumpPreviewZoom(1 / 1.25)}
+                disabled={previewZoom <= 0.5}
+                className="w-6 h-6 flex items-center justify-center rounded-full transition-colors disabled:opacity-30"
+                style={{ color: isLight ? '#1d1d1f' : '#fff', cursor: previewZoom <= 0.5 ? 'not-allowed' : 'pointer', background: 'transparent', border: 'none' }}
+                title="Diminuir zoom (⌘−)"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}><path strokeLinecap="round" d="M5 12h14"/></svg>
+              </button>
+              <button
+                onClick={resetPreviewZoom}
+                className="px-2 h-6 flex items-center justify-center rounded-full text-[10px] font-mono font-medium transition-colors"
+                style={{
+                  color: previewZoom === 1
+                    ? (isLight ? '#86868b' : 'rgba(255,255,255,0.55)')
+                    : (isLight ? '#1d1d1f' : '#fff'),
+                  cursor: 'pointer',
+                  background: 'transparent',
+                  border: 'none',
+                  minWidth: 44,
+                }}
+                title="Resetar zoom (⌘0)"
+              >
+                {Math.round(previewZoom * 100)}%
+              </button>
+              <button
+                onClick={() => bumpPreviewZoom(1.25)}
+                disabled={previewZoom >= 4}
+                className="w-6 h-6 flex items-center justify-center rounded-full transition-colors disabled:opacity-30"
+                style={{ color: isLight ? '#1d1d1f' : '#fff', cursor: previewZoom >= 4 ? 'not-allowed' : 'pointer', background: 'transparent', border: 'none' }}
+                title="Aumentar zoom (⌘+)"
+              >
+                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}><path strokeLinecap="round" d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+          )}
 
           <div className={`flex items-center gap-3 mt-4 ${aspect === 'carousel' ? 'hidden' : ''}`}>
             <button onClick={() => seekTo(0)} className="p-2 rounded-lg hover:bg-white/5 text-zinc-400 transition-colors" title="Início (Home)">
