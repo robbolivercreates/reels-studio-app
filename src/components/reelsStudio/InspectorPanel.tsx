@@ -80,6 +80,22 @@ const STORAGE_KEY_TAB = 'reels.inspector.tab';
 const STORAGE_KEY_COLLAPSED = 'reels.inspector.collapsed';
 const STORAGE_KEY_MOTION_GRID = 'reels.inspector.motionGridOpen';
 
+// ─── TabBodyShell — uniform-height container for every tab body ─────────
+// All 5 tabs (Motion / Avatar / Layout / Voz / Stats) render inside this
+// shell so the Inspector's height stays constant when the user switches
+// tabs. Tabs whose content fits within the shell don't trigger scroll;
+// the Motion tab with its disclosure open uses internal flex zones to
+// keep the action buttons pinned while only the chip grid scrolls.
+const INSPECTOR_TAB_BODY_HEIGHT = 168;
+const TabBodyShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div
+    style={{ height: INSPECTOR_TAB_BODY_HEIGHT, overflowY: 'auto' }}
+    className="pr-1"
+  >
+    {children}
+  </div>
+);
+
 // ─── Inline LayoutThumbnail (kept local to avoid circular imports) ──────
 const LayoutThumb: React.FC<{ layout: BlockLayout; selected: boolean }> = ({ layout, selected }) => {
   const borderClass = selected ? 'border-violet-400 shadow-[0_0_8px_rgba(167,139,250,0.4)]' : 'border-white/10';
@@ -327,7 +343,12 @@ export const InspectorPanel: React.FC<Props> = ({
       ? effectivePreset.bestFor
       : (detected.recommendedEffect ? detected.reason : 'Editorial limpo · escolha padrão');
     return (
-      <div className="space-y-3">
+      // 3-zone flex column so the action row stays pinned at the bottom and
+      // only the middle (disclosure + chip grid) scrolls when the grid is open.
+      // h-full + min-h-0 lets the middle zone earn the leftover space.
+      <div className="flex flex-col h-full gap-3">
+        {/* ─── Zone 1 (top, fixed): hero card + status strip ─────────── */}
+        <div className="shrink-0 space-y-3">
         {/* "What the system decided" hero card — primary surface for the
             Motion tab. Click "Trocar manualmente" below to reveal the full
             chip grid. */}
@@ -377,6 +398,9 @@ export const InspectorPanel: React.FC<Props> = ({
             </div>
           )}
         </div>
+        </div>
+        {/* ─── Zone 2 (middle, scrollable): disclosure + chip grid ────── */}
+        <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3">
 
         {/* Disclosure toggle — opens/closes the 19-chip grid below. */}
         <button
@@ -473,9 +497,10 @@ export const InspectorPanel: React.FC<Props> = ({
           })()}
         </div>
         )}
-
+        </div>
+        {/* ─── Zone 3 (bottom, fixed): action buttons ─────────────────── */}
         {/* Primary: regenerate inline (no modal). Secondary: open advanced editor. */}
-        <div className="flex items-center gap-2">
+        <div className="shrink-0 flex items-center gap-2">
           <button
             onClick={onGenerateMotion}
             disabled={isBusy}
@@ -645,8 +670,9 @@ export const InspectorPanel: React.FC<Props> = ({
   };
 
   const vozBody = () => (
-    <div className="text-[11px]" style={{ color: tokens.text.tertiary }}>
+    <div className="text-[11px] space-y-1" style={{ color: tokens.text.tertiary }}>
       <em>Tab Voz · Onda 2 (próxima iteração) trará controles de voz por bloco aqui.</em>
+      <div className="opacity-60">Em breve: tom, velocidade e ênfase por bloco.</div>
     </div>
   );
 
@@ -787,7 +813,9 @@ export const InspectorPanel: React.FC<Props> = ({
       </div>
 
       {!collapsed && !isEmpty && !isMultiSelect && (
-        <div className="pb-3 pt-1">{renderTabBody()}</div>
+        <div className="pb-3 pt-1">
+          <TabBodyShell>{renderTabBody()}</TabBodyShell>
+        </div>
       )}
       {!collapsed && (isEmpty || isMultiSelect) && (
         <div className="pb-3 pt-0 text-[11px]" style={{ color: tokens.text.tertiary }}>
