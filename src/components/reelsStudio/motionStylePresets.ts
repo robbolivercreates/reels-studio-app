@@ -128,60 +128,30 @@ export const STYLE_PRESETS: StylePreset[] = [
       vignetteIntensity: 0.3,
     },
     geminiBrief: `
-PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE.
-  bg: brandBackgroundColor.
-      Fallback if unset OR brand bg is busy/saturated: '#f5f5f5' (clean light neutral).
-  text: brandTextColor.
-      Fallback if unset OR < 7:1 contrast: '#1a1a1a' (near-black, NEVER pure #000).
-  accent: brandPrimaryColor — used SPARINGLY (one hot-spot per beat, max).
-      Editorial limpo means accent is the exception, not the rule.
-  muted: brandSecondaryColor at 50% alpha, OR '#86868b' (neutral gray) if unset.
-  separator: '#1a1a1a' at 8% alpha (hairline)
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: brandBackgroundColor
+  text: brandTextColor
+  accent: brandPrimaryColor (sparingly)
+  muted: brandSecondaryColor
 
 TYPOGRAPHY:
-  primary: "Inter", "Helvetica Neue", system-ui, sans-serif
-  weights: 400 (body), 600 (subhead), 800 (display headlines)
-  display sizes: 96-160px (BIG but not screaming — restraint over impact)
-  body sizes: 32-48px
-  letter-spacing: -0.03em to -0.04em on display, normal on body
-  line-height: 1.05 on display, 1.45 on body
-  text-align: left OR center; NEVER right-aligned
+  primary: "Inter", system-ui, sans-serif
+  weights: 400 (body), 600 (headings), 800 (display)
+  display sizes: 96-180px
+  letter-spacing: -2 to -4 on display
+  line-height: 1.05 on display, 1.4 on body
 
 LAYOUT:
-  generous breathing room — minimum 64px gutters
-  content anchors to thirds (top-third headline, middle-third value, bottom-third caption)
-  one focal element per beat (NEVER stack 2 headlines simultaneously)
-  rounded corners: 4-6px on any card (clean = geometric, NOT pill-shaped)
-  thin 1px hairline dividers in separator color at 8% alpha
-  NO decorative borders, NO drop shadows on text, NO gradient bgs
-  asset images (when present) get 8px rounded corners, max-width 70% canvas
+  generous whitespace, content centered or thirds
+  no decorative borders, minimal use of accent color
+  one focal element at a time
 
 MOTION:
-  ease: power3.out, power2.out, expo.out (for entries)
-  ease for exits: power3.in
-  durations: 0.6-1.0s for entries, 0.4-0.6s for exits
-  fade + translate (8-16px upward) is the default entry — NEVER scale > 1.04
-  staggered word reveals: 0.04-0.06s stagger, 0.5s per word fade
-  exit before next entry — NEVER simultaneous in/out (clean = sequential)
-  no rotation, no overshoot, no clip-path snap
-
-VOICE:
-  Profissional, editorial, invisível. Tipografia trabalha; motion serve.
-  Pensa Bloomberg, Monocle, New York Times Magazine — o motion não compete
-  com o conteúdo, ele enquadra. Se um elemento decorativo pode sair sem
-  prejuízo, sai. Limpeza > criatividade visual.
-
-NEVER:
-  • gradients no background (clean significa flat)
-  • drop-shadow ou text-shadow em texto (digital, não editorial)
-  • glow em qualquer elemento
-  • rotation de texto ou cards
-  • scale > 1.04 em qualquer entrada
-  • pure #000 background ou #fff text — sempre off-tints
-  • mais de 1 cor accent por bloco
-  • text-align: right
-  • pill-shaped cards (rounded > 12px)
-  • decorative dots, blobs, particles — clean é austero por definição`.trim(),
+  ease: power3.inOut, power2.out
+  durations: 0.6-1.2s for entries, 0.4-0.8s for exits
+  prefer fade + small translate (8-20px) over scale
+  no rotation, no overshoot
+  staggered reveals (0.04-0.08s stagger)`.trim(),
   },
   {
     id: 'bold-pop',
@@ -201,65 +171,32 @@ NEVER:
       vignetteIntensity: 0.7,
     },
     geminiBrief: `
-PALETTE: High-energy, high-contrast, pop-art digital.
-  bg: ALWAYS DARK — even when brand bg is light.
-      If brandBackgroundColor is dark (luminance < 25%): use linear-gradient(135deg,
-        brandBackgroundColor 0%, [a 15% lighter shade of same hue] 100%).
-      If brandBackgroundColor is light (luminance ≥ 25%): force '#0f0f1a' (deep
-        midnight) — the preset's mood requires dark, period.
-  text: brandTextColor if it works on dark, OR force '#ffffff' (pure white IS
-      acceptable here because bold-pop is digital-loud by design).
-  accent1: brandPrimaryColor (the hero color — should be vibrant; if brand
-      is muted, INCREASE saturation by 25% mentally to "pop")
-  accent2: brandAccentColor (used on 1 hot-spot per beat)
-  accent3: brandSecondaryColor (used on geometric bg shapes)
-  particle alpha: 0.6-0.85 (visible, not subtle)
-  glow alpha on text: 0.45-0.65 (text-shadow's rgba alpha)
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: linear-gradient(135deg, brandBackgroundColor 0%, [a 15% lighter shade of brandBackgroundColor] 100%) — keep it dark, the gradient should be subtle, derived from the brand bg color
+  text: brandTextColor
+  accent1: brandPrimaryColor
+  accent2: brandAccentColor
+  accent3: brandSecondaryColor
 
 TYPOGRAPHY:
   primary: "Inter", system-ui, sans-serif
-  weights: 800 (body bold), 900 (display heavy)
-  display sizes: 120-220px (HUGE — pop is loud)
-  letter-spacing: -0.04em to -0.06em on display
-  line-height: 0.92-0.98 (tight, packed)
-  text-shadow on display: 0 0 60px <accent>, alpha 0.45-0.6
-  text-transform: UPPERCASE common on display
-  font-style: italic on 1-2 hot words for kinetic feel
+  weights: 700 (body bold), 900 (display)
+  display sizes: 110-220px
+  letter-spacing: -3 to -5
+  text-shadow on display: 0 0 40px accent
 
 LAYOUT:
-  large blocky shapes — circles 200-400px diameter, rotated rects -8° to +8°
-  layered geometric bg: 2-3 shapes overlapping, opacity 0.15-0.30
-  text often has accent box behind it: padding 16px 24px, rounded 8px, accent fill
-  rotation accents on geometric shapes (-12° to +12°, fixed angle not animated)
-  rounded corners: 8-12px on cards (not pills, not sharp)
-  drop-shadow on cards: 0 8px 30px rgba(0,0,0,0.4) — heavier than other presets
-  particle effects on focal moments: 4-8 dots, size 4-10px, opacity 0.6-0.85,
-      burst from a focal point and fade over 0.6s
+  large blocky shapes
+  layered geometric backgrounds (circles, rotated rects)
+  text often has accent box behind it
 
 MOTION:
-  ease: back.out(2), elastic.out(1, 0.5), power4.out, expo.out
-  durations: 0.25-0.7s (fast — pop is snappy)
-  ENTRIES use overshoot: scale 0.4 → 1.08 → 1.0 with back.out(2)
-  rotation entries: -12deg → 0 with back.out(1.8)
-  particle bursts on focal beat: stagger 0.02-0.04s, lifespan 0.6s
-  staggered word reveals: 0.05-0.08s stagger, 0.3s per word
-  exits are snappy: 0.2-0.3s with power3.in
-
-VOICE:
-  Hook viral. Urgência. Energia jovem. Pop-art digital. A audiência tem 1.5s
-  pra decidir se continua — o motion grita "PARA!" e segura. Pensa em
-  TikTok publicidade de marca, não NYT. Bold significa que pode exagerar.
-
-NEVER:
-  • easing suaves (sine.*, power1.*, power2.inOut) — não combina com pop
-  • durations > 0.8s em qualquer animação
-  • whitespace generoso — pop é packed, denso
-  • fonts < 800 weight em display
-  • bg gradient com brandBackgroundColor light — force '#0f0f1a' fallback
-  • cores purple/magenta/rose no atmosphere (PRINCIPLE 6 — usa cyan/yellow/orange)
-  • mais de 3 shapes geométricos visíveis ao mesmo tempo
-  • text sem text-shadow no display (digital flat morre nesse preset)
-  • saturação < 60% em qualquer accent`.trim(),
+  ease: back.out(2), elastic.out, power4.out
+  durations: 0.3-0.7s (fast)
+  use scale (0.5 → 1.05 → 1.0 overshoot)
+  rotation accents (-12deg → 0)
+  particle bursts on focal moments
+  staggered word-by-word reveals`.trim(),
   },
   {
     id: 'glass-tech',
@@ -279,69 +216,32 @@ NEVER:
       vignetteIntensity: 0.7,
     },
     geminiBrief: `
-PALETTE: Frosted glass, cool tech, premium materials.
-  bg: radial-gradient(ellipse at top, brandBackgroundColor 0%, #050510 80%).
-      Fallback if brand bg is light: force '#08080f' (deep tech blue-black).
-  text: brandTextColor.
-      Fallback if unset OR < 7:1: '#e8edf5' (cool off-white — never pure #ffffff).
-  accent: brandPrimaryColor.
-      If brand is in 250-345 hue band (banned), force '#0ea5e9' (tech cyan).
-  glow on accent: ${'$\{accent\} at alpha 0.6'} — write the literal rgba()
-      conversion by splitting the hex into r,g,b and using "rgba(r, g, b, 0.6)".
-      DO NOT write "brandPrimaryColor at 60% alpha" — Gemini must emit literal CSS.
-  glass-bg: rgba(255,255,255,0.06) — slightly darker than 0.08 to feel premium
-  glass-border: rgba(255,255,255,0.14) (was 0.18 — too bright)
-  glass-highlight-edge: rgba(255,255,255,0.22) — 1px top edge only, simulates light
-  grid lines: rgba(255,255,255,0.06) — 1px @ 6% alpha
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: radial-gradient(ellipse at top, brandBackgroundColor 0%, #000 80%)
+  text: brandTextColor
+  accent: brandPrimaryColor
+  glow: brandPrimaryColor at 60% alpha (use rgba conversion)
+  glass-bg: rgba(255,255,255,0.08)
+  glass-border: rgba(255,255,255,0.18)
 
 TYPOGRAPHY:
-  primary: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif (class="font-tech")
-  weights: 500 (body), 600 (display)
-  display sizes: 88-160px
-  letter-spacing: -0.02em to -0.03em on display, -0.01em on body
-  line-height: 1.08 on display, 1.45 on body
-  numerals: use tabular-nums (font-variant-numeric: tabular-nums) for stats
+  primary: "Inter", system-ui, sans-serif
+  weights: 500, 700
+  display sizes: 80-160px
+  letter-spacing: -1.5 to -2.5
 
 LAYOUT:
-  frosted glass cards: backdrop-filter: blur(20px) saturate(180%); background
-      glass-bg; border 1px solid glass-border; rounded corners 16-20px
-  inner highlight: ::before { top: 0; left: 8px; right: 8px; height: 1px;
-      background: glass-highlight-edge } — sells the "glass" feel
-  card padding: 32-48px (generous)
-  thin glowing borders on focus elements: 1px solid accent at 50% alpha,
-      with 0 0 24px <accent> at 30% box-shadow
-  faint grid lines in bg: 1px @ 6% alpha, 64px spacing (tech-blueprint feel)
-  accent particles: 3-6 dots, diameter 4-8px, color accent, opacity 0.5-0.7,
-      drifting yoyo on translateY ±20px over 4-6s
-  NO blobs, NO decorative shapes outside grid + particles (tech is geometric)
+  frosted glass cards (backdrop-filter: blur(20px))
+  thin glowing borders in brandPrimaryColor
+  brandPrimaryColor accent particles drifting in background
+  grid lines very faint at 8% opacity
 
 MOTION:
-  ease: power2.inOut, sine.inOut, power3.out (entries)
-  durations: 0.8-1.4s (calm, deliberate)
-  ENTRIES: opacity 0→1 + filter: blur(20px) → blur(0) + translateY(20px → 0)
-      over 1.0-1.4s ease power3.out
-  glass cards subtle floating: translateY ±4px yoyo over 5s sine.inOut
-  glow pulse on accents: box-shadow alpha 0.3 ↔ 0.6 yoyo over 2s sine.inOut
-  particles drift: translateY ±20px yoyo over 4-6s, opacity 0.5↔0.7 sync
-  staggers: 0.05-0.08s on glass card reveals
-
-VOICE:
-  Frio, futuro, técnico-aspiracional. Material design encontra Apple Pro.
-  Esse preset é pra produtos onde "qualidade" e "confiança" são o pitch —
-  IA empresarial, hardware premium, ferramenta dev. Calma deliberada, não
-  urgência. Cada elemento tem peso, profundidade, e justifica seu espaço.
-
-NEVER:
-  • gradient nas glass cards (glass = uniform com highlight, não gradient)
-  • saturação > 70% em qualquer elemento (tech é dessaturado por princípio)
-  • animação de qualquer elemento > 1.5s (exceto idle floats)
-  • decoração orgânica: blobs, paint splashes, curves — tech é geométrico
-  • easing back.out, elastic — quebram o feel premium
-  • box-shadow preto puro (rgba(0,0,0,X)) — sempre use accent-tinted shadows
-  • cores purple/magenta/rose no bg ou accent (PRINCIPLE 6 — usa cyan/blue/teal)
-  • mais de 2 glass cards simultaneamente no mesmo frame (depth confusion)
-  • backdrop-filter < 16px (não lê como glass) ou > 30px (overkill)
-  • text-shadow em texto — tech é tipografia precisa, não brilhante`.trim(),
+  ease: power2.inOut, sine.inOut
+  durations: 0.8-1.5s (calm, deliberate)
+  prefer opacity + filter (blur 20px → 0)
+  subtle floating animation on glass cards (continuous)
+  glow pulse on accents (yoyo)`.trim(),
   },
   {
     id: 'kinetic-bold',
@@ -360,69 +260,32 @@ NEVER:
       vignetteIntensity: 0.5,
     },
     geminiBrief: `
-PALETTE: Typography IS the design. Minimal color, maximum impact.
-  bg: brandBackgroundColor if it is dark (luminance < 25%).
-      Fallback if unset OR light: force '#0a0a0a' (deep charcoal — never pure #000,
-      pure black eats the vignette and feels flat).
-  text: brandTextColor.
-      Fallback: '#ffffff' is acceptable here (kinetic-bold is digital-loud by design).
-  highlight-bg: brandPrimaryColor — block fill behind the hero word.
-      Padding inside the block: 8px horizontal, 4px vertical.
-      Alpha: 1.0 for current word, 0.85 for previous word (decay over 0.4s).
-  alt-color: brandAccentColor — used on 1-2 secondary words per beat
-  NO gradients, NO glows, NO multi-color text — kinetic is monochromatic
-  with single-color highlight blocks.
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: brandBackgroundColor (or pure #000 if bg is dark)
+  text: brandTextColor
+  highlight-bg: brandPrimaryColor (block behind keyword)
+  alt-color: brandAccentColor
 
 TYPOGRAPHY:
-  primary: "Inter", "Helvetica Neue", system-ui, sans-serif (class="font-brand")
-  weights: 800, 900 (NEVER below 800 in display — kinetic IS the heaviness)
-  display sizes: 140-260px (HUGE — single word fills 80%+ of canvas width)
-  letter-spacing: -0.05em to -0.08em on display
-  line-height: 0.88-0.95 (tight, packed)
-  text-transform: UPPERCASE the hero word; mixed-case OK on connector words
+  primary: "Inter", system-ui, sans-serif
+  weights: 800, 900
+  display sizes: 140-280px (HUGE)
+  letter-spacing: -4 to -8
+  line-height: 0.9 (tight)
 
 LAYOUT:
-  text fills the canvas — 80%+ width on hero words, ≥ 50% on connectors
-  one or two words on screen at a time, MAX three
-  hero word centered, anchored at vertical center or slightly above
-  hero word gets highlight-bg block: padding 8px h / 4px v, NOT rounded
-      (kinetic is geometric, not pill-shaped — rounded ≤ 4px MAX)
-  connector words (de, a, é, com) smaller and at 60% alpha — visual hierarchy
-  NO decorative shapes, NO icons, NO backgrounds beyond the bg color
-      and optional 1-2 thin lines (1-2px) as compositional anchors
+  text fills the canvas
+  one or two words on screen at a time
+  important word gets brandPrimaryColor block background
+  mask-style reveals (clip-path)
 
 MOTION:
-  ease: power4.out, expo.out, power3.out (entries)
-  ease for exits: power3.in, expo.in
-  durations: 0.20-0.45s (snappy — kinetic is fast)
-  word-by-word reveals with clip-path: inset(0 100% 0 0) → inset(0 0 0 0)
-      ease power4.out, duration 0.28-0.35s, stagger 0.06-0.10s
-  highlighted words: clip-path reveal + immediate scale punch 1 → 1.08 → 1
-      over 0.18s ease back.out(2)
-  exits: clip-path inset(0 0 0 0) → inset(0 100% 0 0) ease expo.in 0.20s
-      OR scale 1 → 0.85 + opacity 1 → 0 over 0.18s
-  NO fade-only entries — kinetic uses clip-path + scale, never plain opacity
-  staggers: 0.06-0.10s between words
-
-VOICE:
-  Manchete em movimento. Cada palavra é um soco. Esse preset é o oposto de
-  cinematic-dark — ele EXIGE atenção, não convida. Pensa em outdoor de
-  campanha política, capa de revista provocativa, manifesto. Single-thought
-  per beat. A palavra é a estrela, tudo o mais é palco.
-
-NEVER:
-  • easing suaves (sine.*, power1.*, power2.inOut) — kinetic é instantâneo
-  • durations > 0.6s em qualquer animação
-  • texto pequeno (< 120px display) — kinetic = grande por definição
-  • plain fade-in (opacity-only) — entrada precisa de clip-path OU scale punch
-  • fonts < 800 weight em display
-  • cards rounded > 4px — kinetic é geométrico, não pill-shaped
-  • mais de 3 palavras simultâneas no canvas
-  • highlight-bg sem padding interno (8h × 4v) — fica colado, mata legibilidade
-  • multi-color text (text com mais de 1 cor por palavra)
-  • decorative shapes, icons, blobs — austeridade tipográfica
-  • text-shadow ou glow — kinetic é tipografia limpa, não brilhante
-  • bg gradient — sempre cor sólida`.trim(),
+  ease: power4.out, expo.out
+  durations: 0.25-0.5s (snappy)
+  word-by-word reveals with stagger (0.06-0.1s)
+  use clip-path: inset(0 100% 0 0) → inset(0 0 0 0) for wipe-in
+  highlighted words get a quick scale punch (1 → 1.08 → 1)
+  no fade — only motion + clip-path`.trim(),
   },
   {
     id: 'soft-pastel',
@@ -442,58 +305,33 @@ NEVER:
       vignetteIntensity: 0.22,
     },
     geminiBrief: `
-PALETTE: Soft warm pastel — cream paper, peach glow, warm tan accent.
-  bg: brandBackgroundColor if it is a warm light tone (#fdf5e8, #fef3e8, #faf3e0 range).
-      OTHERWISE force '#fef3e8' (warm cream) — DO NOT use pure white, DO NOT use any pink/rose/magenta tone.
-  text: brandTextColor if it has 7:1 contrast on cream OR force '#5c3b1e' (warm umber)
-  accent1: brandPrimaryColor if it is a warm earth tone (peach/amber/terracotta/sage).
-      OTHERWISE force '#d4a574' (warm tan)
-  accent2: brandAccentColor or '#c9956c' (deeper tan)
-  decoration: '#e8c89a' (light amber) for blobs and dots
-  shadow: '0 4px 20px rgba(180, 130, 80, 0.15)' — ALWAYS warm-toned shadows, NEVER rgba(0,0,0,...)
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE if they fit a soft/pastel mood.
+  Otherwise default to the warm pastel palette below (peach/cream/tan — never pink/rose/magenta).
+  bg: linear-gradient(135deg, brandBackgroundColor or #fef3e8 0%, lighter shade 50%, lighter shade 100%)
+  text: brandTextColor or #5c3b1e (warm umber)
+  accent1: brandPrimaryColor or #d4a574 (warm tan)
+  accent2: brandAccentColor or #c9956c (deeper tan)
+  decoration: brandSecondaryColor or #e8c89a (light amber)
 
 TYPOGRAPHY:
-  primary display: "Playfair Display", "Cormorant Garamond", serif (use class="font-display")
+  primary: "Playfair Display", serif (for display)
   body: "Inter", sans-serif
-  weights: 400 (body), 500 (italic body), 600 (display)
-  display sizes: 88-140px
-  letter-spacing: -0.01em on display, normal on body
-  line-height: 1.1 on display, 1.5 on body
-  italic only on pull-quotes (1-2 words max)
+  weights: 400, 600
+  display sizes: 80-140px
+  italic on display sometimes
+  letter-spacing: -1
 
 LAYOUT:
-  generous breathing room — minimum 56px gutters
-  off-center composition encouraged (golden-ratio feel, not centered grids)
-  organic blob shapes (SVG ellipses with filter: blur(30px)) at opacity 0.35-0.55
-  floating decorative dots — diameter 4-8px, opacity 0.30-0.50, drifting
-  thin 1px hairline dividers in '#a08566' at 25% alpha
-  rounded corners: 12px (cards), 999px (pills)
-  drop-shadows ALWAYS warm: '0 4px 20px rgba(180, 130, 80, 0.15)'
+  organic blob shapes in background (SVG)
+  floating decorative dots
+  soft drop shadows (always warm-toned, never black)
 
 MOTION:
-  ease: sine.inOut, power1.inOut, power2.out (gentle, never back/elastic)
-  durations: 1.0-1.8s (gentle, never snappy)
-  fade + small scale 0.96→1 entries; translate ≤ 12px
-  background blobs drift vertically (yoyo, 4-6s cycle, ±20px)
-  dots float slowly (yoyo, 3-5s, ±15px)
-  word-by-word reveals with 0.10-0.14s stagger (slow, contemplative)
-  no clip-path snaps, no overshoot, no rotation
-  text appears with translateY(8px → 0) + opacity 0→1 over 1.2s ease power2.out
-
-VOICE:
-  Calmo, contemplativo, lifestyle premium. Pensa "perfume editorial" ou abertura
-  de documentário de viagem — o motion respira, não pula. Audiência aceita 2s
-  pra ler porque a composição está convidando, não exigindo. Menos é mais —
-  se um quadro funciona com 3 elementos, não coloque 5.
-
-NEVER:
-  • pure black text (#000000) — sempre warm umber/brown
-  • cold/black shadows — sempre warm-toned (rgba(180,130,80,X))
-  • snap reveals (clip-path inset → 0)
-  • scale > 1.05 ou translate > 16px
-  • brand colors no espectro 250-345 hue (purple/pink/rose/magenta) — força fallback
-  • saturação > 50% em qualquer elemento (tudo deve parecer "lavado")
-  • easing back.out, elastic, expo — quebra a calma`.trim(),
+  ease: sine.inOut, power1.inOut
+  durations: 1.0-1.8s (gentle)
+  vertical drift on background blobs (continuous, slow)
+  fade + scale 0.95 → 1 entries
+  no overshoot, no snap`.trim(),
   },
   {
     id: 'cinematic-dark',
@@ -512,66 +350,33 @@ NEVER:
       vignetteIntensity: 0.85,
     },
     geminiBrief: `
-PALETTE: Restrained, low-saturation, deep-cinema.
-  bg: brandBackgroundColor (must be dark — #000 to #1a1a1a range).
-      If brand bg is light, force '#0a0a0a' deep charcoal (NOT pure #000).
-      Apply as radial-gradient from center: brandBackgroundColor 0% → +12% lighter at 80%.
-  text: brandTextColor (must contrast 7:1 on dark bg).
-      If unset OR low-contrast, force '#ebe4d6' (warm off-white — NEVER pure #ffffff,
-      pure white reads as digital, not cinematic).
-  accent: brandPrimaryColor at 60-80% saturation (cinema desaturates everything).
-      Single accent only — no secondary accent appears in any frame.
-  vignette: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.65) 100%).
-      ALWAYS present. Track-index 9. Pointer-events none. Mix-blend-mode multiply.
-  film grain: SVG <feTurbulence baseFrequency="0.9" numOctaves="2"/> as data-URI overlay
-      OR a pre-rendered noise data-URI; opacity 0.04-0.06; mix-blend-mode overlay;
-      position absolute inset:0; pointer-events none.
+PALETTE: USE THE BRAND IDENTITY COLORS PROVIDED ABOVE — do not invent colors.
+  bg: brandBackgroundColor → slightly lighter shade (radial)
+  text: brandTextColor
+  accent: brandPrimaryColor (or brandAccentColor for highlights)
+  vignette: rgba(0,0,0,0.6)
 
 TYPOGRAPHY:
-  primary: "Inter", "Helvetica Neue", system-ui, sans-serif
-  weights: 300 (display light), 600 (body bold accent only)
-  display sizes: 64-120px (cinema avoids HUGE — restraint is the point)
-  letter-spacing: 0.08em-0.16em on display (wide, breathing, cinematic credits)
-  text-transform: uppercase on display ONLY when ≤ 3 words; mixed case otherwise
-  line-height: 1.4 on display, 1.6 on body
+  primary: "Inter", system-ui, sans-serif
+  weights: 300 (light), 700 (bold)
+  display sizes: 60-120px
+  letter-spacing: 1-3 (wider, cinematic)
+  uppercase common
+  line-height: 1.5
 
 LAYOUT:
-  letterbox bars top + bottom: 2 black bars, 60-120px each, 100% opacity, NOT transparent
-  vertical asymmetry — anchor content to lower-third (y: 65-75% of canvas)
-  one focal element per beat — no stacking
-  16:9 framing math: bars occupy (1 - 9/16 * 16/9) of height = ~28% total when canvas is 9:16
-  rounded corners: NONE on bars; 2-4px on any card (minimal — cinema is geometric)
-  thin hairlines in accent at 30% alpha as section dividers (1px)
-  NO decorative shapes, blobs, dots, or icons — cinema is austere
+  letterboxed feel (16:9 framing inside the 9:16 canvas)
+  strong vertical asymmetry
+  film grain overlay (very subtle, 4% opacity)
+  vignette on edges
 
 MOTION:
-  ease: power3.inOut, power2.out, sine.inOut (NEVER back/elastic/expo)
-  durations: 1.2-2.4s (slow, deliberate)
-  fade durations: 0.8-1.6s (NEVER hard cuts — minimum 0.6s on transitions)
-  text appears: opacity 0→1 over 1.4s + translateY(4px → 0) ease power3.out
-  background slow zoom (Ken Burns): scale 1.0 → 1.04 over the full block duration,
-      ease sine.inOut. Track-0 bg ONLY (vignette + grain stay static).
-  text may have IMPERCEPTIBLE drift: translateY (-1.5px → 0 → -1.5px) yoyo over 6s.
-      Without this, opacity-only fades feel like a slideshow, not cinema.
-  letterbox bars fade in over 0.6s at the start; STAY visible the whole block.
-  staggers: 0.08-0.12s (slow reveals)
-
-VOICE:
-  Documentário longa-metragem. A audiência ganhou o direito de ver isso
-  porque você cuidou de cada elemento. Tudo respira. Nada grita. Cinema é
-  o oposto de TikTok — confia que a pessoa vai ficar até o final do plano.
-  Se um elemento pode ser removido sem perda de significado, REMOVA.
-
-NEVER:
-  • pure #000000 background — sempre #0a0a0a OR brand dark
-  • pure #ffffff text — sempre warm off-white #ebe4d6
-  • hard cuts (durations < 0.6s em transições)
-  • back.out, elastic, expo — fora do vocabulário cinemático
-  • scale punch ou rotation em texto
-  • mais de 1 cor accent por bloco
-  • saturação > 70% em qualquer elemento
-  • blobs, dots, decorative shapes — austeridade absoluta
-  • esquecer o film grain ou a vignette (são identidade do preset)`.trim(),
+  ease: power3.inOut
+  durations: 1.2-2.0s (slow, deliberate)
+  long fades (0.8-1.5s)
+  almost no movement on text — just opacity
+  background may have very slow zoom (1.0 → 1.05 over 5s)
+  film burn / light leak transitions`.trim(),
   },
   {
     id: 'apple-system',
