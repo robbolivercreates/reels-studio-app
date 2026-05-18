@@ -1374,22 +1374,30 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         '',
       ].join('\n');
     }
-    // Dark preset → original strict B&W fallback
+    // Dark preset → preset-aware fallback using the preset's own atmosphere
+    // colors. Previously this was a "strict B&W" fallback (white on black,
+    // zero accent color), which made every brandless motion look like an
+    // identical monochrome icon. Each preset already declares its identity
+    // colors via atmosphere.warmGlow.color + atmosphere.coolGlow.color —
+    // those are the natural accents (glass-tech: cyan + amber; bold-pop:
+    // orange + cyan; cinematic-dark: warm glow + deep blue; etc). Use them.
     return [
       `╔══════════════════════════════════════════════════════╗`,
-      `  NO BRAND IDENTIFIED — STRICT BLACK & WHITE PALETTE`,
+      `  NO BRAND IDENTIFIED — DARK PRESET FALLBACK (preset-aware)`,
       `╚══════════════════════════════════════════════════════╝`,
-      `brandBackgroundColor: ${preset.atmosphere.baseBg}   ← preset atmosphere base`,
-      `brandTextColor: #ffffff         ← pure white`,
-      `brandPrimaryColor: #ffffff      ← white (used for icons, borders, accents)`,
-      `brandSecondaryColor: #a3a3a3    ← neutral grey (60% white)`,
-      `brandAccentColor: #ffffff       ← white (single hot-spot — emphasize via scale/glow not colour)`,
+      `Preset "${preset.label}" has its own atmosphere identity — use it as the palette.`,
+      `brandBackgroundColor: ${preset.atmosphere.baseBg}   ← preset atmosphere base (the dark canvas)`,
+      `brandTextColor: #ffffff         ← off-white (or tint to ${preset.atmosphere.warmGlow.color} at ~95% for warmth)`,
+      `brandPrimaryColor: ${preset.atmosphere.warmGlow.color}      ← preset's primary accent (icons, borders, glows, key strokes)`,
+      `brandSecondaryColor: ${preset.atmosphere.coolGlow.color}    ← preset's secondary accent (supporting elements, alt highlights)`,
+      `brandAccentColor: ${preset.atmosphere.warmGlow.color}       ← single hot-spot for CTAs / numbers / hero word`,
       ``,
-      `THIS IS BLACK & WHITE MODE. NO COLORS AT ALL.`,
-      `STRICTLY FORBIDDEN: any purple, violet, indigo, magenta, fuchsia, pink, blue, red, orange, yellow, green, cyan, teal, amber.`,
-      `If the style preset suggests a gradient, use #000000 → #1a1a1a (subtle dark grey).`,
-      `If the style preset suggests "vibrant" or "energy", express it through SCALE / MOTION / CONTRAST / TYPOGRAPHY WEIGHT, NEVER colour.`,
-      `Highlights: use a thin white border, a white glow (rgba(255,255,255,0.5)), or pure white text against #000.`,
+      `Use the preset's accents intentionally — small areas with the warm/cool glow colors,`,
+      `not fields of solid color. Most of the canvas should be the dark base. Accents earn`,
+      `their punch by contrast against that dark, not by saturation alone.`,
+      ``,
+      `STRICTLY FORBIDDEN (PRINCIPLE 6): purple, violet, indigo, magenta, fuchsia, pink, rose, lilac, lavender.`,
+      `Any HSL hue between 250-345 degrees is banned. If a preset accent above happens to fall in that range, override it to #f59e0b (warm amber).`,
       '',
     ].join('\n');
   })();
