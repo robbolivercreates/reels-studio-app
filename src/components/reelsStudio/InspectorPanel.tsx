@@ -411,7 +411,6 @@ export const InspectorPanel: React.FC<Props> = ({
   // ─── Tab bodies ─────────────────────────────────────────────────
   const motionBody = () => {
     if (!block) return null;
-    const currentPresetId = (block.stylePresetOverride ?? 'glass-tech') as string;
     const motionStatus = block.motion?.status;
     const isBusy = !!motionBusy;
     // Deterministic effect suggestion. Cheap (regex + bool checks) — no memo
@@ -437,12 +436,15 @@ export const InspectorPanel: React.FC<Props> = ({
     })();
     // Resolve what the user is effectively going to render with — the manual
     // override if set, otherwise whatever the detector recommended, otherwise
-    // a safe editorial fallback. This single id drives the DecidedPresetCard.
+    // a safe editorial fallback. This single id drives the DecidedPresetCard
+    // AND the chip's "active" highlight in the carousel — keeping both in
+    // sync so the user never sees two preset chips lit up at once.
     const isManualOverride = !!block.stylePresetOverride;
     const effectivePresetId: StylePresetId = isManualOverride
       ? (block.stylePresetOverride as StylePresetId)
       : (detected.recommendedEffect ?? 'editorial-clean');
     const effectivePreset = findStylePreset(effectivePresetId);
+    const currentPresetId: string = effectivePresetId;
     const reasonText = isManualOverride
       ? effectivePreset.bestFor
       : (detected.recommendedEffect ? detected.reason : 'Editorial limpo · escolha padrão');
