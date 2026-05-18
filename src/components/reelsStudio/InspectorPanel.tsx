@@ -622,7 +622,20 @@ export const InspectorPanel: React.FC<Props> = ({
               <button
                 key={p.id}
                 data-preset-id={p.id}
-                onClick={() => onSetStylePreset?.(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId))}
+                onClick={() => {
+                  // glass-tech is the natural avatar default (effectDetector
+                  // rule 12). Clicking it on an AVATAR block clears the
+                  // override → falls back to that default cleanly. But on
+                  // b-roll there's no rule recommending glass-tech, so
+                  // clearing the override would bounce the user to the
+                  // editorial-clean fallback — felt like a bug. So we only
+                  // use the "clear" shortcut when the click matches the
+                  // block's natural detected default; otherwise we set the
+                  // override explicitly.
+                  const isAvatarBlock = block.kind === 'avatar';
+                  const isNaturalDefault = p.id === 'glass-tech' && isAvatarBlock;
+                  onSetStylePreset?.(isNaturalDefault ? undefined : (p.id as StylePresetId));
+                }}
                 className="relative shrink-0 rounded-lg transition-all flex flex-col items-center overflow-hidden"
                 style={{
                   width: STYLE_THUMB_WIDTH,
