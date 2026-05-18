@@ -1074,20 +1074,24 @@ const buildMotionLanguageSection = (lang: string): string => {
     'de-DE': 'German',
   };
   const label = labels[lang] ?? lang;
-  if (lang === 'pt-BR') {
-    // Legacy default — no extra section needed, the SYSTEM_PROMPT already targets pt-BR.
-    return '';
-  }
+  // Even pt-BR needs an explicit reminder. The SYSTEM_PROMPT itself is
+  // written in English (PRINCIPLE 1-8, all rules, all anti-patterns); only
+  // the few HTML examples mix in pt-BR words. Without an explicit override,
+  // Gemini often defaults the visible <h1>/<p>/<span> text to English to
+  // "match the surrounding instructional language" — which is exactly what
+  // the user is seeing: script is pt-BR but the motion text comes out
+  // English.
   return [
     `--- OUTPUT LANGUAGE OVERRIDE (HIGHEST PRIORITY) ---`,
     `The script for this reel is in ${label} (${lang}).`,
-    `ALL VISIBLE / SPOKEN OUTPUTS must be in ${label}, NOT in Portuguese:`,
+    `ALL VISIBLE / NARRATED outputs must be in ${label}:`,
     `  • "intent" field → write in ${label}`,
     `  • "text" field (the headline on screen) → write in ${label}`,
     `  • "rationale" field → write in ${label}`,
-    `  • Any visible <h1>, <h2>, <p>, <span> text inside the HTML → ${label}`,
-    `Ignore the pt-BR examples in the system prompt; treat them as STRUCTURAL templates only — translate the actual wording.`,
+    `  • Any visible <h1>, <h2>, <p>, <span>, label, button, caption text inside the HTML → ${label}`,
+    `Treat the system prompt's example HTML as STRUCTURAL templates only; translate the literal wording into ${label}.`,
     `Keep HTML class names, CSS property names, GSAP API calls, and code identifiers in English (they are code, not content).`,
+    `If the user's intent/text overrides above contain ${label} text, use those values verbatim.`,
     ``,
   ].join('\n');
 };
