@@ -16,7 +16,7 @@
  *     renders a quiet placeholder — the layout slot never disappears.
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import type { ScriptBlock, AppTheme, BlockLayout } from './types';
 import { getTheme } from './theme';
 import { LAYOUT_OPTIONS } from './layouts';
@@ -87,7 +87,11 @@ const STORAGE_KEY_MOTION_GRID = 'reels.inspector.motionGridOpen';
 // the Motion tab with its disclosure open uses internal flex zones to
 // keep the action buttons pinned while only the chip grid scrolls.
 // Apple-grade: altura ABSOLUTA. Conteúdo se adapta — Inspector NUNCA pula.
-const INSPECTOR_TAB_BODY_HEIGHT = 220;
+// 280px: comporta a linha compacta do preset escolhido + 2 carrosséis com
+// thumbs 9:16 grandes o suficiente pra receber preview animado real
+// (Entrega C futura — slot interno já dimensionado pra <iframe>/<video>).
+const INSPECTOR_TAB_BODY_HEIGHT = 280;
+const STYLE_THUMB_WIDTH = 80; // 9:16 aspect → ~142px de altura. Cabe preview.
 const TabBodyShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   // Height EXATA + overflow-hidden em ambos os eixos. Qualquer tab que
   // tente crescer é cortada — o conteúdo TEM que se adaptar. Esta é a
@@ -233,6 +237,88 @@ const DecidedPresetCard: React.FC<{
   );
 };
 
+// ─── DecidedPresetLine — compact version of DecidedPresetCard ─────────
+// Used when the user opens "Trocar manualmente" — the full card would
+// steal vertical space the carousel rows need, so we collapse it into a
+// single horizontal line that still surfaces:
+//   - source (🤖 auto / Você)
+//   - preset emoji + label
+//   - short reason
+//   - reset link (only when manual)
+// Apple pattern: keep the anchor visible at all times, just thinner.
+const DecidedPresetLine: React.FC<{
+  preset: StylePreset;
+  source: 'auto' | 'manual';
+  reason: string;
+  onReset?: () => void;
+  isLight: boolean;
+  tokens: ReturnType<typeof getTheme>;
+}> = ({ preset, source, reason, onReset, isLight, tokens }) => {
+  const isAuto = source === 'auto';
+  return (
+    <div
+      className="flex items-center gap-2 px-3 py-1.5 rounded-md text-[11px]"
+      style={{
+        backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)',
+        border: `1px solid ${tokens.border.subtle}`,
+      }}
+    >
+      <span
+        className="text-[9px] uppercase tracking-wider font-semibold shrink-0"
+        style={{ color: isAuto ? '#A78BFA' : tokens.text.tertiary }}
+      >
+        {isAuto ? '🤖 Auto' : 'Manual'}
+      </span>
+      <span className="text-base leading-none shrink-0" aria-hidden>{preset.emoji}</span>
+      <span className="font-semibold shrink-0" style={{ color: tokens.text.primary }}>
+        {preset.label}
+      </span>
+      <span className="opacity-50 shrink-0">·</span>
+      <span className="truncate min-w-0" style={{ color: tokens.text.secondary }}>
+        {reason}
+      </span>
+      {!isAuto && onReset && (
+        <button
+          onClick={onReset}
+          className="shrink-0 ml-auto text-[10px] font-medium underline-offset-2 hover:underline"
+          style={{ color: '#A78BFA', backgroundColor: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
+          title="Limpar escolha manual e voltar para a decisão automática do sistema"
+        >
+          Voltar p/ auto
+        </button>
+      )}
+    </div>
+  );
+};
+
+// ─── CarouselRow — horizontal thumbnail row with auto-scroll to active ─
+// When `activeId` changes (e.g. disclosure just opened OR user clicked a
+// thumb), the container scrolls so the active thumb is centered in view.
+// This is the "anchor" mechanic — user never loses sight of what's selected,
+// even after browsing the carousel.
+const CarouselRow: React.FC<{
+  activeId: string | undefined;
+  children: React.ReactNode;
+}> = ({ activeId, children }) => {
+  const rowRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!activeId) return;
+    const el = rowRef.current?.querySelector(`[data-preset-id="${activeId}"]`);
+    if (el instanceof HTMLElement) {
+      el.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+    }
+  }, [activeId]);
+  return (
+    <div
+      ref={rowRef}
+      className="flex gap-2 overflow-x-auto pb-1"
+      style={{ scrollbarWidth: 'thin' }}
+    >
+      {children}
+    </div>
+  );
+};
+
 export const InspectorPanel: React.FC<Props> = ({
   block,
   appTheme,
@@ -356,8 +442,19 @@ export const InspectorPanel: React.FC<Props> = ({
             chosen preset is already implicit (user is actively browsing
             the carousel) and the card takes ~64px we need for the rows. */}
         <div className="shrink-0 space-y-3">
-        {!showMotionGrid && (
+        {/* Closed state: big hero card. Open state: compact line — same
+            information, ~40px shorter so the carousels have room. */}
+        {!showMotionGrid ? (
           <DecidedPresetCard
+            preset={effectivePreset}
+            source={isManualOverride ? 'manual' : 'auto'}
+            reason={reasonText}
+            onReset={isManualOverride ? () => onSetStylePreset?.(undefined) : undefined}
+            isLight={isLight}
+            tokens={tokens}
+          />
+        ) : (
+          <DecidedPresetLine
             preset={effectivePreset}
             source={isManualOverride ? 'manual' : 'auto'}
             reason={reasonText}
@@ -445,10 +542,11 @@ export const InspectorPanel: React.FC<Props> = ({
             return (
               <button
                 key={p.id}
+                data-preset-id={p.id}
                 onClick={() => onSetStylePreset?.(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId))}
                 className="relative shrink-0 rounded-lg transition-all flex flex-col items-center overflow-hidden"
                 style={{
-                  width: 64,
+                  width: STYLE_THUMB_WIDTH,
                   border: `2px solid ${isActive ? '#A78BFA' : (auto ? '#A78BFA80' : tokens.border.subtle)}`,
                   cursor: 'pointer',
                   boxShadow: isActive ? '0 0 0 3px rgba(167,139,250,0.18)' : 'none',
@@ -497,6 +595,10 @@ export const InspectorPanel: React.FC<Props> = ({
           const effectSet = new Set<string>(EFFECT_PRESET_IDS);
           const styles  = STYLE_PRESETS.filter(p => styleSet.has(p.id));
           const effects = STYLE_PRESETS.filter(p => effectSet.has(p.id));
+          // Active id for auto-scroll: respect manual override; otherwise
+          // anchor on the detector's recommendation so the recommended thumb
+          // is visible right after the user opens the carousel.
+          const activeId = (block.stylePresetOverride ?? detected.recommendedEffect) as string | undefined;
           return (
             <div className="space-y-2">
               {/* Estilo row */}
@@ -504,24 +606,18 @@ export const InspectorPanel: React.FC<Props> = ({
                 <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1 px-1" style={{ color: tokens.text.tertiary }}>
                   Estilo
                 </div>
-                <div
-                  className="flex gap-2 overflow-x-auto pb-1"
-                  style={{ scrollbarWidth: 'thin' }}
-                >
+                <CarouselRow activeId={activeId}>
                   {styles.map(p => renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }))}
-                </div>
+                </CarouselRow>
               </div>
               {/* Efeito row */}
               <div>
                 <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1 px-1" style={{ color: tokens.text.tertiary }}>
                   Efeito (opcional)
                 </div>
-                <div
-                  className="flex gap-2 overflow-x-auto pb-1"
-                  style={{ scrollbarWidth: 'thin' }}
-                >
+                <CarouselRow activeId={activeId}>
                   {effects.map(p => renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }))}
-                </div>
+                </CarouselRow>
               </div>
             </div>
           );
