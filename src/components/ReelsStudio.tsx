@@ -4578,6 +4578,19 @@ export const ReelsStudio: React.FC = () => {
             onClose={() => setMotionPickerBlockId(null)}
             onSave={(motion) => {
               dispatch({ type: 'set-block-motion', id: block.id, motion });
+              // Keep the Inspector chip strip in sync with the preset the user
+              // just picked in the advanced editor. Without this, the chip
+              // strip kept reading `block.stylePresetOverride` (untouched)
+              // while the modal wrote to `motion.presetId` — two independent
+              // states for the same concept. Clicking the just-picked chip
+              // afterwards would visually bounce back to the previous one.
+              if (motion?.presetId) {
+                dispatch({ type: 'set-block-style-preset', id: block.id, preset: motion.presetId });
+              } else if (motion === undefined) {
+                // Modal "remove motion" — also clear the override so the
+                // detector can suggest fresh defaults on next interaction.
+                dispatch({ type: 'set-block-style-preset', id: block.id, preset: undefined });
+              }
               setMotionPickerBlockId(null);
             }}
           />
