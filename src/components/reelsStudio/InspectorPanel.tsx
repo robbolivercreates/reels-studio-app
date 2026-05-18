@@ -86,13 +86,16 @@ const STORAGE_KEY_MOTION_GRID = 'reels.inspector.motionGridOpen';
 // tabs. Tabs whose content fits within the shell don't trigger scroll;
 // the Motion tab with its disclosure open uses internal flex zones to
 // keep the action buttons pinned while only the chip grid scrolls.
-const INSPECTOR_TAB_BODY_MIN_HEIGHT = 168;
+// Apple-grade: altura ABSOLUTA. Conteúdo se adapta — Inspector NUNCA pula.
+const INSPECTOR_TAB_BODY_HEIGHT = 220;
 const TabBodyShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  // Min-height fixa pra todas as tabs ficarem com o mesmo "piso" visual.
-  // Sem scroll vertical: conteúdo que cresce (Motion com disclosure aberto)
-  // empurra a altura pra cima de forma controlada. Carrosséis internos
-  // scrolam horizontalmente. As outras 4 tabs cabem no piso e não crescem.
-  <div style={{ minHeight: INSPECTOR_TAB_BODY_MIN_HEIGHT }}>
+  // Height EXATA + overflow-hidden em ambos os eixos. Qualquer tab que
+  // tente crescer é cortada — o conteúdo TEM que se adaptar. Esta é a
+  // regra que impede a timeline embaixo de pular.
+  <div
+    style={{ height: INSPECTOR_TAB_BODY_HEIGHT }}
+    className="overflow-hidden"
+  >
     {children}
   </div>
 );
@@ -344,23 +347,25 @@ export const InspectorPanel: React.FC<Props> = ({
       ? effectivePreset.bestFor
       : (detected.recommendedEffect ? detected.reason : 'Editorial limpo · escolha padrão');
     return (
-      // Natural top-down flow. Zone 1 stays at top, Zone 2 grows when the
-      // disclosure opens (carousel rows scroll horizontally), Zone 3 sits
-      // right below at the bottom. No vertical scroll anywhere.
-      <div className="space-y-3">
-        {/* ─── Zone 1 (top): hero card + status strip ────────────────── */}
-        <div className="space-y-3">
-        {/* "What the system decided" hero card — primary surface for the
-            Motion tab. Click "Trocar manualmente" below to reveal the full
-            chip grid. */}
-        <DecidedPresetCard
-          preset={effectivePreset}
-          source={isManualOverride ? 'manual' : 'auto'}
-          reason={reasonText}
-          onReset={isManualOverride ? () => onSetStylePreset?.(undefined) : undefined}
-          isLight={isLight}
-          tokens={tokens}
-        />
+      // 220px shell: Zone 1 (top) + Zone 2 (middle, grows to fill) + Zone 3
+      // (bottom, glued to floor). When disclosure opens, DecidedPresetCard
+      // is hidden to free room for the carousels.
+      <div className="h-full flex flex-col gap-3">
+        {/* ─── Zone 1 (top): hero card + status strip ──────────────────
+            DecidedPresetCard is hidden when the disclosure opens — the
+            chosen preset is already implicit (user is actively browsing
+            the carousel) and the card takes ~64px we need for the rows. */}
+        <div className="shrink-0 space-y-3">
+        {!showMotionGrid && (
+          <DecidedPresetCard
+            preset={effectivePreset}
+            source={isManualOverride ? 'manual' : 'auto'}
+            reason={reasonText}
+            onReset={isManualOverride ? () => onSetStylePreset?.(undefined) : undefined}
+            isLight={isLight}
+            tokens={tokens}
+          />
+        )}
 
         {/* Status strip — motion lifecycle indicator + dark/light toggle.
             Used to live in the grid header; surfaced here so users see
@@ -401,9 +406,10 @@ export const InspectorPanel: React.FC<Props> = ({
         </div>
         </div>
         {/* ─── Zone 2 (middle): disclosure + horizontal carousel rows ───
-            No vertical scroll. The carousels inside scroll horizontally so
-            we can show 8+11 thumbnails without vertical growth runaway. */}
-        <div className="space-y-2">
+            flex-1 lets this zone earn leftover height. Carousels inside
+            scroll horizontally. Vertical scroll is impossible because the
+            shell clips overflow. */}
+        <div className="flex-1 min-h-0 space-y-2 overflow-hidden">
 
         {/* Disclosure toggle — opens/closes the 19-chip grid below. */}
         <button
@@ -521,9 +527,9 @@ export const InspectorPanel: React.FC<Props> = ({
           );
         })()}
         </div>
-        {/* ─── Zone 3 (bottom): action buttons ────────────────────────── */}
+        {/* ─── Zone 3 (bottom): action buttons (pinned to floor) ──────── */}
         {/* Primary: regenerate inline (no modal). Secondary: open advanced editor. */}
-        <div className="flex items-center gap-2">
+        <div className="shrink-0 flex items-center gap-2">
           <button
             onClick={onGenerateMotion}
             disabled={isBusy}
@@ -569,7 +575,9 @@ export const InspectorPanel: React.FC<Props> = ({
     const visibleSec = block.avatarVisibleSec ?? blockDuration;
     const isPartial = block.avatarVisibleSec !== undefined && block.avatarVisibleSec < blockDuration - 0.05;
     return (
-      <div className="grid grid-cols-3 gap-3">
+      // Centered vertically in the 220px shell.
+      <div className="h-full flex items-center">
+      <div className="grid grid-cols-3 gap-3 w-full">
         {/* Photo picker */}
         <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
           <div className="text-[10px] uppercase tracking-wider font-semibold mb-2" style={{ color: tokens.text.tertiary }}>Foto do avatar</div>
@@ -638,6 +646,7 @@ export const InspectorPanel: React.FC<Props> = ({
           )}
         </div>
       </div>
+      </div>
     );
   };
 
@@ -645,7 +654,9 @@ export const InspectorPanel: React.FC<Props> = ({
     if (!block) return null;
     const selectedLayout = (block.layout ?? 'avatar-only') as BlockLayout;
     return (
-      <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
+      // Centered vertically in the 220px shell.
+      <div className="h-full flex items-center">
+      <div className="rounded-lg px-3 py-2.5 w-full" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
         <div className="text-[10px] uppercase tracking-wider font-semibold mb-2" style={{ color: tokens.text.tertiary }}>Layout do bloco</div>
         <div className="grid grid-cols-4 gap-2 max-w-md">
           {LAYOUT_OPTIONS.map(opt => {
@@ -664,6 +675,7 @@ export const InspectorPanel: React.FC<Props> = ({
           })}
         </div>
       </div>
+      </div>
     );
   };
 
@@ -671,7 +683,10 @@ export const InspectorPanel: React.FC<Props> = ({
     if (!block) return null;
     const wordCount = block.text.trim().split(/\s+/).filter(Boolean).length;
     return (
-      <div className="grid grid-cols-4 gap-3 text-[11px]">
+      // Centered vertically in the 220px shell so the 4 stat cards don't
+      // float at the top of dead space.
+      <div className="h-full flex items-center">
+      <div className="grid grid-cols-4 gap-3 text-[11px] w-full">
         <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
           <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>Início</div>
           <div className="font-mono mt-1" style={{ color: tokens.text.primary }}>{formatTime(block.start)}</div>
@@ -689,13 +704,31 @@ export const InspectorPanel: React.FC<Props> = ({
           <div className="font-mono mt-1" style={{ color: tokens.text.primary }}>{wordCount}</div>
         </div>
       </div>
+      </div>
     );
   };
 
   const vozBody = () => (
-    <div className="text-[11px] space-y-1" style={{ color: tokens.text.tertiary }}>
-      <em>Tab Voz · Onda 2 (próxima iteração) trará controles de voz por bloco aqui.</em>
-      <div className="opacity-60">Em breve: tom, velocidade e ênfase por bloco.</div>
+    // Centralized empty-state — 220px shell otherwise leaves the text
+    // floating at the top of a big void. Apple-pattern: icon + title +
+    // subtitle in a vertically centered cluster.
+    <div className="h-full flex flex-col items-center justify-center gap-2 px-4 text-center">
+      <div
+        className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
+        style={{
+          backgroundColor: isLight ? 'rgba(167,139,250,0.10)' : 'rgba(167,139,250,0.15)',
+          color: '#A78BFA',
+        }}
+        aria-hidden
+      >
+        🎙
+      </div>
+      <div className="text-[12px] font-medium" style={{ color: tokens.text.primary }}>
+        Controles de voz por bloco
+      </div>
+      <div className="text-[11px]" style={{ color: tokens.text.tertiary }}>
+        Em breve nesta tab: tom, velocidade e ênfase por bloco.
+      </div>
     </div>
   );
 
