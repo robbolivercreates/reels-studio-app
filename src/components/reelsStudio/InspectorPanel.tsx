@@ -516,11 +516,11 @@ export const InspectorPanel: React.FC<Props> = ({
           )}
         </div>
         </div>
-        {/* ─── Zone 2 (middle): disclosure + horizontal carousel rows ───
-            flex-1 lets this zone earn leftover height. Carousels inside
-            scroll horizontally. Vertical scroll is impossible because the
-            shell clips overflow. */}
-        <div className="flex-1 min-h-0 space-y-2 overflow-hidden">
+        {/* ─── Zone 2 (middle): disclosure + horizontal carousel ─────────
+            flex column inside the flex-1 zone so the disclosure / segmented
+            control stays ALWAYS visible at the top, and only the carousel
+            below it gets cropped if vertical space runs out. */}
+        <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
 
         {/* Disclosure trigger + segmented control. When opening, auto-switch
             the category to the one the current preset belongs to so the user
@@ -535,7 +535,7 @@ export const InspectorPanel: React.FC<Props> = ({
               setMotionCategory(cat);
               setShowMotionGrid(true);
             }}
-            className="w-full text-center text-[11px] font-medium py-1.5 rounded transition-colors"
+            className="shrink-0 w-full text-center text-[11px] font-medium py-1.5 rounded transition-colors"
             style={{
               color: tokens.text.secondary,
               backgroundColor: 'transparent',
@@ -547,7 +547,7 @@ export const InspectorPanel: React.FC<Props> = ({
           </button>
         ) : (
           // Apple-style segmented control + close link on the right
-          <div className="flex items-center gap-3">
+          <div className="shrink-0 flex items-center gap-3">
             <div
               className="flex items-center gap-0.5 p-0.5 rounded-md"
               style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)', border: `1px solid ${tokens.border.subtle}` }}
@@ -672,12 +672,15 @@ export const InspectorPanel: React.FC<Props> = ({
           return (
             // Single carousel — shows only the category selected via the
             // segmented control above. activeId centers the active thumb in
-            // view as soon as the category renders.
-            <CarouselRow activeId={activeId}>
-              {(motionCategory === 'style' ? styles : effects).map(p =>
-                renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }),
-              )}
-            </CarouselRow>
+            // view as soon as the category renders. flex-1 lets it earn
+            // whatever vertical room is left after the segmented control.
+            <div className="flex-1 min-h-0 overflow-hidden">
+              <CarouselRow activeId={activeId}>
+                {(motionCategory === 'style' ? styles : effects).map(p =>
+                  renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }),
+                )}
+              </CarouselRow>
+            </div>
           );
         })()}
         </div>
