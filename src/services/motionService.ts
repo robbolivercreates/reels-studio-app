@@ -565,96 +565,6 @@ If the named app is completely unknown, build a generic-but-plausible shell:
 × Text that just transcribes the narration — captions already cover that
 
 ═══════════════════════════════════════════════════════════
- EASING & DURATION VOCABULARY (canonical — Hyperframes guide)
-═══════════════════════════════════════════════════════════
-Stop freestyling easings. Pick ONE row per beat based on the
-active preset's stated intent. Do not mix rows within a single tween.
-
-| Style intent        | Easing                       | Duration |
-|---------------------|------------------------------|----------|
-| smooth / elegant    | power2.out, power3.out       | 0.4s     |
-| bouncy / playful    | back.out(1.4), back.out(2)   | 0.6s     |
-| dramatic / cinematic| expo.out, expo.inOut         | 0.5s     |
-| snappy / energy     | power4.out, expo.out         | 0.2s     |
-| calm / luxury       | sine.inOut, power1.inOut     | 0.8-1.2s |
-
-Each preset's brief tells you which row applies. Honor it.
-
-═══════════════════════════════════════════════════════════
- HYPERFRAMES CATALOG — prefer these over hand-rolling
-═══════════════════════════════════════════════════════════
-The renderer ships these pre-tested catalog components/blocks.
-When the active preset's brief names one (or when the brief context
-clearly calls for it — e.g., a real app is mentioned), emit a
-SUB-COMPOSITION reference instead of recreating the effect from
-scratch. The Rust pipeline auto-installs whatever slugs you reference,
-then runs lint. Unknown slugs FAIL lint and abort the render — only
-use slugs from this whitelist:
-
-CAPTIONS — DO NOT add caption tracks by default. Text in motions is
-part of the visual composition (PRINCIPLE 2: 1-5 words/shot, 120-280px,
-integrated as visual hero). Catalog caption-* components exist but are
-reserved for explicit "I want synced lyrics" requests from the user,
-not default emphasis.
-
-OVERLAYS (composition-agnostic atmosphere):
-- grain-overlay                — animated film grain
-- vignette                     — pure-CSS edge darkening
-- shimmer-sweep                — animated light sweep (AI/tech accents)
-
-BACKGROUNDS (WebGL — use as nested base):
-- vfx-liquid-glass             — flowing glass background (glass-tech)
-- vfx-liquid-background        — soft colorful flow (soft-pastel)
-
-UI MOCKUPS (use when block text/asset names a real app or device):
-- vfx-iphone-device            — real iPhone GLTF with live HTML in screen
-- instagram-follow             — IG follow card
-- tiktok-follow                — TikTok follow card
-- x-post                       — X / Twitter post card
-- spotify-card                 — Spotify track card
-- yt-lower-third               — YouTube creator lower-third
-- macos-notification           — macOS notification toast
-- reddit-post                  — Reddit post card
-
-TRANSITIONS (between beats inside long blocks only):
-- transitions-dissolve, transitions-push
-
-SUB-COMPOSITION EMIT PATTERN (verbatim, adapt the values):
-  <div class="clip"
-       id="ui-mockup"
-       data-start="0" data-duration="3.5" data-track-index="2"
-       data-composition-id="ui-mockup-inner"
-       data-composition-src="compositions/instagram-follow.html"
-       data-variable-values='{"handle":"@brand","name":"Brand Name"}'>
-  </div>
-
-Rules:
-- Slugs are case-sensitive and must match the whitelist EXACTLY.
-- The sub-composition's data-composition-id MUST be unique within
-  the file (different from your root composition id).
-- data-track-index follows the usual non-overlap rule.
-- Pass any variables via data-variable-values (JSON string).
-- The sub-comp counts as one .clip; treat its duration accordingly.
-
-═══════════════════════════════════════════════════════════
- AI DESIGN TELLS — pause before defaulting to these
-═══════════════════════════════════════════════════════════
-These are patterns every LLM reaches for first. Before using one,
-ask: is this a deliberate choice for THIS content, or am I defaulting?
-
-- Gradient text (background-clip: text + linear-gradient)
-- Left-edge accent stripes on cards/callouts
-- Cyan-on-dark / purple-to-blue gradients / generic neon
-- Pure #000 background or #fff text (tint toward accent hue instead)
-- Identical card grids (same-size cards repeated)
-- Everything centered with equal weight (lead the eye somewhere)
-- Full-screen single-word slam captions on every hook (vary it)
-- Per-word stagger applied identically across every block
-
-If the content genuinely calls for one — use it intentionally.
-Otherwise, pick something more specific to the actual narrative.
-
-═══════════════════════════════════════════════════════════
  TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════
 1. Each element: class="clip", data-start, data-duration, data-track-index (0=back, higher=front), id="kebab-case-name" (REQUIRED — lint fails without an id on every timeline element). Media tags (<video src=…>, <img src=…>) ALSO need data-start + data-duration on the tag itself, in addition to being inside a .clip shell — without that the lint reports 'media_missing_data_start' and the render aborts.
@@ -1919,13 +1829,18 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   const appMentionSection = appMention
     ? [
         `--- APP MENTION DETECTED ---`,
-        `The block text mentions ${appMention.app}. Strongly prefer emitting the`,
-        `\`${appMention.block}\` sub-composition (see the HYPERFRAMES CATALOG`,
-        `section in your system prompt) for the moment that names the app.`,
-        `Use the standard sub-composition emit pattern:`,
-        `  data-composition-src="compositions/${appMention.block}.html"`,
-        `Do NOT draw the ${appMention.app} UI in CSS by hand — the real block`,
-        `is sharper, on-brand, and lint-tested.`,
+        `The block text mentions ${appMention.app}. You may emit the Hyperframes`,
+        `catalog block \`${appMention.block}\` as a sub-composition for the moment`,
+        `that names the app. The Rust pipeline will auto-install it before lint.`,
+        `Emit pattern:`,
+        `  <div class="clip" id="ui-mockup"`,
+        `       data-start="0" data-duration="<seconds>" data-track-index="<n>"`,
+        `       data-composition-id="ui-mockup-inner"`,
+        `       data-composition-src="compositions/${appMention.block}.html"`,
+        `       data-variable-values='{}'></div>`,
+        `Whether to use this or to hand-roll the moment is YOUR call based on the`,
+        `composition you're designing. The real catalog block is sharper and`,
+        `on-brand if it fits; if not, hand-rolling is fine.`,
         ``,
       ].join('\n')
     : '';
