@@ -977,13 +977,24 @@ export const ReelsStudio: React.FC = () => {
       if (msg === null) delete next[blockId]; else next[blockId] = msg;
       return next;
     });
-    const seedBase = createMotionFromBlock(block);
+    const blockIndex = blocks.indexOf(block);
+    // Effect detector context — let createMotionFromBlock pick a sensible
+    // default preset based on block content (stat → counter-reveal, etc.)
+    // when the user hasn't picked one manually.
+    const brandIdentitySnapshot = state.brandIdentity as { logoSvg?: string } | undefined;
+    const seedBase = createMotionFromBlock(block, {
+      index: blockIndex,
+      total: blocks.length,
+      brandHasLogo: !!brandIdentitySnapshot?.logoSvg && brandIdentitySnapshot.logoSvg.length > 0,
+      brandHasIdentity: !!brandIdentitySnapshot && Object.keys(brandIdentitySnapshot).length > 0,
+      audioWordCount: state.audio.words.filter(w => w.blockId === blockId).length,
+    });
     // Per-block style preset override: if the user picked a vibe in the
-    // inline chip on the card, use it. Otherwise stick with the seed default.
+    // inline chip on the card, use it. Otherwise stick with the seed default
+    // (which is now informed by the deterministic effect detector).
     const seed = block.stylePresetOverride
       ? { ...seedBase, presetId: block.stylePresetOverride }
       : seedBase;
-    const blockIndex = blocks.indexOf(block);
     try {
       setBusy('Pensando…');
       dispatch({ type: 'set-block-motion', id: blockId, motion: { ...seed, status: 'generating' } });

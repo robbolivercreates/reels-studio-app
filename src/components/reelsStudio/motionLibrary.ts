@@ -11,6 +11,7 @@
  */
 
 import type { StylePresetId } from './motionStylePresets';
+import { detectEffect } from './effectDetector';
 
 /**
  * Curated typography palettes — each preset declares a default set, but a motion
@@ -144,15 +145,64 @@ const deriveHeadline = (text: string): string => {
   return sentence.slice(0, 60).split(' ').slice(0, -1).join(' ') + '…';
 };
 
-/** Build a fresh MotionConfig with sensible defaults inferred from the block. */
-export const createMotionFromBlock = (block: { text: string; start: number; end: number; kind?: 'avatar' | 'broll' }): MotionConfig => {
+/**
+ * Build a fresh MotionConfig with sensible defaults inferred from the block.
+ *
+ * When `ctx` is provided, the deterministic effect detector is consulted to
+ * pick a presetId that matches the block's content (stat → counter-reveal,
+ * DM-like text → notification-pop, 2 attached assets → before-after-split,
+ * etc). When `ctx` is omitted, falls back to the historical default of
+ * `'glass-tech'` so existing callers behave identically.
+ */
+export const createMotionFromBlock = (
+  block: {
+    text: string;
+    start: number;
+    end: number;
+    kind?: 'avatar' | 'broll';
+    layout?: import('./types').BlockLayout;
+    attachedAssets?: import('./types').AttachedAsset[];
+    id?: string;
+  },
+  ctx?: {
+    index: number;
+    total: number;
+    brandHasLogo?: boolean;
+    brandHasIdentity?: boolean;
+    audioWordCount?: number;
+  },
+): MotionConfig => {
   const blockDur = Math.max(2, Math.min(8, Math.round(block.end - block.start)));
   // Avatar blocks → split-bottom (50/50 with the avatar). B-roll blocks → replace
   // (B-roll is full-frame anyway; motion takes over the whole frame).
   const layer: MotionLayer = block.kind === 'broll' ? 'replace' : 'split-bottom';
+
+  // Consult the deterministic effect detector when caller passed context.
+  // Falls back to glass-tech so the no-ctx path matches historical behavior.
+  let presetId: StylePresetId = 'glass-tech';
+  if (ctx) {
+    const suggestion = detectEffect({
+      block: {
+        id: block.id ?? '',
+        kind: (block.kind ?? 'avatar') as 'avatar' | 'broll',
+        text: block.text,
+        start: block.start,
+        end: block.end,
+        layout: block.layout,
+        attachedAssets: block.attachedAssets,
+      },
+      index: ctx.index,
+      total: ctx.total,
+      brandHasLogo: ctx.brandHasLogo,
+      brandHasIdentity: ctx.brandHasIdentity,
+      audioWordCount: ctx.audioWordCount,
+    });
+    if (suggestion.recommendedEffect) presetId = suggestion.recommendedEffect;
+  }
+
   return {
     id: newMotionId(),
-    presetId: 'glass-tech',
+    presetId,
     layer,
     intent: '',
     text: deriveHeadline(block.text),
