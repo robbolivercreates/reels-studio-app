@@ -157,6 +157,57 @@ For each block, find the VISUAL VERB — what is happening, conceptually:
 If you can SHOW the verb, do that. Words can ride alongside, but the motion is the lead actor.
 
 ═══════════════════════════════════════════════════════════
+ PRINCIPLE 3.5 — DIDACTIC ILLUSTRATION OVER PURE TYPOGRAPHY
+═══════════════════════════════════════════════════════════
+When the block EXPLAINS something — a concept, a process, a how-to, a
+mechanism, a comparison, a number-with-meaning — DEFAULT TO ILLUSTRATING IT.
+Pure-typography motions (just words flying in big) are appropriate for
+hooks, declarations, and emotional one-liners. Everything else benefits
+from at least ONE visual element beyond text:
+
+ILLUSTRATION VOCABULARY (use freely, within the active preset's palette
+and motion grammar — these are universal, not preset-specific):
+- SVG icons inline (NOT external assets) — keep them simple, 1-2 strokes,
+  64-160px size, in brandPrimaryColor or brandTextColor
+- Diagrams: 2-4 nodes connected by simple lines/arrows. Each node is a
+  circle or rounded rect (radius 8-16px), labeled with 1-2 words.
+- Numbered badges next to list items (1, 2, 3 in colored circles)
+- Arrows: thin (2-3px stroke), straight or 1-bend, brandPrimaryColor at
+  80% alpha, with a small triangle head (8-12px)
+- Step indicators: a horizontal row of 3-5 dots/squares, with the current
+  step highlighted in brandPrimaryColor
+- Brackets, underlines, highlight boxes for keywords (NOT for the whole
+  sentence — pick ONE keyword)
+- Tiny icon glyphs as bullet markers (•, ✓, →, ⚡) — render as small SVGs,
+  not emojis (emojis read as casual; SVGs read as designed)
+
+WHEN TO ILLUSTRATE (gradient — not binary):
+- Block contains "como", "primeiro", "depois", "passo", "porque", "porém",
+  "vs", "antes/depois" → DEFINITELY illustrate (process/comparison signal)
+- Block contains an explanation longer than 80 characters → PROBABLY illustrate
+- Block contains a number that means something (not just a vanity stat)
+  → ADD a contextual icon next to the number (calendar for time, $ for
+  money, person for users, etc.)
+- Block is a pure hook ("VOCÊ JÁ PENSOU...?", "OLHA SÓ ISSO") → typography
+  may stand alone, illustration optional
+
+WHAT NOT TO DO:
+- Do NOT add illustration for the sake of decoration — every visual must
+  reinforce the meaning of the block. A floating coffee cup icon on a
+  block about productivity is noise.
+- Do NOT use external image URLs. Only inline SVG, GSAP-animated.
+- Do NOT use clip-art / cartoon illustrations. Style matches the preset
+  (Apple system → glass-thin strokes; bold-pop → chunky filled shapes;
+  glass-tech → grid-aligned wireframe). The preset's typography weight
+  is the same weight the icons should feel — 600 type = 2-3px stroke
+  icons, 900 type = 4-5px stroke or filled shapes.
+- Do NOT overcrowd. ONE main illustration per beat. If you need 2,
+  separate them by 0.4s+ in time (sequential reveal).
+
+The goal: motion explains as much as it declares. The viewer learns
+something visual, not just reads a slogan.
+
+═══════════════════════════════════════════════════════════
  PRINCIPLE 4 — COMPOSITION ANATOMY
 ═══════════════════════════════════════════════════════════
 Every shot has these layers, top to bottom:
