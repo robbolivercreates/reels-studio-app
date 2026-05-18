@@ -15,7 +15,7 @@
  *   3. block has 2 attached assets     → before-after-split
  *   4. block has 1 image with screenshot/web/desktop name hints → browser-chrome
  *   5. block has 1 image with mobile/app/iphone name hints      → phone-mockup
- *   6. avatar + audio words available + short duration → karaoke-captions
+ *   6. (disabled — karaoke-captions hidden until reimplemented native)
  *   7. avatar + avatar-only layout + long text         → pip-talking-head
  *   8. text matches statistic regex   → counter-reveal
  *   9. text matches DM / mensagem     → notification-pop
@@ -112,10 +112,11 @@ export const detectEffect = (ctx: EffectDetectorCtx): EffectSuggestion => {
     }
   }
 
-  // 6. Short avatar block with audio words → karaoke
-  if (block.kind === 'avatar' && (audioWordCount ?? 0) > 0 && duration > 0 && duration < 8) {
-    return { recommendedEffect: 'karaoke-captions', reason: 'Avatar curto com áudio — legenda karaokê' };
-  }
+  // 6. Short avatar block — DISABLED. Used to suggest karaoke-captions but
+  //    that preset is hidden until reimplemented as a NATIVE preset (Gemini
+  //    cannot reliably emit per-word timing GSAP). See NOTES.md.
+  //    Falls through to the next rules so the block still gets a sensible
+  //    auto recommendation (counter-reveal / pip-talking-head / etc).
 
   // 7. Long avatar-only block → PIP talking-head with content overlay
   if (block.kind === 'avatar' && block.layout === 'avatar-only' && text.length > 180) {
@@ -152,6 +153,19 @@ export const detectEffect = (ctx: EffectDetectorCtx): EffectSuggestion => {
     return { recommendedEffect: 'illustrated-explainer', reason: 'Conteúdo explicativo — ilustrar com ícones e diagrama' };
   }
 
-  // 12. No suggestion.
+  // 12. First-block fallback for avatar — hook energy. bold-pop is the
+  //     default opener vibe (karaoke used to live here for avatar+audio,
+  //     hidden until reimplemented).
+  if (index === 0 && block.kind === 'avatar') {
+    return { recommendedEffect: 'bold-pop', reason: 'Primeiro bloco — hook' };
+  }
+
+  // 13. Avatar fallback — glass-tech. Premium / tech-aspirational default
+  //     when nothing else fits and the block has an avatar speaking.
+  if (block.kind === 'avatar') {
+    return { recommendedEffect: 'glass-tech', reason: 'Avatar falando — vibe técnica' };
+  }
+
+  // 14. No suggestion (b-roll mid-script with no specific signals).
   return { reason: 'Sem efeito sugerido' };
 };

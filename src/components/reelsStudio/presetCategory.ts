@@ -48,7 +48,13 @@ export const STYLE_PRESET_IDS = [
 /** Style/effect ids that exist in the union (so historical motions keep
  * working) but are hidden from the Inspector picker. Add ids here when a
  * preset is being deprecated without a hard migration. */
-export const HIDDEN_PRESET_IDS = ['kinetic-bold'] as const satisfies readonly StylePresetId[];
+export const HIDDEN_PRESET_IDS = [
+  'kinetic-bold',
+  // karaoke-captions hidden until reimplemented as a NATIVE preset (no
+  // Gemini). Gemini cannot reliably emit per-word timing GSAP — output
+  // drifts out of sync with the TTS audio. See NOTES.md "Karaokê sync".
+  'karaoke-captions',
+] as const satisfies readonly StylePresetId[];
 
 /** Effect presets — shot templates with a semantic trigger; eligible for auto-suggest. */
 export const EFFECT_PRESET_IDS = [

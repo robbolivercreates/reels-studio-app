@@ -22,7 +22,7 @@ import { getTheme } from './theme';
 import { LAYOUT_OPTIONS } from './layouts';
 import { loadAvatarPhotos } from './avatarPhotosStore';
 import { STYLE_PRESETS, findStylePreset, type StylePresetId, type StylePreset } from './motionStylePresets';
-import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS } from './presetCategory';
+import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS, isHidden } from './presetCategory';
 import { detectEffect } from './effectDetector';
 
 // Local mm:ss.cc formatter — formatTime in ReelsStudio.tsx isn't exported.
@@ -491,8 +491,8 @@ export const InspectorPanel: React.FC<Props> = ({
                 style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)', border: `1px solid ${tokens.border.subtle}` }}
               >
                 {([
-                  { id: 'style' as const,  label: 'Estilo', count: STYLE_PRESET_IDS.length },
-                  { id: 'effect' as const, label: 'Efeito', count: EFFECT_PRESET_IDS.length },
+                  { id: 'style' as const,  label: 'Estilo', count: STYLE_PRESET_IDS.filter(id => !isHidden(id)).length },
+                  { id: 'effect' as const, label: 'Efeito', count: EFFECT_PRESET_IDS.filter(id => !isHidden(id)).length },
                 ]).map(opt => {
                   const active = motionCategory === opt.id;
                   return (
@@ -670,8 +670,11 @@ export const InspectorPanel: React.FC<Props> = ({
           };
           const styleSet = new Set<string>(STYLE_PRESET_IDS);
           const effectSet = new Set<string>(EFFECT_PRESET_IDS);
-          const styles  = STYLE_PRESETS.filter(p => styleSet.has(p.id));
-          const effects = STYLE_PRESETS.filter(p => effectSet.has(p.id));
+          // Hide deprecated/WIP presets (e.g. karaoke-captions until it's
+          // reimplemented as a native preset). Historical motions using them
+          // still render correctly — they just don't appear in the picker.
+          const styles  = STYLE_PRESETS.filter(p => styleSet.has(p.id) && !isHidden(p.id));
+          const effects = STYLE_PRESETS.filter(p => effectSet.has(p.id) && !isHidden(p.id));
           // Active id for auto-scroll: respect manual override; otherwise
           // anchor on the detector's recommendation so the recommended thumb
           // is visible right after the user opens the carousel.

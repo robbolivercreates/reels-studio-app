@@ -260,3 +260,66 @@ Decisão: **Multi-asset primeiro**, depois **UX redesign**.
 Razão: multi-asset é uma feature nova (vai mudar shape do state e prompt).
 UX redesign é refactor visual — fazer depois evita refazer o layout duas
 vezes (uma com 1 asset, outra com N).
+
+---
+
+## TODO — Karaokê sync (rebuild as native preset)
+
+**Status:** preset `karaoke-captions` está **HIDDEN** em
+`presetCategory.ts:HIDDEN_PRESET_IDS` desde 2026-05-18.
+
+### Problema observado
+
+Quando gerado via Gemini, o karaokê fica **fora de sincronia com o TTS**:
+- Palavras erradas piscam ativas no momento errado
+- Stagger uniforme substitui o timing real dos word timestamps
+- Cada regeneração produz timing diferente (não-determinístico)
+
+### Por que Gemini não consegue
+
+O brief manda o Gemini ler `WORD TIMESTAMPS` injetadas no prompt e gerar
+GSAP que dispara cada palavra em `wordStart` exato (transição idle →
+active → spoken com 0.10/0.15/0.18s). Em teoria suficiente. Na prática:
+
+- Gemini frequentemente interpreta como "stagger uniforme com base na
+  duração total" em vez de cada palavra ter seu próprio cue
+- A timeline GSAP gerada às vezes esquece palavras ou duplica IDs
+- Como é texto puro (sem creatividade visual genuína), o LLM não tem
+  margem pra "criar" — é puramente matemática + timing exato, exatamente
+  o tipo de coisa que código determinístico faz melhor que LLM
+
+### Solução: NATIVE preset (como `claude-ui`)
+
+`claude-ui` já é um preset onde o HTML é gerado programaticamente em
+`motionService.ts:_buildClaudeUiHtml`, bypassando Gemini. Replicar:
+
+1. Adicionar `karaoke-captions` ao `NATIVE_PRESET_IDS` em
+   `presetCategory.ts` (junto com `claude-ui`) E removê-lo de
+   `HIDDEN_PRESET_IDS` (volta a aparecer no picker depois).
+2. Implementar `_buildKaraokeHtml(input)` em `motionService.ts`:
+   - Loop pelas `input.wordTimestamps`, gera um `<span class="clip"
+     id="word-N">` por palavra com `data-start`/`data-duration`
+     calculados de `wordStart`/`wordEnd - wordStart`.
+   - Cada span ganha um animation timeline GSAP determinística (color
+     interpolation, scale punch back.out(1.6), text-shadow bloom).
+   - Estilo: `.font-display` weight 900, 120-180px, white default,
+     accent color (brandPrimaryColor ou #ffd93c) na palavra ativa.
+3. `generateMotionHtml` já tem o branch `if preset is native, bypass
+   Gemini` — precisa só estender pra cobrir o novo native id.
+4. Atualizar o `effectDetector.ts` rule 6 (atualmente desabilitada) pra
+   voltar a sugerir karaoke-captions quando `block.kind === 'avatar'`,
+   `audioWordCount > 0`, duration < 8s.
+
+### Custo estimado
+
+- ~120 LOC de função builder (semelhante a `_buildClaudeUiHtml`)
+- ~10 LOC de wiring no `generateMotionHtml`
+- ~3 LOC pra reativar a regra no detector
+- 1 commit, ~30min reais
+
+### Default temporário (enquanto karaokê hidden)
+
+`effectDetector.ts` agora cai em **`bold-pop`** pra primeiro bloco
+(hook) ou **`glass-tech`** pra demais blocos avatar quando nenhuma outra
+regra bate. Karaokê seria a sugestão "premium" pra hooks com TTS, mas
+até voltar nativo, bold-pop cobre o caso de "energia + foco em texto".
