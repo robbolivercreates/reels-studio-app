@@ -23,6 +23,7 @@ import { LAYOUT_OPTIONS } from './layouts';
 import { loadAvatarPhotos } from './avatarPhotosStore';
 import { STYLE_PRESETS, type StylePresetId } from './motionStylePresets';
 import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS } from './presetCategory';
+import { detectEffect } from './effectDetector';
 
 // Local mm:ss.cc formatter — formatTime in ReelsStudio.tsx isn't exported.
 const formatTime = (sec: number): string => {
@@ -59,6 +60,16 @@ interface Props {
   onSetMotionColorMode?: (mode: 'dark' | 'light') => void;
   onOpenAssetPicker?: () => void;
   onRegenAvatar?: () => void;
+  /** Zero-based position of the selected block in the reel — feeds the effect detector. */
+  blockIndex?: number;
+  /** Total blocks in the reel — feeds the effect detector. */
+  blockTotal?: number;
+  /** True when the reel has a researched brand identity with a logo SVG. */
+  brandHasLogo?: boolean;
+  /** True when the reel has any researched brand identity. */
+  brandHasIdentity?: boolean;
+  /** Word-count from state.audio.words for the selected block — feeds karaoke detection. */
+  audioWordCount?: number;
 }
 
 const STORAGE_KEY_TAB = 'reels.inspector.tab';
@@ -152,6 +163,11 @@ export const InspectorPanel: React.FC<Props> = ({
   onSetMotionColorMode,
   onOpenAssetPicker: _onOpenAssetPicker,
   onRegenAvatar: _onRegenAvatar,
+  blockIndex,
+  blockTotal,
+  brandHasLogo,
+  brandHasIdentity,
+  audioWordCount,
 }) => {
   const tokens = getTheme(appTheme ?? 'dark');
   const isLight = (appTheme ?? 'dark') === 'light';
@@ -198,6 +214,18 @@ export const InspectorPanel: React.FC<Props> = ({
     const currentPresetId = (block.stylePresetOverride ?? 'glass-tech') as string;
     const motionStatus = block.motion?.status;
     const isBusy = !!motionBusy;
+    // Deterministic effect suggestion. Cheap (regex + bool checks) — no memo
+    // needed; it runs on every render of this body, which only happens when
+    // the user is actively looking at the Motion tab. Returns undefined when
+    // no rule matches.
+    const detected = detectEffect({
+      block,
+      index: blockIndex ?? 0,
+      total: blockTotal ?? 1,
+      brandHasLogo,
+      brandHasIdentity,
+      audioWordCount,
+    });
     const motionLabel = (() => {
       if (isBusy) return motionBusy;
       if (!block.motion) return 'Sem motion · escolha um estilo abaixo';
@@ -258,22 +286,40 @@ export const InspectorPanel: React.FC<Props> = ({
           {(() => {
             // Render helper — shared between Style row and Effect row so the
             // chip stays pixel-identical between them. Closure over local props.
-            const renderChip = (p: typeof STYLE_PRESETS[number]) => {
+            const renderChip = (p: typeof STYLE_PRESETS[number], opts?: { autoBadge?: boolean }) => {
               const isActive = currentPresetId === p.id;
+              const auto = !!opts?.autoBadge;
+              // Tooltip: when auto, prefer the reason ("Sugerido: ...") so the
+              // user knows *why* this chip is glowing. Falls back to bestFor.
+              const tip = auto
+                ? `Sugerido: ${detected.reason}${isActive ? '' : ' — clique para aplicar'}`
+                : p.bestFor;
               return (
                 <button
                   key={p.id}
                   onClick={() => onSetStylePreset?.(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId))}
-                  className="rounded-md px-2 py-2 transition-all flex flex-col items-center gap-1 border"
+                  className="relative rounded-md px-2 py-2 transition-all flex flex-col items-center gap-1 border"
                   style={{
                     backgroundColor: isActive
                       ? (isLight ? 'rgba(167,139,250,0.12)' : 'rgba(167,139,250,0.18)')
                       : (isLight ? '#FFFFFF' : 'rgba(255,255,255,0.04)'),
-                    borderColor: isActive ? '#A78BFA' : tokens.border.subtle,
+                    borderColor: isActive ? '#A78BFA' : (auto ? '#A78BFA80' : tokens.border.subtle),
                     cursor: 'pointer',
                   }}
-                  title={p.bestFor}
+                  title={tip}
                 >
+                  {auto && (
+                    <span
+                      className="absolute -top-1.5 -right-1.5 text-[8px] font-bold px-1 py-0.5 rounded-full leading-none"
+                      style={{
+                        backgroundColor: '#A78BFA',
+                        color: '#fff',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                      }}
+                    >
+                      {isActive ? 'auto ✓' : 'auto'}
+                    </span>
+                  )}
                   <span className="text-xl leading-none">{p.emoji}</span>
                   <span
                     className="text-[10px] text-center leading-tight font-medium truncate w-full"
@@ -295,11 +341,13 @@ export const InspectorPanel: React.FC<Props> = ({
                 <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5" style={{ color: tokens.text.tertiary }}>
                   Estilo
                 </div>
-                <div className="grid grid-cols-4 gap-2">{styles.map(renderChip)}</div>
+                <div className="grid grid-cols-4 gap-2">{styles.map(p => renderChip(p))}</div>
                 <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5 mt-3" style={{ color: tokens.text.tertiary }}>
                   Efeito (opcional)
                 </div>
-                <div className="grid grid-cols-4 gap-2">{effects.map(renderChip)}</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {effects.map(p => renderChip(p, { autoBadge: p.id === detected.recommendedEffect }))}
+                </div>
               </>
             );
           })()}

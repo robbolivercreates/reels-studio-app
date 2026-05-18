@@ -3561,6 +3561,14 @@ export const ReelsStudio: React.FC = () => {
         const selDefaultZoom = selBlock?.kind === 'avatar'
           ? defaultAvatarZoom(state.aspect, selBlock.layout)
           : 1;
+        // Inputs for the deterministic effect detector. Cheap to compute; the
+        // Inspector re-runs detectEffect on each render and uses these to paint
+        // the "auto" badge on whichever effect chip matches the current block.
+        const selBlockIndex = selBlock ? blocks.findIndex(b => b.id === selBlock.id) : -1;
+        const brandIdentity = state.brandIdentity as { logoSvg?: string } | undefined;
+        const brandHasLogo = !!brandIdentity?.logoSvg && brandIdentity.logoSvg.length > 0;
+        const brandHasIdentity = !!brandIdentity && Object.keys(brandIdentity).length > 0;
+        const selAudioWordCount = selBlock ? state.audio.words.filter(w => w.blockId === selBlock.id).length : 0;
         return (
           <InspectorPanel
             block={selBlock}
@@ -3581,6 +3589,11 @@ export const ReelsStudio: React.FC = () => {
             motionColorMode={state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')}
             onSetMotionColorMode={(mode) => dispatch({ type: 'set-motion-color-mode', mode })}
             onOpenAssetPicker={selBlock ? () => setAssetPickerBlockId(selBlock.id) : undefined}
+            blockIndex={selBlockIndex >= 0 ? selBlockIndex : 0}
+            blockTotal={blocks.length}
+            brandHasLogo={brandHasLogo}
+            brandHasIdentity={brandHasIdentity}
+            audioWordCount={selAudioWordCount}
           />
         );
       })()}
