@@ -504,3 +504,88 @@ já entrega pré-testados, on-brand e lint-aprovados.
   pra eliminar dependência de rede no `hyperframes add`.
 - **Karaokê**: voltar a habilitar usando `caption-pill-karaoke` sub-comp em vez
   de native builder (cancelar o plano original).
+
+---
+
+## ⏸ Checkpoint — 2026-05-18 22:00 BRT — antes do revert ao SYSTEM_PROMPT enxuto
+
+### Onde estamos
+
+HEAD: `56cabc4` (fix pt-BR language override).
+
+Última verificação visual do usuário: motion `split-bottom` + `glass-tech` saindo
+**simplista** — globo cyan genérico ao centro com 3 linhas de texto "TRADUZIR
+TUDO / PRA QUALQUER / IDIOMA". Apesar de várias correções terem acertado coisas
+importantes (idioma, paleta, sem caption-bar), o motion ainda parece "ícone
+barato".
+
+### O que foi corrigido nesta sessão (mantém valor)
+
+1. **pt-BR override** (`56cabc4`) — `buildMotionLanguageSection` agora dispara
+   pra pt-BR também. Antes Gemini gerava texto visível em inglês porque o
+   SYSTEM_PROMPT é majoritariamente em inglês.
+2. **Dark fallback preset-aware** (`f9512c0`) — fallback de paleta quando brand
+   research falha deixou de ser "STRICT BLACK & WHITE" e passou a usar
+   `preset.atmosphere.warmGlow.color` + `coolGlow.color` (cyan/amber pro
+   glass-tech, etc).
+3. **B-roll click glass-tech sem bounce** (`f67951f`) — atalho "click glass-tech
+   limpa override" agora é condicional ao tipo do bloco (só aplica em avatar,
+   que tem rule 12 do detector recomendando glass-tech).
+4. **Glass-tech volta como default** (`4495d3a`) — rule 12 do effectDetector
+   removida (primeiro avatar → bold-pop era reliquia do tempo karaokê);
+   captions saem do SYSTEM_PROMPT; atalho de clique glass-tech reativado.
+5. **Sync modal ↔ Inspector** (`6254cb6`) — `set-block-style-preset` agora é
+   dispatched depois do MotionPickerModal save, mantendo chip e
+   `motion.presetId` em sincronia.
+6. **B-roll click bounce fix** (`89bb51e`) — primeiro fix do atalho glass-tech
+   (regrediu em `4495d3a`, corrigido de novo em `f67951f`).
+7. **Two-preset highlight fix** (`96197e2`) — `currentPresetId` derivado de
+   `effectivePresetId` em vez do `?? 'glass-tech'` literal. Acabou com o
+   "default mentiroso" que mostrava glass-tech selecionado mesmo quando o
+   detector recomendava outro preset.
+
+### Por que ainda parece "ícone barato" mesmo com tudo corrigido
+
+Hipótese (não confirmada experimentalmente): o SYSTEM_PROMPT cresceu ~50%
+desde `44e8e54` (estado bom). As camadas adicionadas pela onda Hyperframes
++ correções subsequentes:
+
+- `EASING & DURATION VOCABULARY` table (~15 linhas)
+- `HYPERFRAMES CATALOG` section + sub-composition emit pattern (~70 linhas)
+- `AI DESIGN TELLS` section (~15 linhas)
+- `ILLUSTRATION VOCABULARY` em illustrated-explainer (~52 linhas)
+- `PREFERRED HYPERFRAMES COMPONENTS` em 8 Style briefs + 3 Effect briefs
+  (~80-100 linhas no total)
+
+Cada uma faz sentido isolada. Juntas viraram restrições que Gemini interpreta
+como "delegue pro catálogo / use vocabulário mínimo / evite designs". Resultado:
+composições simplistas.
+
+A skill oficial Hyperframes (github.com/heygen-com/hyperframes) diz literalmente
+**"Write HTML. Render video. Built for agents."** — filosofia é menos prescrição,
+mais liberdade.
+
+### Plano aprovado (próximos 2 commits)
+
+**Commit A: `revert(motion): remove SYSTEM_PROMPT layers added by Hyperframes wave`**
+- Remove EASING & DURATION VOCABULARY
+- Remove HYPERFRAMES CATALOG section + emit pattern
+- Remove AI DESIGN TELLS
+- Mantém intactos: 8 PRINCIPLES, animation grammar, technical requirements, OUTPUT shape, pt-BR override, dark fallback, App Mention, HYPERFRAMES_WHITELIST export
+
+**Commit B: `revert(motion-presets): remove PREFERRED HYPERFRAMES blocks + illustration vocabulary`**
+- Remove "PREFERRED HYPERFRAMES COMPONENTS" de 8 Style + 3 Effect briefs
+- Reverte brief de `illustrated-explainer` pro estado `44e8e54` (sem 6 archetypes)
+- Mantém: refinos individuais de palette / NEVER lists / MOTION specs em cada preset (`d79fe3f`, `227e386`, `7135f3b`, `b62882f`, `0942ee8`, `bf7c05d`)
+
+### O que ESTE commit faz
+
+Só documenta. Zero mudança de código. Serve de checkpoint pra que, se os 2
+commits seguintes não resolverem ou piorarem algo, possamos reverter pra cá
+com clareza do que estava aqui e por quê.
+
+### Cache de motion existente
+
+Importante: motions JÁ gerados ficam intactos no IndexedDB (`block.motion.html`).
+Pra testar o novo prompt, usar botão **"↻ Regerar motion"** (não apenas
+re-renderizar). Re-renderizar usa HTML cacheado.
