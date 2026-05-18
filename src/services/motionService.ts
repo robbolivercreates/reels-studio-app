@@ -1958,7 +1958,13 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         width: 1080px; height: ${canvasH}px; overflow: hidden;
-        background: ${isLight ? '#ffffff' : '#000'};
+        /* Light mode gets a subtle dot grid texture (1.5px dots @ 24px spacing,
+           6% black alpha) so the white canvas has personality without competing
+           with content. Dark mode stays pure black — atmosphere comes from the
+           preset's own glow/vignette layers. */
+        background: ${isLight
+          ? '#ffffff radial-gradient(circle at center, rgba(0,0,0,0.06) 1.5px, transparent 1.5px) 0 0 / 24px 24px'
+          : '#000'};
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
