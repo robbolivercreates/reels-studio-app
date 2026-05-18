@@ -238,60 +238,6 @@ const DecidedPresetCard: React.FC<{
   );
 };
 
-// ─── DecidedPresetLine — compact version of DecidedPresetCard ─────────
-// Used when the user opens "Trocar manualmente" — the full card would
-// steal vertical space the carousel rows need, so we collapse it into a
-// single horizontal line that still surfaces:
-//   - source (🤖 auto / Você)
-//   - preset emoji + label
-//   - short reason
-//   - reset link (only when manual)
-// Apple pattern: keep the anchor visible at all times, just thinner.
-const DecidedPresetLine: React.FC<{
-  preset: StylePreset;
-  source: 'auto' | 'manual';
-  reason: string;
-  onReset?: () => void;
-  isLight: boolean;
-  tokens: ReturnType<typeof getTheme>;
-}> = ({ preset, source, reason, onReset, isLight, tokens }) => {
-  const isAuto = source === 'auto';
-  return (
-    <div
-      className="flex items-center gap-2 px-3 py-1.5 rounded-md text-[11px]"
-      style={{
-        backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)',
-        border: `1px solid ${tokens.border.subtle}`,
-      }}
-    >
-      <span
-        className="text-[9px] uppercase tracking-wider font-semibold shrink-0"
-        style={{ color: isAuto ? '#A78BFA' : tokens.text.tertiary }}
-      >
-        {isAuto ? '🤖 Auto' : 'Manual'}
-      </span>
-      <span className="text-base leading-none shrink-0" aria-hidden>{preset.emoji}</span>
-      <span className="font-semibold shrink-0" style={{ color: tokens.text.primary }}>
-        {preset.label}
-      </span>
-      <span className="opacity-50 shrink-0">·</span>
-      <span className="truncate min-w-0" style={{ color: tokens.text.secondary }}>
-        {reason}
-      </span>
-      {!isAuto && onReset && (
-        <button
-          onClick={onReset}
-          className="shrink-0 ml-auto text-[10px] font-medium underline-offset-2 hover:underline"
-          style={{ color: '#A78BFA', backgroundColor: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
-          title="Limpar escolha manual e voltar para a decisão automática do sistema"
-        >
-          Voltar p/ auto
-        </button>
-      )}
-    </div>
-  );
-};
-
 // ─── CarouselRow — horizontal thumbnail row with auto-scroll to active ─
 // When `activeId` changes (e.g. disclosure just opened OR user clicked a
 // thumb), the container scrolls so the active thumb is centered in view.
@@ -458,19 +404,15 @@ export const InspectorPanel: React.FC<Props> = ({
             chosen preset is already implicit (user is actively browsing
             the carousel) and the card takes ~64px we need for the rows. */}
         <div className="shrink-0 space-y-3">
-        {/* Closed state: big hero card. Open state: compact line — same
-            information, ~40px shorter so the carousels have room. */}
-        {!showMotionGrid ? (
+        {/* Closed state only: big hero card showing the decided preset.
+            Open state (disclosure expanded): card is hidden — the user is
+            actively browsing the carousel, the active chip already carries
+            all the information the card was showing. To return from manual
+            override → click the auto-default chip (glass-tech for avatar /
+            editorial-clean for b-roll), the click handler clears the
+            override automatically. */}
+        {!showMotionGrid && (
           <DecidedPresetCard
-            preset={effectivePreset}
-            source={isManualOverride ? 'manual' : 'auto'}
-            reason={reasonText}
-            onReset={isManualOverride ? () => onSetStylePreset?.(undefined) : undefined}
-            isLight={isLight}
-            tokens={tokens}
-          />
-        ) : (
-          <DecidedPresetLine
             preset={effectivePreset}
             source={isManualOverride ? 'manual' : 'auto'}
             reason={reasonText}
