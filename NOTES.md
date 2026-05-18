@@ -589,3 +589,50 @@ com clareza do que estava aqui e por quê.
 Importante: motions JÁ gerados ficam intactos no IndexedDB (`block.motion.html`).
 Pra testar o novo prompt, usar botão **"↻ Regerar motion"** (não apenas
 re-renderizar). Re-renderizar usa HTML cacheado.
+
+---
+
+## Wave correction #3 — instrutivo, UI sempre, texto destilado (2026-05-19)
+
+Filosofia explicada pelo usuário: vídeos são **instrutivos**, motion **ilustra
+o que está sendo falado**, enfatizando palavras-chave sem fórmula rígida.
+
+Diagnóstico: o SYSTEM_PROMPT em `42a294e` (11/05, super primeiro com UI
+recreation) é **idêntico** ao HEAD atual nos PRINCIPLES 2 e 9. Os vídeos
+bonitos que ele compartilhou foram gerados pelo mesmo prompt. O que mudou
+foi o estilo dos blocos do usuário — em 11/05 ele usava verbos UI
+("vai em", "abre"), agora descreve mais sem verbo → PRINCIPLE 9 não disparava
+→ Gemini caía em texto solto.
+
+### Mudanças desta correção
+
+1. **Style presets consolidados pra 4 visíveis** — `editorial-clean`,
+   `bold-pop`, `glass-tech`, `illustrated-explainer`. Ficaram **hidden**:
+   `soft-pastel`, `cinematic-dark`, `apple-system`, `warm-editorial`
+   (continuam no union pra motions antigos renderizarem; só somem do picker).
+   `roleDetector.ts` redirecionado: comparison→bold-pop, problem/quote/
+   reflection/list→editorial-clean.
+
+2. **PRINCIPLE 9 (UI RECREATION) com trigger expandido** — agora dispara
+   em QUALQUER menção de app/SaaS/produto, sem precisar verbo UI. Bloco
+   "no Canva tem um Kit de Marca" → desenha sidebar Canva. Adicionada
+   regra explícita: "NEVER fall back to centered text on dark bg when
+   an app is described".
+
+3. **PRINCIPLE 2 ganha bloco "HERO TEXT — DESTILE, NÃO TRANSCREVA"** —
+   instrução de extrair 2-4 keywords da fala com 3 exemplos. SEM fórmula
+   rígida two-tone — Gemini escolhe como destacar (color, weight,
+   underline, scale punch). Texto sempre destila, nunca transcreve a
+   sentença falada.
+
+### Não mudou
+
+- Brand research via Google Search continua intacto
+- FontSets ('brand' = Anton + Space Grotesk + Inter ativo nos 4 visíveis)
+- Preset briefs curtos (commit 1ac9f17)
+- TECHNICAL REQUIREMENTS / ANIMATION GRAMMAR / FORBIDDEN PATTERNS
+
+### Lembrete
+
+Pra testar o novo prompt: clicar **"↻ Regerar motion"**, não apenas
+re-renderizar. Re-renderizar usa o HTML cacheado no IndexedDB.

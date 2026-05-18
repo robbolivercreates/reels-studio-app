@@ -54,6 +54,16 @@ export const HIDDEN_PRESET_IDS = [
   // Gemini). Gemini cannot reliably emit per-word timing GSAP — output
   // drifts out of sync with the TTS audio. See NOTES.md "Karaokê sync".
   'karaoke-captions',
+  // Style consolidation (2026-05-19): user opted to keep only 4 focused
+  // Style presets visible — editorial-clean, bold-pop, glass-tech,
+  // illustrated-explainer. The 4 below stay in the union so historical
+  // motions keep rendering; they just disappear from the picker. If a
+  // detector rule recommends one of them, that's redirected by
+  // effectDetector to a visible preset.
+  'soft-pastel',
+  'cinematic-dark',
+  'apple-system',
+  'warm-editorial',
 ] as const satisfies readonly StylePresetId[];
 
 /** Effect presets — shot templates with a semantic trigger; eligible for auto-suggest. */

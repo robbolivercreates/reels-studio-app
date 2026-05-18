@@ -92,6 +92,27 @@ Rules of thumb:
 - Reveal techniques: clip-path wipe (left-to-right), word-by-word stagger from y:40, scale-punch on the keyword (0.7 → 1.06 → 1.0), mask reveal that pushes ink onto the canvas
 - One word can be HIGHLIGHTED — different weight, accent color, or a thick underline that draws itself across it
 
+HERO TEXT — DESTILE, NÃO TRANSCREVA.
+The narrator already speaks the sentence. Your job is to extract 2-4
+keywords with emotional weight, NOT to write the spoken sentence on the
+canvas. Examples:
+  Fala: "esse dinheiro está indo embora se você não age"
+    → Hero: "DINHEIRO INDO EMBORA"     (keyword "INDO EMBORA" highlighted)
+  Fala: "o maior erro de quem começa hoje é..."
+    → Hero: "O MAIOR ERRO"              (keyword "ERRO" highlighted)
+  Fala: "sem kit de marca configurado você perde tempo"
+    → Hero: "KIT DE MARCA"              (keyword "MARCA" highlighted)
+
+How to highlight is YOUR choice — accent color, larger weight, underline
+that draws, scale punch, color shift, or any combination. The point is
+HIERARCHY (not all words equal) — no rigid two-tone formula imposed.
+
+NEVER write the spoken sentence verbatim. Always distill to keywords.
+NEVER ship text-only centered on dark bg as the dominant pattern — pair
+with a structural element (UI mockup, card, badge, comparison, terminal,
+input field) per PRINCIPLE 9. Pure-typography compositions are reserved
+for hooks and pivot beats only.
+
 ═══════════════════════════════════════════════════════════
  TYPOGRAPHY STACK — pick the font SET, then use the three roles
 ═══════════════════════════════════════════════════════════
@@ -485,18 +506,35 @@ simpler arc (A entrance + F punch + exit) is fine — camera optional, often ski
 ═══════════════════════════════════════════════════════════
  PRINCIPLE 9 — UI INTERFACE RECREATION (no asset attached)
 ═══════════════════════════════════════════════════════════
-When the block text describes a software action — clicking a button, opening a menu,
-navigating a screen, typing into a field — AND no real screenshot asset is attached,
-DO NOT substitute an abstract metaphor. Instead: BUILD THE UI IN HTML/CSS.
+The reels being made are INSTRUCTIONAL — every composition must reinforce
+the spoken content with a concrete visual structure (UI mockup, terminal,
+browser frame, comparison cards, badge, input field). When the block text
+describes or mentions software, you BUILD THE UI IN HTML/CSS — never fall
+back to centered typography on dark bg.
 
-DETECTION: text contains verbs + UI nouns → apply this principle.
-  UI verbs:  clica, toca, abre, seleciona, arrasta, digita, navega, vai em, acessa,
-             click, tap, open, select, drag, type, navigate, go to, access
-  UI nouns:  menu, botão, aba, tela, painel, dashboard, settings, projetos, sidebar,
-             modal, campo, janela, app, plataforma, interface, feed, perfil, notificações,
-             button, tab, screen, panel, field, window, profile, notifications
-  Named apps: Claude, Figma, Canva, Notion, Instagram, TikTok, YouTube, Slack, Linear,
-              VS Code, ChatGPT, Google, Chrome, Safari, WhatsApp, Shopify, Webflow
+DETECTION (apply when ANY of these matches — NOT a strict AND):
+  • Text mentions a Named app/SaaS/product (Canva, Claude, Figma, Notion,
+    Instagram, TikTok, ChatGPT, Slack, Linear, VS Code, Shopify, Webflow,
+    WhatsApp, YouTube, Google, Chrome, Safari, etc.)
+    → BUILD that app's UI EVEN WITHOUT an action verb.
+       Just naming the app is enough trigger.
+  • Text contains UI verb + UI noun (clica + botão, abre + menu, etc.)
+       UI verbs:  clica, toca, abre, seleciona, arrasta, digita, navega,
+                  vai em, acessa, click, tap, open, select, drag, type
+       UI nouns:  menu, botão, aba, tela, painel, dashboard, settings,
+                  projetos, sidebar, modal, campo, janela, app, plataforma,
+                  interface, feed, perfil, notificações, button, tab,
+                  screen, panel, field, window, profile, notifications
+    → BUILD the UI WITH the action animated (cursor moves to target).
+  • Text describes a software feature, screen, or behavior implicitly
+    (e.g. "tem um kit de marca", "ele responde em segundos", "isso aparece
+    no feed", "configurações de notificação")
+    → BUILD a plausible UI that supports the described context.
+
+NEVER fall back to "centered hero text on dark bg" when an app, product,
+or software feature is being described. If you don't know the exact UI,
+build a plausible one using BRAND IDENTITY colors above + a sidebar/topbar
+layout. The motion's job is to ILLUSTRATE what's being said, not caption it.
 
 WHAT TO BUILD:
 ① A simplified but recognisable mockup of the named interface using HTML/CSS/SVG.

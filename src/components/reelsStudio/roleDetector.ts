@@ -67,26 +67,26 @@ export const detectBlockRole = (ctx: DetectorCtx): StylePresetId => {
   // Sequenced step.
   if (STEP_HINT.test(t)) return 'glass-tech';
 
-  // Comparison.
-  if (COMPARISON_HINT.test(t)) return 'kinetic-bold';
+  // Comparison. (was 'kinetic-bold' — now hidden; bold-pop carries comparison energy)
+  if (COMPARISON_HINT.test(t)) return 'bold-pop';
 
-  // Problem.
-  if (PROBLEM_HINT.test(t)) return 'cinematic-dark';
+  // Problem. (was 'cinematic-dark' — now hidden; editorial-clean is the sober fallback)
+  if (PROBLEM_HINT.test(t)) return 'editorial-clean';
 
   // Example (case study, DM, tweet).
   if (EXAMPLE_HINT.test(t)) return 'notification-pop';
 
-  // Quote / authority.
-  if (QUOTE_HINT.test(t)) return 'warm-editorial';
+  // Quote / authority. (was 'warm-editorial' — now hidden; editorial-clean fits the sober quote vibe)
+  if (QUOTE_HINT.test(t)) return 'editorial-clean';
 
   // Geo content.
   if (GEO_HINT.test(t) || GEO_TRAJECTORY.test(t)) return 'map-zoom';
 
-  // Reflection / contemplation.
-  if (REFLECTION_HINT.test(t)) return 'soft-pastel';
+  // Reflection / contemplation. (was 'soft-pastel' — now hidden; editorial-clean is calm enough)
+  if (REFLECTION_HINT.test(t)) return 'editorial-clean';
 
-  // Numbered list.
-  if (LIST_HINT.test(t)) return 'apple-system';
+  // Numbered list. (was 'apple-system' — now hidden; editorial-clean handles lists)
+  if (LIST_HINT.test(t)) return 'editorial-clean';
 
   // Concept / explanation.
   if (CONCEPT_HINT.test(t)) return 'editorial-clean';
