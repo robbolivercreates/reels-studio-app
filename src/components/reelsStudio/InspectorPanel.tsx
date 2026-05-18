@@ -22,6 +22,7 @@ import { getTheme } from './theme';
 import { LAYOUT_OPTIONS } from './layouts';
 import { loadAvatarPhotos } from './avatarPhotosStore';
 import { STYLE_PRESETS, type StylePresetId } from './motionStylePresets';
+import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS } from './presetCategory';
 
 // Local mm:ss.cc formatter — formatTime in ReelsStudio.tsx isn't exported.
 const formatTime = (sec: number): string => {
@@ -250,8 +251,14 @@ export const InspectorPanel: React.FC<Props> = ({
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-6 gap-2">
-            {STYLE_PRESETS.filter(p => p.id !== 'claude-ui').map(p => {
+          {/* Style + Effect picker — split into two labeled sections.
+              Style = palette/typography/motion grammar (always-applicable vibes).
+              Effect = shot template / component with semantic trigger (counter,
+              notification, screenshot wrap, etc.). Auto-detect lands in C4. */}
+          {(() => {
+            // Render helper — shared between Style row and Effect row so the
+            // chip stays pixel-identical between them. Closure over local props.
+            const renderChip = (p: typeof STYLE_PRESETS[number]) => {
               const isActive = currentPresetId === p.id;
               return (
                 <button
@@ -276,8 +283,26 @@ export const InspectorPanel: React.FC<Props> = ({
                   </span>
                 </button>
               );
-            })}
-          </div>
+            };
+            // Filter presets by category using the canonical id arrays. Preserves
+            // the order defined in presetCategory.ts (8 styles, then 10 effects).
+            const styleSet = new Set<string>(STYLE_PRESET_IDS);
+            const effectSet = new Set<string>(EFFECT_PRESET_IDS);
+            const styles  = STYLE_PRESETS.filter(p => styleSet.has(p.id));
+            const effects = STYLE_PRESETS.filter(p => effectSet.has(p.id));
+            return (
+              <>
+                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5" style={{ color: tokens.text.tertiary }}>
+                  Estilo
+                </div>
+                <div className="grid grid-cols-4 gap-2">{styles.map(renderChip)}</div>
+                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5 mt-3" style={{ color: tokens.text.tertiary }}>
+                  Efeito (opcional)
+                </div>
+                <div className="grid grid-cols-4 gap-2">{effects.map(renderChip)}</div>
+              </>
+            );
+          })()}
         </div>
 
         {/* Primary: regenerate inline (no modal). Secondary: open advanced editor. */}
