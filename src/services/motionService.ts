@@ -584,7 +584,17 @@ If the named app is completely unknown, build a generic-but-plausible shell:
    Combine at least TWO families per motion for proper hierarchy. See TYPOGRAPHY STACK section.
 6. GSAP 3.14 already loaded. No external URLs. No images.
 7. FORBIDDEN: Date.now(), Math.random(), fetch(), setTimeout(), setInterval(), requestAnimationFrame()
-8. SVG icons must be inline, self-contained, under 400 chars each
+8. SVG icons must be inline and self-contained. Each can be UP TO 1500 chars
+   — invest the budget on:
+   • multiple <path> elements (composite icon, not a single outline)
+   • <defs> with <linearGradient> / <radialGradient> for depth
+   • <filter> with feGaussianBlur for glow on accent strokes
+   • stroke-width 4-8px on outline icons (2px is for thumbnails, not hero icons)
+   • viewBox sized to the design (200×200 or 240×240 for hero icons; 64×64 only for inline UI)
+   • Two-tone fills (one accent + one darker variant) instead of mono-stroke
+   A "camera icon" should NOT be one rectangle with a circle — it should have
+   body + lens ring + lens reflection + button. Generic line-icons read
+   amateur; designed SVGs with multiple paths + gradient + glow read pro.
 
 ═══════════════════════════════════════════════════════════
  OUTPUT
