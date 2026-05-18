@@ -60,6 +60,10 @@ interface Props {
   onSetMotionColorMode?: (mode: 'dark' | 'light') => void;
   onOpenAssetPicker?: () => void;
   onRegenAvatar?: () => void;
+  /** Toggle the selected block's kind between 'avatar' and 'broll'. The
+   * single most important per-block decision — surfaced in the Inspector
+   * header so users don't have to dive into the sidebar card to flip it. */
+  onToggleKind?: () => void;
   /** Zero-based position of the selected block in the reel — feeds the effect detector. */
   blockIndex?: number;
   /** Total blocks in the reel — feeds the effect detector. */
@@ -229,6 +233,7 @@ export const InspectorPanel: React.FC<Props> = ({
   onSetMotionColorMode,
   onOpenAssetPicker: _onOpenAssetPicker,
   onRegenAvatar: _onRegenAvatar,
+  onToggleKind,
   blockIndex,
   blockTotal,
   brandHasLogo,
@@ -692,12 +697,57 @@ export const InspectorPanel: React.FC<Props> = ({
               ▾
             </span>
           )}
-          <span
-            className="text-[10px] uppercase font-semibold tracking-wider"
-            style={{ color: tokens.text.tertiary }}
-          >
-            {headerText}
-          </span>
+          {(isEmpty || isMultiSelect) ? (
+            <span
+              className="text-[10px] uppercase font-semibold tracking-wider"
+              style={{ color: tokens.text.tertiary }}
+            >
+              {headerText}
+            </span>
+          ) : (
+            <>
+              <span
+                className="text-[10px] uppercase font-semibold tracking-wider"
+                style={{ color: tokens.text.tertiary }}
+              >
+                Editando
+              </span>
+              {/* Kind toggle — single most important per-block decision.
+                  Lives in the Inspector header so users don't have to dive
+                  into the sidebar card to flip avatar ↔ b-roll. */}
+              {onToggleKind && (
+                <div
+                  className="flex items-center gap-0.5 p-0.5 rounded-md"
+                  style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)', border: `1px solid ${tokens.border.subtle}` }}
+                  onClick={e => e.stopPropagation()}
+                >
+                  {([
+                    { kind: 'avatar' as const, label: 'Avatar', icon: '👤' },
+                    { kind: 'broll'  as const, label: 'B-roll', icon: '🎞' },
+                  ]).map(opt => {
+                    const active = (block?.kind ?? 'avatar') === opt.kind;
+                    return (
+                      <button
+                        key={opt.kind}
+                        onClick={() => { if (!active) onToggleKind(); }}
+                        className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors"
+                        style={{
+                          backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.10)') : 'transparent',
+                          color: active ? tokens.text.primary : tokens.text.tertiary,
+                          cursor: active ? 'default' : 'pointer',
+                          border: 'none',
+                        }}
+                        title={opt.kind === 'avatar' ? 'Bloco com avatar falando' : 'Bloco com B-roll (vídeo de apoio)'}
+                      >
+                        <span>{opt.icon}</span>
+                        <span>{opt.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         {!isEmpty && !isMultiSelect && (

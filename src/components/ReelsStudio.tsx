@@ -3600,6 +3600,7 @@ export const ReelsStudio: React.FC = () => {
             motionColorMode={state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')}
             onSetMotionColorMode={(mode) => dispatch({ type: 'set-motion-color-mode', mode })}
             onOpenAssetPicker={selBlock ? () => setAssetPickerBlockId(selBlock.id) : undefined}
+            onToggleKind={selBlock ? () => dispatch({ type: 'toggle-block-kind', id: selBlock.id }) : undefined}
             blockIndex={selBlockIndex >= 0 ? selBlockIndex : 0}
             blockTotal={blocks.length}
             brandHasLogo={brandHasLogo}
