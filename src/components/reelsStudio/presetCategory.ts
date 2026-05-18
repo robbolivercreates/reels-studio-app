@@ -26,17 +26,28 @@ import type { StylePresetId } from './motionStylePresets';
 
 export type PresetCategory = 'style' | 'effect' | 'native';
 
-/** Style presets — full palette + typography + motion grammar definers. */
+/** Style presets — full palette + typography + motion grammar definers.
+ *
+ * Note: `kinetic-bold` exists in the StylePresetId union and STYLE_PRESETS
+ * array (so persisted motions using it still render correctly), but is
+ * intentionally OMITTED from this list — the user preferred presets that
+ * embrace illustration/explanation over typography-only motions. The id
+ * is preserved for backwards-compat; new motions won't pick it from the
+ * picker. See HIDDEN_PRESET_IDS below for the recorded exclusion. */
 export const STYLE_PRESET_IDS = [
   'editorial-clean',
   'bold-pop',
   'glass-tech',
-  'kinetic-bold',
   'soft-pastel',
   'cinematic-dark',
   'apple-system',
   'warm-editorial',
 ] as const satisfies readonly StylePresetId[];
+
+/** Style/effect ids that exist in the union (so historical motions keep
+ * working) but are hidden from the Inspector picker. Add ids here when a
+ * preset is being deprecated without a hard migration. */
+export const HIDDEN_PRESET_IDS = ['kinetic-bold'] as const satisfies readonly StylePresetId[];
 
 /** Effect presets — shot templates with a semantic trigger; eligible for auto-suggest. */
 export const EFFECT_PRESET_IDS = [
@@ -65,7 +76,7 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
     case 'editorial-clean':
     case 'bold-pop':
     case 'glass-tech':
-    case 'kinetic-bold':
+    case 'kinetic-bold': // hidden from picker but kept categorized for legacy motions
     case 'soft-pastel':
     case 'cinematic-dark':
     case 'apple-system':
@@ -95,3 +106,5 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
 export const isStyle = (id: StylePresetId): boolean => categoryOf(id) === 'style';
 export const isEffect = (id: StylePresetId): boolean => categoryOf(id) === 'effect';
 export const isNative = (id: StylePresetId): boolean => categoryOf(id) === 'native';
+export const isHidden = (id: StylePresetId): boolean =>
+  (HIDDEN_PRESET_IDS as readonly StylePresetId[]).includes(id);

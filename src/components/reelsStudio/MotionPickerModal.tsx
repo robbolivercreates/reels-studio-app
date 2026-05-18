@@ -7,6 +7,7 @@ import {
   findStylePreset,
   type StylePresetId,
 } from './motionStylePresets';
+import { isHidden } from './presetCategory';
 import {
   type MotionConfig,
   type MotionLayer,
@@ -520,7 +521,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
                 Estilo base
               </div>
               <div className="grid grid-cols-2 gap-2">
-                {STYLE_PRESETS.map(p => {
+                {STYLE_PRESETS.filter(p => !isHidden(p.id)).map(p => {
                   const isSelected = motion.presetId === p.id;
                   const willInvert = motionColorMode === 'light' && p.bgType === 'dark';
                   const isWarm = p.bgType === 'warm';
