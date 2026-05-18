@@ -42,6 +42,7 @@ export const STYLE_PRESET_IDS = [
   'cinematic-dark',
   'apple-system',
   'warm-editorial',
+  'illustrated-explainer',
 ] as const satisfies readonly StylePresetId[];
 
 /** Style/effect ids that exist in the union (so historical motions keep
@@ -81,6 +82,7 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
     case 'cinematic-dark':
     case 'apple-system':
     case 'warm-editorial':
+    case 'illustrated-explainer':
       return 'style';
     case 'social-cta-follow':
     case 'counter-reveal':
@@ -92,6 +94,7 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
     case 'pip-talking-head':
     case 'before-after-split':
     case 'karaoke-captions':
+    case 'icon-callout':
       return 'effect';
     case 'claude-ui':
       return 'native';

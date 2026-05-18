@@ -341,7 +341,9 @@ export const InspectorPanel: React.FC<Props> = ({
                 <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5" style={{ color: tokens.text.tertiary }}>
                   Estilo
                 </div>
-                <div className="grid grid-cols-4 gap-2">{styles.map(p => renderChip(p))}</div>
+                <div className="grid grid-cols-4 gap-2">
+                  {styles.map(p => renderChip(p, { autoBadge: p.id === detected.recommendedEffect }))}
+                </div>
                 <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5 mt-3" style={{ color: tokens.text.tertiary }}>
                   Efeito (opcional)
                 </div>

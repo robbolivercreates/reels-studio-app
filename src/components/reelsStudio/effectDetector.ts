@@ -63,6 +63,10 @@ const GEO_TRAJECTORY = /\bde\s+\w+\s+(pra|para)\s+\w+\b/i;
 const DESKTOP_HINT = /(screenshot|screen[-_]?shot|desktop|browser|safari|chrome|firefox|web|landing|dashboard|landscape)/i;
 const MOBILE_HINT = /(mobile|iphone|ios|android|phone|app[-_]?screen|portrait)/i;
 
+// Didactic / explanatory text patterns. When combined with text length > 100,
+// suggests the illustrated-explainer style (icons + diagrams + arrows).
+const DIDACTIC_HINT = /\b(como\s+(funciona|fazer|usar)|primeiro|depois|por\s+(fim|último)|passo\s+\d|porque|porém|por\s+que|o\s+que\s+(é|significa)|na\s+prática|funciona\s+assim|imagine\s+(que|assim)|pense\s+(em|nisso)|por\s+um\s+lado|por\s+outro|em\s+(três|quatro|cinco)\s+(passos|etapas|partes))\b/i;
+
 const isImage = (a: AttachedAsset | undefined): boolean => !!a && a.type === 'image';
 
 /**
@@ -126,6 +130,14 @@ export const detectEffect = (ctx: EffectDetectorCtx): EffectSuggestion => {
     return { recommendedEffect: 'map-zoom', reason: 'Localização detectada — zoom em mapa' };
   }
 
-  // 11. No effect recommended.
+  // 11. Didactic explanation — long text with process/comparison signal words
+  //     suggests illustrated-explainer (style, not effect). The detector
+  //     recommends across both categories; the Inspector paints the badge
+  //     on the correct section (Style row in this case).
+  if (text.length > 100 && DIDACTIC_HINT.test(text)) {
+    return { recommendedEffect: 'illustrated-explainer', reason: 'Conteúdo explicativo — ilustrar com ícones e diagrama' };
+  }
+
+  // 12. No suggestion.
   return { reason: 'Sem efeito sugerido' };
 };

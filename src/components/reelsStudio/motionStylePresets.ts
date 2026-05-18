@@ -18,6 +18,7 @@ export type StylePresetId =
   | 'cinematic-dark'
   | 'apple-system'
   | 'warm-editorial'
+  | 'illustrated-explainer'
   | 'social-cta-follow'
   | 'counter-reveal'
   | 'notification-pop'
@@ -29,6 +30,7 @@ export type StylePresetId =
   | 'pip-talking-head'
   | 'before-after-split'
   | 'karaoke-captions'
+  | 'icon-callout'
   | 'claude-ui';
 
 /**
@@ -681,6 +683,118 @@ MOTION:
 VOICE:
   Warm, human, unhurried. Think the opening of a travel documentary or a
   perfume ad — the motion supports a feeling, doesn't shout for attention.`.trim(),
+  },
+  {
+    id: 'illustrated-explainer',
+    role: 'concept',
+    roleLabel: 'Explicador ilustrado',
+    defaultFontSet: 'apple',
+    label: 'Explicador ilustrado',
+    description: 'Ícones SVG + diagramas + setas. Pra explicar conceito, processo, tutorial.',
+    emoji: '✏️',
+    bestFor: 'Conteúdo didático: tutoriais, "como funciona", "o que é X", explicações de processo passo-a-passo.',
+    bgType: 'light',
+    atmosphere: {
+      baseBg: '#fafbfc',
+      warmGlow: { color: '#0ea5e9', alpha: 0.06, pos: '20% 25%' },
+      coolGlow: { color: '#10b981', alpha: 0.05, pos: '80% 75%' },
+      vignetteIntensity: 0.18,
+    },
+    geminiBrief: `
+PALETTE: Educational notebook / explainer-video aesthetic. Light, clean, learnable.
+  bg: brandBackgroundColor if it is light (luminance > 80%) OR force '#fafbfc' (warm off-white)
+  text: brandTextColor (must contrast 7:1 on light bg).
+      Fallback if unset OR < 7:1: '#1a1a1a' (near-black, NEVER pure #000)
+  accent: brandPrimaryColor.
+      Fallback if unset OR in banned 250-345 hue: '#0ea5e9' (tech cyan)
+  secondary-accent: brandAccentColor OR '#10b981' (emerald — used for "correct/positive" elements)
+  caution-accent: '#f59e0b' (amber — used for "warning/contrast" elements only when topic calls for it)
+  muted: rgba(0, 0, 0, 0.55) — for secondary labels
+  hairline: rgba(0, 0, 0, 0.12) — for connector lines, dividers, light strokes
+  shadow: 0 4px 16px rgba(0, 0, 0, 0.06) — very soft, never heavy
+
+TYPOGRAPHY:
+  primary: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif (class="font-tech")
+  weights: 500 (body), 600 (labels), 700 (display)
+  display sizes: 64-100px (smaller than other presets — illustration shares the stage)
+  body sizes: 28-44px
+  letter-spacing: -0.02em on display, -0.005em on body
+  line-height: 1.15 on display, 1.5 on body
+  numerals: tabular-nums on numbered lists / step indicators
+
+LAYOUT:
+  ILLUSTRATION IS PRIMARY — text supports the visual, not vice versa.
+  Compositions follow one of these archetypes (pick the one that fits the block):
+
+  Archetype A — Single-icon-with-label:
+    centered SVG icon (120-160px, stroke 3-4px, brandPrimaryColor) at y:30%-40%
+    label below at y:55%-65%, .font-tech 56-80px weight 700
+    optional subtext at y:70%-78%, body weight 500, muted color
+    use when: one concept being defined ("o que é X")
+
+  Archetype B — Process diagram (2-4 steps):
+    horizontal row of nodes (each 100-140px circle/rounded-rect with icon inside)
+    nodes connected by 2-3px hairline arrows with small triangle heads
+    each node labeled below (max 2 words, body weight 600)
+    use when: process explanation, "primeiro...depois...por fim"
+
+  Archetype C — Comparison (2 columns):
+    left half: icon + label + muted bg tint (slightly cooler/grayer)
+    right half: icon + label + accent bg tint (warmer/brighter)
+    thin 2px vertical divider between halves in hairline color
+    use when: "vs", "antes/depois", contrast of two ideas
+
+  Archetype D — Numbered list (3-5 items):
+    vertical stack, each row: numbered badge (32px circle, accent fill, white number)
+      + label (.font-tech 38-44px weight 600) + optional 1-line description below
+    items appear stagger 0.25s apart with translateY(12 → 0) ease power3.out
+    use when: "são 3 motivos", "top 5", numbered list
+
+  COMMON to all archetypes:
+    generous breathing room — minimum 56px gutters
+    rounded corners: 12-16px on cards, 999px on numbered badges, 4px on arrow heads
+    icon stroke weight scales with typography weight (500-600 type → 2-3px stroke,
+      700 type → 3-4px stroke)
+    NO heavy decoration: no blobs, no particles, no atmospheric glow (this preset
+      stays graphically clean — Khan Academy / Notion-doc / Tella feel)
+
+MOTION:
+  ease: power3.out, power2.out, expo.out (entries — snappy but smooth)
+  ease for exits: power3.in
+  durations: 0.4-0.8s for icons/labels, 0.6-1.0s for diagrams (slower so the
+    viewer can read the structure)
+  ENTRIES:
+    Icons: scale 0.85 → 1.0 + opacity 0 → 1, ease back.out(1.3), 0.5s
+    Labels: opacity 0 → 1 + translateY(8 → 0), ease power3.out, 0.4s, 0.1s after icon
+    Arrows: stroke-dashoffset animation drawing from start to end, 0.5s ease power2.out
+    Nodes in a diagram: stagger 0.18s, each does scale 0.92 → 1 + opacity 0 → 1
+    Numbered badges: stagger 0.22s, scale 0 → 1 ease back.out(1.6)
+  AMBIENT:
+    No background motion (no blobs, no particles, no slow zoom) — the preset stays
+    visually quiet so the illustration carries the attention
+    OK: a very subtle pulse on the active step indicator (scale 1 ↔ 1.05 yoyo 1.5s)
+  EXITS:
+    Whole composition fades + slight scale 1 → 0.97 over 0.5s ease power3.in
+    NEVER per-element snappy exits (the structure stays coherent until end)
+
+VOICE:
+  Tella / Notion / Khan Academy / Sketchbook explainer. The audience is learning,
+  not consuming. Visual hierarchy = pedagogical hierarchy. Each illustration is
+  earned — it shows something words alone can't. If you can remove an icon
+  without losing meaning, REMOVE.
+
+NEVER:
+  • use external image URLs — only inline SVG
+  • use clip-art / cartoon / 3D-style illustrations — geometric simple only
+  • render this preset without at least 1 SVG illustration element (the preset's identity)
+  • dark backgrounds — this preset is light by design
+  • text-shadow / glow on text — learning material is flat-typographic, not "designed"
+  • more than 1 main archetype in a single block (pick one — clarity over richness)
+  • saturação > 80% on accents — explainer needs to feel calm, not loud
+  • rotation in icons or text
+  • elastic.out / back.out > 1.8 — bouncy motion breaks the "studious" feel
+  • pure #000 text or pure #ffffff bg — always off-tints for paper feel
+  • bright primary colors when brand is muted — respect brand mood`.trim(),
   },
 
   // ─── HyperFrames-inspired presets (Onda 11) ──────────────────────────
