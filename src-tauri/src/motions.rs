@@ -73,11 +73,6 @@ const HYPERFRAMES_JSON: &str = r#"{
 /// render pipeline auto-installs each referenced slug before lint. Slugs
 /// OUTSIDE this list are NOT installed; lint will then catch unknown refs.
 const HYPERFRAMES_WHITELIST: &[&str] = &[
-    // Captions
-    "caption-editorial-emphasis",
-    "caption-clip-wipe",
-    "caption-gradient-fill",
-    "caption-kinetic-slam",
     // Overlays
     "grain-overlay",
     "vignette",

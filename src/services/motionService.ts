@@ -607,11 +607,6 @@ If the user provided a manual intent or text override, use those values verbatim
  * Mirrored in Rust (`src-tauri/src/motions.rs`) — keep both in sync.
  */
 export const HYPERFRAMES_WHITELIST: ReadonlyArray<string> = [
-  // Captions (per-word — use sparingly)
-  'caption-editorial-emphasis',
-  'caption-clip-wipe',
-  'caption-gradient-fill',
-  'caption-kinetic-slam',
   // Overlays
   'grain-overlay',
   'vignette',
@@ -998,7 +993,7 @@ const buildMotionLanguageSection = (lang: string): string => {
     `  • "intent" field → write in ${label}`,
     `  • "text" field (the headline on screen) → write in ${label}`,
     `  • "rationale" field → write in ${label}`,
-    `  • Any visible <h1>, <h2>, <p>, <span>, label, button, caption text inside the HTML → ${label}`,
+    `  • Any visible <h1>, <h2>, <p>, <span>, label, button text inside the HTML → ${label}`,
     `Treat the system prompt's example HTML as STRUCTURAL templates only; translate the literal wording into ${label}.`,
     `Keep HTML class names, CSS property names, GSAP API calls, and code identifiers in English (they are code, not content).`,
     `If the user's intent/text overrides above contain ${label} text, use those values verbatim.`,

@@ -4343,21 +4343,10 @@ export const ReelsStudio: React.FC = () => {
             })()}
           </div>
 
-          {/* Captions track */}
-          <div className="relative h-8 rounded-md bg-violet-500/[0.03] border border-violet-500/15 overflow-hidden">
-            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-violet-300/60 font-semibold pointer-events-none z-10">Captions</div>
-            {blocks.map(b => {
-              const slot = slotById.get(b.id);
-              if (!slot) return null;
-              const left = (slot.projectStart / totalDuration) * 100;
-              const width = ((slot.projectEnd - slot.projectStart) / totalDuration) * 100;
-              return (
-                <div key={`cap-${b.id}`} className="absolute top-1 bottom-1 rounded bg-violet-500/15 border border-violet-400/20 px-1.5 flex items-center overflow-hidden" style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}>
-                  <span className="text-[9px] text-violet-200 truncate">{b.text.slice(0, 40)}</span>
-                </div>
-              );
-            })}
-          </div>
+          {/* Captions track — hidden (decorative lane showing block script
+              text; was visually confusing because it looked like motion-
+              embedded captions). Block text is already visible inside the
+              orange block lane above; keeping this lane was redundant. */}
 
           {/* Playhead */}
           <div className="absolute top-0 bottom-0 pointer-events-none z-20" style={{ left: `calc(${playheadPct}% + 8px)` }}>
