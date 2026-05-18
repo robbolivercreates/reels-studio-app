@@ -1441,6 +1441,94 @@ NEVER:
 });
 
 STYLE_PRESETS.push({
+  id: 'icon-callout',
+  role: 'example',
+  roleLabel: 'Destaque · ícone + label',
+  defaultFontSet: 'apple',
+  label: 'Destaque ícone',
+  description: 'Ícone SVG grande + label curto + número/keyword — momento de hero compacto.',
+  emoji: '💥',
+  bestFor: 'Pontos de destaque rápidos: "💰 R$ 50K", "⚡ 3x mais rápido", "🎯 Foco". Card hero de uma só métrica/conceito.',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#0a0a0c',
+    warmGlow: { color: '#ffd93c', alpha: 0.10, pos: '50% 30%' },
+    coolGlow: { color: '#0ea5e9', alpha: 0.08, pos: '50% 70%' },
+    vignetteIntensity: 0.5,
+  },
+  geminiBrief: `
+PALETTE: Hero compact card — icon-first, single accent.
+  bg: brandBackgroundColor (must be dark — luminance < 25%).
+      Fallback: '#0a0a0c' (deep dark) — never pure #000.
+  text: '#ffffff' for the main label (acceptable here — high-contrast hero).
+  accent: brandPrimaryColor (or '#ffd93c' yellow fallback when banned hue)
+  card-bg: rgba(255, 255, 255, 0.06) — subtle backdrop behind the icon+label cluster
+  card-border: rgba(255, 255, 255, 0.14) — 1px hairline
+  glow: 0 0 60px <accent> at alpha 0.35 — soft halo behind the icon ONLY
+
+REQUIRED CONTENT:
+  This effect rendres ONE compact composition with three pieces:
+    1. A LARGE SVG ICON (240-320px, stroke 4-6px or filled, accent color)
+    2. A SHORT LABEL (1-3 words OR a metric like "R$ 50K" / "3x" / "0→1M")
+    3. An OPTIONAL secondary line (1 short sentence, ≤ 8 words, muted)
+  If the block text mentions a metric (number + unit), render the metric
+  as the label. Otherwise extract the most-strong noun/verb from the text.
+
+LAYOUT (CRITICAL — single hero composition, not full-screen graphic):
+  Composition is a vertical stack centered at canvas center:
+    Icon container:
+      - position: absolute; top: 38%; left: 50%; transform: translate(-50%, -50%)
+      - 240-320px square, contains the SVG icon
+      - glow halo: 0 0 60px accent at 0.35 alpha (box-shadow on the container)
+    Label:
+      - directly below icon, gap 36px
+      - .font-tech weight 700, 96-140px (large but not screaming)
+      - color: white; letter-spacing -0.02em; text-align center
+    Secondary line (optional):
+      - below label, gap 18px
+      - .font-body weight 500, 32-40px
+      - color: rgba(255, 255, 255, 0.65); max-width 720px; center
+  Background composition wraps the icon+label cluster in a soft card:
+    - position: absolute; inset: 25% 12% 25% 12% (top right bottom left)
+    - background: card-bg; border: 1px solid card-border; border-radius: 28px
+    - backdrop-filter: blur(8px) — very light glass effect
+    - NO heavy decoration outside this card — preset stays focused
+
+MOTION (5s timeline) — punch in, hold, fade out:
+  - 0.0-0.4s: card scale 0.85 → 1.0 + opacity 0 → 1, ease back.out(1.4)
+  - 0.2-0.7s: icon enters via stroke-dashoffset (if outline) OR scale 0.6 → 1.0 +
+    opacity 0 → 1 (if filled), ease back.out(1.8), starts at card 0.2s
+  - 0.5-0.9s: label opacity 0 → 1 + translateY(16 → 0), ease power3.out, 0.4s duration
+  - 0.7-1.1s: secondary line opacity 0 → 1 (if present), ease power2.out
+  - 1.0s onwards: glow halo pulses (box-shadow alpha 0.35 ↔ 0.55 yoyo over 2.4s sine.inOut)
+  - 1.0s onwards: icon micro-float translateY ±3px yoyo over 4s sine.inOut
+  - 4.6-5.0s: whole composition scale 1 → 0.96 + opacity 1 → 0, ease power3.in
+
+TYPOGRAPHY:
+  label: .font-tech weight 700, 96-140px
+  secondary: .font-body weight 500, 32-40px
+
+VOICE:
+  Apple-keynote moment. One number, one icon, one truth. The viewer
+  doesn't need to read — they need to SEE the magnitude. Restraint creates
+  the impact. If you tried to add a second icon or a second metric, you
+  killed it. ONE thing.
+
+NEVER:
+  • render without an SVG icon (the icon IS the preset)
+  • use external image URLs — only inline SVG
+  • emoji as substitute for SVG (emojis read as casual; SVGs read as designed)
+  • more than 1 icon per composition (1 hero, no companions)
+  • icon smaller than 200px or larger than 360px (lose magnitude either way)
+  • label longer than 5 words (over that, switch to illustrated-explainer)
+  • backgrounds with patterns, gradients beyond 1 subtle stop, or particles
+  • text-shadow on label (clean hero, not 'designed' graphic)
+  • rotation on icon or label
+  • elastic > 1.8 (overshoot kills the Apple-keynote feel)
+  • saturation > 70% on accent (loud is the wrong note here — confident is the right one)`.trim(),
+});
+
+STYLE_PRESETS.push({
   id: 'karaoke-captions',
   role: 'hook',
   roleLabel: 'Karaokê · word-sync',

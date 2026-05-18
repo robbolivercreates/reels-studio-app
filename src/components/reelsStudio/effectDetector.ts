@@ -67,6 +67,13 @@ const MOBILE_HINT = /(mobile|iphone|ios|android|phone|app[-_]?screen|portrait)/i
 // suggests the illustrated-explainer style (icons + diagrams + arrows).
 const DIDACTIC_HINT = /\b(como\s+(funciona|fazer|usar)|primeiro|depois|por\s+(fim|último)|passo\s+\d|porque|porém|por\s+que|o\s+que\s+(é|significa)|na\s+prática|funciona\s+assim|imagine\s+(que|assim)|pense\s+(em|nisso)|por\s+um\s+lado|por\s+outro|em\s+(três|quatro|cinco)\s+(passos|etapas|partes))\b/i;
 
+// Leading emoji (any Unicode emoji at the start of the trimmed text).
+// The /u flag + Extended_Pictographic property catches all emoji ranges.
+const LEADING_EMOJI = /^\s*\p{Extended_Pictographic}/u;
+
+// Quick word count for short-hero detection.
+const wordCount = (s: string): number => s.trim().split(/\s+/).filter(Boolean).length;
+
 const isImage = (a: AttachedAsset | undefined): boolean => !!a && a.type === 'image';
 
 /**
@@ -115,7 +122,14 @@ export const detectEffect = (ctx: EffectDetectorCtx): EffectSuggestion => {
     return { recommendedEffect: 'pip-talking-head', reason: 'Avatar longo — PiP com conteúdo' };
   }
 
-  // 8. Stat / number
+  // 8a. Emoji-led short hero — "💰 R$ 50K", "⚡ 3x mais rápido", "🎯 Foco"
+  //     beats the generic counter-reveal because it's a designed hero moment,
+  //     not a number-counting animation. Trigger: starts with emoji + short text.
+  if (LEADING_EMOJI.test(text) && wordCount(text) <= 8) {
+    return { recommendedEffect: 'icon-callout', reason: 'Destaque curto com ícone' };
+  }
+
+  // 8b. Stat / number — falls through when emoji-led didn't match
   if (STAT_NUMBER.test(text)) {
     return { recommendedEffect: 'counter-reveal', reason: 'Estatística detectada — contador' };
   }

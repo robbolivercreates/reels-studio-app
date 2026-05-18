@@ -62,6 +62,7 @@ export const EFFECT_PRESET_IDS = [
   'pip-talking-head',
   'before-after-split',
   'karaoke-captions',
+  'icon-callout',
 ] as const satisfies readonly StylePresetId[];
 
 /** Native presets — bypass Gemini, built programmatically in motionService. */
