@@ -86,12 +86,13 @@ const STORAGE_KEY_MOTION_GRID = 'reels.inspector.motionGridOpen';
 // tabs. Tabs whose content fits within the shell don't trigger scroll;
 // the Motion tab with its disclosure open uses internal flex zones to
 // keep the action buttons pinned while only the chip grid scrolls.
-const INSPECTOR_TAB_BODY_HEIGHT = 168;
+const INSPECTOR_TAB_BODY_MIN_HEIGHT = 168;
 const TabBodyShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <div
-    style={{ height: INSPECTOR_TAB_BODY_HEIGHT, overflowY: 'auto' }}
-    className="pr-1"
-  >
+  // Min-height fixa pra todas as tabs ficarem com o mesmo "piso" visual.
+  // Sem scroll vertical: conteúdo que cresce (Motion com disclosure aberto)
+  // empurra a altura pra cima de forma controlada. Carrosséis internos
+  // scrolam horizontalmente. As outras 4 tabs cabem no piso e não crescem.
+  <div style={{ minHeight: INSPECTOR_TAB_BODY_MIN_HEIGHT }}>
     {children}
   </div>
 );
@@ -343,12 +344,12 @@ export const InspectorPanel: React.FC<Props> = ({
       ? effectivePreset.bestFor
       : (detected.recommendedEffect ? detected.reason : 'Editorial limpo · escolha padrão');
     return (
-      // 3-zone flex column so the action row stays pinned at the bottom and
-      // only the middle (disclosure + chip grid) scrolls when the grid is open.
-      // h-full + min-h-0 lets the middle zone earn the leftover space.
-      <div className="flex flex-col h-full gap-3">
-        {/* ─── Zone 1 (top, fixed): hero card + status strip ─────────── */}
-        <div className="shrink-0 space-y-3">
+      // Natural top-down flow. Zone 1 stays at top, Zone 2 grows when the
+      // disclosure opens (carousel rows scroll horizontally), Zone 3 sits
+      // right below at the bottom. No vertical scroll anywhere.
+      <div className="space-y-3">
+        {/* ─── Zone 1 (top): hero card + status strip ────────────────── */}
+        <div className="space-y-3">
         {/* "What the system decided" hero card — primary surface for the
             Motion tab. Click "Trocar manualmente" below to reveal the full
             chip grid. */}
@@ -399,8 +400,10 @@ export const InspectorPanel: React.FC<Props> = ({
           )}
         </div>
         </div>
-        {/* ─── Zone 2 (middle, scrollable): disclosure + chip grid ────── */}
-        <div className="flex-1 min-h-0 overflow-y-auto pr-1 space-y-3">
+        {/* ─── Zone 2 (middle): disclosure + horizontal carousel rows ───
+            No vertical scroll. The carousels inside scroll horizontally so
+            we can show 8+11 thumbnails without vertical growth runaway. */}
+        <div className="space-y-2">
 
         {/* Disclosure toggle — opens/closes the 19-chip grid below. */}
         <button
@@ -416,91 +419,111 @@ export const InspectorPanel: React.FC<Props> = ({
           {showMotionGrid ? 'Esconder opções ▴' : 'Trocar manualmente ▾'}
         </button>
 
-        {/* Full chip grid — hidden by default. Status strip + dark/light
-            toggle now live above (always visible), so the grid header used
-            to host them is gone. */}
-        {showMotionGrid && (
-        <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
-          {/* Style + Effect picker — split into two labeled sections.
-              Style = palette/typography/motion grammar (always-applicable vibes).
-              Effect = shot template / component with semantic trigger (counter,
-              notification, screenshot wrap, etc.). Auto-detect lands in C4. */}
-          {(() => {
-            // Render helper — shared between Style row and Effect row so the
-            // chip stays pixel-identical between them. Closure over local props.
-            const renderChip = (p: typeof STYLE_PRESETS[number], opts?: { autoBadge?: boolean }) => {
-              const isActive = currentPresetId === p.id;
-              const auto = !!opts?.autoBadge;
-              // Tooltip: when auto, prefer the reason ("Sugerido: ...") so the
-              // user knows *why* this chip is glowing. Falls back to bestFor.
-              const tip = auto
-                ? `Sugerido: ${detected.reason}${isActive ? '' : ' — clique para aplicar'}`
-                : p.bestFor;
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => onSetStylePreset?.(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId))}
-                  className="relative rounded-md px-2 py-2 transition-all flex flex-col items-center gap-1 border"
+        {/* Full chip carousel — hidden by default. When open, renders TWO
+            horizontal scroll rows (Estilo + Efeito) with 9:16 mini-thumbnails.
+            Horizontal scroll only — vertical height stays inside the shell. */}
+        {showMotionGrid && (() => {
+          // Render helper — one 9:16 mini-thumbnail per preset. Closure over
+          // local props to keep the chip styling identical between rows.
+          const renderThumb = (p: typeof STYLE_PRESETS[number], opts?: { autoBadge?: boolean }) => {
+            const isActive = currentPresetId === p.id;
+            const auto = !!opts?.autoBadge;
+            const tip = auto
+              ? `Sugerido: ${detected.reason}${isActive ? '' : ' — clique para aplicar'}`
+              : p.bestFor;
+            // Atmosphere-aware mini-background that hints at the preset's mood
+            // without actually rendering the motion. baseBg + warmGlow give
+            // each thumb its own personality before the user generates.
+            const a = p.atmosphere;
+            const thumbBg = `radial-gradient(circle at 30% 30%, ${a.warmGlow.color}${Math.round(a.warmGlow.alpha * 255).toString(16).padStart(2, '0')} 0%, transparent 55%), radial-gradient(circle at 75% 75%, ${a.coolGlow.color}${Math.round(a.coolGlow.alpha * 255).toString(16).padStart(2, '0')} 0%, transparent 55%), ${a.baseBg}`;
+            return (
+              <button
+                key={p.id}
+                onClick={() => onSetStylePreset?.(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId))}
+                className="relative shrink-0 rounded-lg transition-all flex flex-col items-center overflow-hidden"
+                style={{
+                  width: 64,
+                  border: `2px solid ${isActive ? '#A78BFA' : (auto ? '#A78BFA80' : tokens.border.subtle)}`,
+                  cursor: 'pointer',
+                  boxShadow: isActive ? '0 0 0 3px rgba(167,139,250,0.18)' : 'none',
+                  backgroundColor: isLight ? '#FFFFFF' : 'rgba(255,255,255,0.04)',
+                }}
+                title={tip}
+              >
+                {/* 9:16 mini canvas hint. Aspect ratio matches the real reel. */}
+                <div
                   style={{
-                    backgroundColor: isActive
-                      ? (isLight ? 'rgba(167,139,250,0.12)' : 'rgba(167,139,250,0.18)')
-                      : (isLight ? '#FFFFFF' : 'rgba(255,255,255,0.04)'),
-                    borderColor: isActive ? '#A78BFA' : (auto ? '#A78BFA80' : tokens.border.subtle),
-                    cursor: 'pointer',
+                    width: '100%',
+                    aspectRatio: '9 / 16',
+                    background: thumbBg,
+                    position: 'relative',
                   }}
-                  title={tip}
                 >
+                  <span
+                    className="absolute inset-0 flex items-center justify-center text-2xl leading-none"
+                    aria-hidden
+                  >
+                    {p.emoji}
+                  </span>
                   {auto && (
                     <span
-                      className="absolute -top-1.5 -right-1.5 text-[8px] font-bold px-1 py-0.5 rounded-full leading-none"
+                      className="absolute top-1 right-1 text-[8px] font-bold px-1 py-0.5 rounded-full leading-none"
                       style={{
                         backgroundColor: '#A78BFA',
                         color: '#fff',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                       }}
                     >
-                      {isActive ? 'auto ✓' : 'auto'}
+                      {isActive ? '✓' : 'auto'}
                     </span>
                   )}
-                  <span className="text-xl leading-none">{p.emoji}</span>
-                  <span
-                    className="text-[10px] text-center leading-tight font-medium truncate w-full"
-                    style={{ color: isActive ? '#A78BFA' : tokens.text.secondary }}
-                  >
-                    {p.label}
-                  </span>
-                </button>
-              );
-            };
-            // Filter presets by category using the canonical id arrays. Preserves
-            // the order defined in presetCategory.ts (8 styles, then 10 effects).
-            const styleSet = new Set<string>(STYLE_PRESET_IDS);
-            const effectSet = new Set<string>(EFFECT_PRESET_IDS);
-            const styles  = STYLE_PRESETS.filter(p => styleSet.has(p.id));
-            const effects = STYLE_PRESETS.filter(p => effectSet.has(p.id));
-            return (
-              <>
-                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5" style={{ color: tokens.text.tertiary }}>
+                </div>
+                <span
+                  className="text-[9px] text-center leading-tight font-medium truncate w-full px-1 py-1"
+                  style={{ color: isActive ? '#A78BFA' : tokens.text.secondary }}
+                >
+                  {p.label}
+                </span>
+              </button>
+            );
+          };
+          const styleSet = new Set<string>(STYLE_PRESET_IDS);
+          const effectSet = new Set<string>(EFFECT_PRESET_IDS);
+          const styles  = STYLE_PRESETS.filter(p => styleSet.has(p.id));
+          const effects = STYLE_PRESETS.filter(p => effectSet.has(p.id));
+          return (
+            <div className="space-y-2">
+              {/* Estilo row */}
+              <div>
+                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1 px-1" style={{ color: tokens.text.tertiary }}>
                   Estilo
                 </div>
-                <div className="grid grid-cols-4 gap-2">
-                  {styles.map(p => renderChip(p, { autoBadge: p.id === detected.recommendedEffect }))}
+                <div
+                  className="flex gap-2 overflow-x-auto pb-1"
+                  style={{ scrollbarWidth: 'thin' }}
+                >
+                  {styles.map(p => renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }))}
                 </div>
-                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1.5 mt-3" style={{ color: tokens.text.tertiary }}>
+              </div>
+              {/* Efeito row */}
+              <div>
+                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1 px-1" style={{ color: tokens.text.tertiary }}>
                   Efeito (opcional)
                 </div>
-                <div className="grid grid-cols-4 gap-2">
-                  {effects.map(p => renderChip(p, { autoBadge: p.id === detected.recommendedEffect }))}
+                <div
+                  className="flex gap-2 overflow-x-auto pb-1"
+                  style={{ scrollbarWidth: 'thin' }}
+                >
+                  {effects.map(p => renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }))}
                 </div>
-              </>
-            );
-          })()}
+              </div>
+            </div>
+          );
+        })()}
         </div>
-        )}
-        </div>
-        {/* ─── Zone 3 (bottom, fixed): action buttons ─────────────────── */}
+        {/* ─── Zone 3 (bottom): action buttons ────────────────────────── */}
         {/* Primary: regenerate inline (no modal). Secondary: open advanced editor. */}
-        <div className="shrink-0 flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <button
             onClick={onGenerateMotion}
             disabled={isBusy}
