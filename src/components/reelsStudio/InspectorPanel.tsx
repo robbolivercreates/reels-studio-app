@@ -79,6 +79,7 @@ interface Props {
 const STORAGE_KEY_TAB = 'reels.inspector.tab';
 const STORAGE_KEY_COLLAPSED = 'reels.inspector.collapsed';
 const STORAGE_KEY_MOTION_GRID = 'reels.inspector.motionGridOpen';
+const STORAGE_KEY_MOTION_CATEGORY = 'reels.inspector.motionCategory';
 
 // ─── TabBodyShell — uniform-height container for every tab body ─────────
 // All 5 tabs (Motion / Avatar / Layout / Voz / Stats) render inside this
@@ -364,6 +365,16 @@ export const InspectorPanel: React.FC<Props> = ({
   const [showMotionGrid, setShowMotionGrid] = useState<boolean>(() => {
     try { return sessionStorage.getItem(STORAGE_KEY_MOTION_GRID) === '1'; } catch { return false; }
   });
+  // Segmented control state — picks which of the two categories the carousel
+  // shows when the disclosure is open. Persists per session so the user lands
+  // on the same tab they left.
+  const [motionCategory, setMotionCategory] = useState<'style' | 'effect'>(() => {
+    try {
+      const v = sessionStorage.getItem(STORAGE_KEY_MOTION_CATEGORY);
+      if (v === 'style' || v === 'effect') return v;
+    } catch { /* ignore */ }
+    return 'style';
+  });
 
   useEffect(() => {
     try { sessionStorage.setItem(STORAGE_KEY_TAB, activeTab); } catch { /* ignore */ }
@@ -374,6 +385,9 @@ export const InspectorPanel: React.FC<Props> = ({
   useEffect(() => {
     try { sessionStorage.setItem(STORAGE_KEY_MOTION_GRID, showMotionGrid ? '1' : '0'); } catch { /* ignore */ }
   }, [showMotionGrid]);
+  useEffect(() => {
+    try { sessionStorage.setItem(STORAGE_KEY_MOTION_CATEGORY, motionCategory); } catch { /* ignore */ }
+  }, [motionCategory]);
 
   const isEmpty = !block;
   const isMultiSelect = multiSelectCount > 1;
@@ -508,19 +522,75 @@ export const InspectorPanel: React.FC<Props> = ({
             shell clips overflow. */}
         <div className="flex-1 min-h-0 space-y-2 overflow-hidden">
 
-        {/* Disclosure toggle — opens/closes the 19-chip grid below. */}
-        <button
-          onClick={() => setShowMotionGrid(s => !s)}
-          className="w-full text-center text-[11px] font-medium py-1.5 rounded transition-colors"
-          style={{
-            color: tokens.text.secondary,
-            backgroundColor: 'transparent',
-            border: `1px dashed ${tokens.border.subtle}`,
-            cursor: 'pointer',
-          }}
-        >
-          {showMotionGrid ? 'Esconder opções ▴' : 'Trocar manualmente ▾'}
-        </button>
+        {/* Disclosure trigger + segmented control. When opening, auto-switch
+            the category to the one the current preset belongs to so the user
+            sees the right carousel right away. */}
+        {!showMotionGrid ? (
+          <button
+            onClick={() => {
+              // Auto-pick the category that contains the current preset
+              const cat = (EFFECT_PRESET_IDS as readonly string[]).includes(currentPresetId)
+                ? 'effect'
+                : 'style';
+              setMotionCategory(cat);
+              setShowMotionGrid(true);
+            }}
+            className="w-full text-center text-[11px] font-medium py-1.5 rounded transition-colors"
+            style={{
+              color: tokens.text.secondary,
+              backgroundColor: 'transparent',
+              border: `1px dashed ${tokens.border.subtle}`,
+              cursor: 'pointer',
+            }}
+          >
+            Trocar manualmente ▾
+          </button>
+        ) : (
+          // Apple-style segmented control + close link on the right
+          <div className="flex items-center gap-3">
+            <div
+              className="flex items-center gap-0.5 p-0.5 rounded-md"
+              style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)', border: `1px solid ${tokens.border.subtle}` }}
+            >
+              {([
+                { id: 'style' as const,  label: 'Estilo', count: STYLE_PRESET_IDS.length },
+                { id: 'effect' as const, label: 'Efeito', count: EFFECT_PRESET_IDS.length },
+              ]).map(opt => {
+                const active = motionCategory === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    onClick={() => setMotionCategory(opt.id)}
+                    className="px-2.5 py-1 rounded text-[10px] font-medium transition-colors"
+                    style={{
+                      backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.10)') : 'transparent',
+                      color: active ? tokens.text.primary : tokens.text.tertiary,
+                      cursor: active ? 'default' : 'pointer',
+                      border: 'none',
+                    }}
+                    title={opt.id === 'style' ? 'Visual mood do motion (paleta + tipografia + grammar)' : 'Componente / shot template — opcional'}
+                  >
+                    {opt.label} <span className="opacity-50">({opt.count})</span>
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setShowMotionGrid(false)}
+              className="ml-auto text-[11px] font-medium"
+              style={{
+                color: tokens.text.secondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                padding: 0,
+              }}
+              title="Voltar pra visão principal"
+            >
+              Esconder ▴
+            </button>
+          </div>
+        )}
 
         {/* Full chip carousel — hidden by default. When open, renders TWO
             horizontal scroll rows (Estilo + Efeito) with 9:16 mini-thumbnails.
@@ -600,26 +670,14 @@ export const InspectorPanel: React.FC<Props> = ({
           // is visible right after the user opens the carousel.
           const activeId = (block.stylePresetOverride ?? detected.recommendedEffect) as string | undefined;
           return (
-            <div className="space-y-2">
-              {/* Estilo row */}
-              <div>
-                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1 px-1" style={{ color: tokens.text.tertiary }}>
-                  Estilo
-                </div>
-                <CarouselRow activeId={activeId}>
-                  {styles.map(p => renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }))}
-                </CarouselRow>
-              </div>
-              {/* Efeito row */}
-              <div>
-                <div className="text-[10px] uppercase tracking-wider opacity-60 mb-1 px-1" style={{ color: tokens.text.tertiary }}>
-                  Efeito (opcional)
-                </div>
-                <CarouselRow activeId={activeId}>
-                  {effects.map(p => renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }))}
-                </CarouselRow>
-              </div>
-            </div>
+            // Single carousel — shows only the category selected via the
+            // segmented control above. activeId centers the active thumb in
+            // view as soon as the category renders.
+            <CarouselRow activeId={activeId}>
+              {(motionCategory === 'style' ? styles : effects).map(p =>
+                renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }),
+              )}
+            </CarouselRow>
           );
         })()}
         </div>
