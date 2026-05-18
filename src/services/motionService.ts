@@ -565,6 +565,78 @@ If the named app is completely unknown, build a generic-but-plausible shell:
 × Text that just transcribes the narration — captions already cover that
 
 ═══════════════════════════════════════════════════════════
+ EASING & DURATION VOCABULARY (canonical — Hyperframes guide)
+═══════════════════════════════════════════════════════════
+Stop freestyling easings. Pick ONE row per beat based on the
+active preset's stated intent. Do not mix rows within a single tween.
+
+| Style intent        | Easing                       | Duration |
+|---------------------|------------------------------|----------|
+| smooth / elegant    | power2.out, power3.out       | 0.4s     |
+| bouncy / playful    | back.out(1.4), back.out(2)   | 0.6s     |
+| dramatic / cinematic| expo.out, expo.inOut         | 0.5s     |
+| snappy / energy     | power4.out, expo.out         | 0.2s     |
+| calm / luxury       | sine.inOut, power1.inOut     | 0.8-1.2s |
+
+Each preset's brief tells you which row applies. Honor it.
+
+═══════════════════════════════════════════════════════════
+ HYPERFRAMES CATALOG — prefer these over hand-rolling
+═══════════════════════════════════════════════════════════
+The renderer ships these pre-tested catalog components/blocks.
+When the active preset's brief names one (or when the brief context
+clearly calls for it — e.g., a real app is mentioned), emit a
+SUB-COMPOSITION reference instead of recreating the effect from
+scratch. The Rust pipeline auto-installs whatever slugs you reference,
+then runs lint. Unknown slugs FAIL lint and abort the render — only
+use slugs from this whitelist:
+
+CAPTIONS (per-word — use sparingly, only on hooks/CTAs):
+- caption-editorial-emphasis   — dual-font dramatic emphasis on key word
+- caption-clip-wipe            — subtle wipe reveal per word
+- caption-gradient-fill        — gradient-clipped, elastic entry
+- caption-kinetic-slam         — full-screen single word (hype/bold-pop)
+
+OVERLAYS (composition-agnostic atmosphere):
+- grain-overlay                — animated film grain
+- vignette                     — pure-CSS edge darkening
+- shimmer-sweep                — animated light sweep (AI/tech accents)
+
+BACKGROUNDS (WebGL — use as nested base):
+- vfx-liquid-glass             — flowing glass background (glass-tech)
+- vfx-liquid-background        — soft colorful flow (soft-pastel)
+
+UI MOCKUPS (use when block text/asset names a real app or device):
+- vfx-iphone-device            — real iPhone GLTF with live HTML in screen
+- instagram-follow             — IG follow card
+- tiktok-follow                — TikTok follow card
+- x-post                       — X / Twitter post card
+- spotify-card                 — Spotify track card
+- yt-lower-third               — YouTube creator lower-third
+- macos-notification           — macOS notification toast
+- reddit-post                  — Reddit post card
+
+TRANSITIONS (between beats inside long blocks only):
+- transitions-dissolve, transitions-push
+
+SUB-COMPOSITION EMIT PATTERN (verbatim, adapt the values):
+  <div class="clip"
+       id="ui-mockup"
+       data-start="0" data-duration="3.5" data-track-index="2"
+       data-composition-id="ui-mockup-inner"
+       data-composition-src="compositions/instagram-follow.html"
+       data-variable-values='{"handle":"@brand","name":"Brand Name"}'>
+  </div>
+
+Rules:
+- Slugs are case-sensitive and must match the whitelist EXACTLY.
+- The sub-composition's data-composition-id MUST be unique within
+  the file (different from your root composition id).
+- data-track-index follows the usual non-overlap rule.
+- Pass any variables via data-variable-values (JSON string).
+- The sub-comp counts as one .clip; treat its duration accordingly.
+
+═══════════════════════════════════════════════════════════
  TECHNICAL REQUIREMENTS
 ═══════════════════════════════════════════════════════════
 1. Each element: class="clip", data-start, data-duration, data-track-index (0=back, higher=front), id="kebab-case-name" (REQUIRED — lint fails without an id on every timeline element). Media tags (<video src=…>, <img src=…>) ALSO need data-start + data-duration on the tag itself, in addition to being inside a .clip shell — without that the lint reports 'media_missing_data_start' and the render aborts.
@@ -596,6 +668,75 @@ Return JSON with these fields:
 - "rationale": 1-2 sentences pt-BR explaining the design choice — what verb you animated, what the timing arc is, why this composition fits this block
 
 If the user provided a manual intent or text override, use those values verbatim.`.trim();
+
+/**
+ * Hyperframes catalog slug whitelist — single source of truth.
+ *
+ * Gemini may reference any of these in `data-composition-src`; the Rust
+ * pipeline auto-installs each referenced slug via `npx hyperframes add`
+ * before running the lint. Slugs OUTSIDE this list fail lint and abort.
+ *
+ * Mirrored in Rust (`src-tauri/src/motions.rs`) — keep both in sync.
+ */
+export const HYPERFRAMES_WHITELIST: ReadonlyArray<string> = [
+  // Captions (per-word — use sparingly)
+  'caption-editorial-emphasis',
+  'caption-clip-wipe',
+  'caption-gradient-fill',
+  'caption-kinetic-slam',
+  // Overlays
+  'grain-overlay',
+  'vignette',
+  'shimmer-sweep',
+  // WebGL backgrounds
+  'vfx-liquid-glass',
+  'vfx-liquid-background',
+  // UI mockups (real apps / devices)
+  'vfx-iphone-device',
+  'instagram-follow',
+  'tiktok-follow',
+  'x-post',
+  'spotify-card',
+  'yt-lower-third',
+  'macos-notification',
+  'reddit-post',
+  // Transitions
+  'transitions-dissolve',
+  'transitions-push',
+];
+
+/**
+ * Deterministic detector — does the block text mention a known app?
+ *
+ * When it matches, we inject an APP MENTION hint into the user brief so
+ * Gemini reaches for the real Hyperframes block (instagram-follow, etc.)
+ * instead of drawing a fake UI in CSS.
+ *
+ * First match wins — patterns are ordered loosely by ambiguity (most
+ * specific first). Returns `undefined` when no app is mentioned.
+ */
+export interface AppMention {
+  app: string;
+  block: string;
+}
+
+const APP_MENTION_PATTERNS: ReadonlyArray<{ pattern: RegExp; app: string; block: string }> = [
+  { pattern: /\btik\s?tok\b/i,                            app: 'TikTok',    block: 'tiktok-follow'    },
+  { pattern: /\binstagram\b|\binsta\b|\bIG\b/,            app: 'Instagram', block: 'instagram-follow' },
+  { pattern: /\bspotify\b/i,                              app: 'Spotify',   block: 'spotify-card'     },
+  { pattern: /\byoutube\b|\bYT\b/,                        app: 'YouTube',   block: 'yt-lower-third'   },
+  { pattern: /\breddit\b/i,                               app: 'Reddit',    block: 'reddit-post'      },
+  { pattern: /\btwitter\b|\btweet\b|\bx\.com\b/i,         app: 'X/Twitter', block: 'x-post'           },
+  { pattern: /\b(macos|mac\s?os)\b.*\b(notifica[çc][ãa]o|notification)\b/i, app: 'macOS', block: 'macos-notification' },
+];
+
+export const detectAppMention = (text: string): AppMention | undefined => {
+  if (!text) return undefined;
+  for (const m of APP_MENTION_PATTERNS) {
+    if (m.pattern.test(text)) return { app: m.app, block: m.block };
+  }
+  return undefined;
+};
 
 export interface ProjectAsset {
   name: string;   // filename, e.g. "screenshot-dashboard.png"
@@ -1741,6 +1882,24 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ``,
   ].filter(Boolean).join('\n') : '';
 
+  // Deterministic app-mention detector — when the block text names a real
+  // app, route Gemini toward the matching Hyperframes block instead of
+  // letting it draw a fake UI in CSS. See HYPERFRAMES_WHITELIST above.
+  const appMention = detectAppMention(input.blockText);
+  const appMentionSection = appMention
+    ? [
+        `--- APP MENTION DETECTED ---`,
+        `The block text mentions ${appMention.app}. Strongly prefer emitting the`,
+        `\`${appMention.block}\` sub-composition (see the HYPERFRAMES CATALOG`,
+        `section in your system prompt) for the moment that names the app.`,
+        `Use the standard sub-composition emit pattern:`,
+        `  data-composition-src="compositions/${appMention.block}.html"`,
+        `Do NOT draw the ${appMention.app} UI in CSS by hand — the real block`,
+        `is sharper, on-brand, and lint-tested.`,
+        ``,
+      ].join('\n')
+    : '';
+
   const userBrief = [
     languageSection,
     slotSection,
@@ -1752,6 +1911,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     atmosphereSection,
     userIdentitySection,
     assetsSection,
+    appMentionSection,
     `--- THIS BLOCK (illustrate this) ---`,
     input.blockText.trim(),
     '',
@@ -1819,7 +1979,9 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '· presetBgType=', preset.bgType,
     '· forceLight=', forceLight,
     '· lightModeSection chars=', lightModeSection.length,
-    '· atmosphere baseBg=', atmBg);
+    '· atmosphere baseBg=', atmBg,
+    '· appMention=', appMention?.app ?? 'none',
+    '· hyperframesCatalogInjected=true');
   let lastError: unknown;
   for (const model of MODEL_CANDIDATES) {
     try {
