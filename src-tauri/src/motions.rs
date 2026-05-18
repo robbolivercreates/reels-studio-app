@@ -66,6 +66,80 @@ const HYPERFRAMES_JSON: &str = r#"{
 }
 "#;
 
+/// Hyperframes catalog slug whitelist — mirrors `HYPERFRAMES_WHITELIST`
+/// exported from `src/services/motionService.ts`. Keep both in sync.
+///
+/// Gemini may reference any of these in `data-composition-src` and the
+/// render pipeline auto-installs each referenced slug before lint. Slugs
+/// OUTSIDE this list are NOT installed; lint will then catch unknown refs.
+const HYPERFRAMES_WHITELIST: &[&str] = &[
+    // Captions
+    "caption-editorial-emphasis",
+    "caption-clip-wipe",
+    "caption-gradient-fill",
+    "caption-kinetic-slam",
+    // Overlays
+    "grain-overlay",
+    "vignette",
+    "shimmer-sweep",
+    // WebGL backgrounds
+    "vfx-liquid-glass",
+    "vfx-liquid-background",
+    // UI mockups (real apps / devices)
+    "vfx-iphone-device",
+    "instagram-follow",
+    "tiktok-follow",
+    "x-post",
+    "spotify-card",
+    "yt-lower-third",
+    "macos-notification",
+    "reddit-post",
+    // Transitions
+    "transitions-dissolve",
+    "transitions-push",
+];
+
+/// Scan `index.html` for `data-composition-src` references to whitelisted
+/// catalog slugs. Returns the unique set of slugs found, preserving the
+/// whitelist order so each render installs in deterministic sequence.
+///
+/// Match shape (case-sensitive):
+///   data-composition-src="compositions/<slug>.html"
+///   data-composition-src="compositions/components/<slug>.html"
+///   data-composition-src="components/<slug>.html"
+///
+/// Slugs not on the whitelist are silently ignored here — the lint pass
+/// downstream will flag any unknown references explicitly.
+fn referenced_catalog_slugs(html: &str) -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for slug in HYPERFRAMES_WHITELIST {
+        // Three possible path shapes Gemini may emit. We scan for the
+        // suffix `<slug>.html` preceded by one of those prefixes inside a
+        // `data-composition-src="…"` attribute.
+        let target_short = format!("/{slug}.html");
+        let attr_marker = "data-composition-src=\"";
+        let mut search_from = 0usize;
+        let mut found = false;
+        while let Some(idx) = html[search_from..].find(attr_marker) {
+            let value_start = search_from + idx + attr_marker.len();
+            if let Some(end) = html[value_start..].find('"') {
+                let value = &html[value_start..value_start + end];
+                if value.ends_with(target_short.as_str()) || value == &format!("{slug}.html")[..] {
+                    found = true;
+                    break;
+                }
+                search_from = value_start + end + 1;
+            } else {
+                break;
+            }
+        }
+        if found {
+            out.push(slug);
+        }
+    }
+    out
+}
+
 fn write_project_files(dir: &PathBuf, motion_id: &str, html: &str) -> Result<(), String> {
     std::fs::write(dir.join("index.html"), html)
         .map_err(|e| format!("Falha ao gravar index.html: {e}"))?;
@@ -203,6 +277,68 @@ pub async fn render_motion(app: AppHandle, motion_id: String) -> Result<MotionRe
         .find(|&&p| std::path::Path::new(p).exists() || p == "npx")
         .copied()
         .unwrap_or("npx");
+
+    // ─── Step 0: Install referenced catalog components ────────────────
+    // Scan the generated HTML for `data-composition-src` references to
+    // whitelisted Hyperframes catalog slugs, then run `hyperframes add
+    // <slug>` for each one BEFORE the lint runs. The CLI downloads each
+    // component from the registry into `compositions/` and is idempotent —
+    // re-adding an existing component is a no-op (small disk read).
+    //
+    // First-time installs cost ~1-3s of latency per slug while npx
+    // resolves the registry tarball. Subsequent renders hit the npm cache
+    // and the on-disk component, so cost approaches zero.
+    //
+    // Errors here are non-fatal: if `add` fails, we log and continue. The
+    // lint step downstream will report a clear `composition source not
+    // found` if the slug is truly missing.
+    {
+        let html = std::fs::read_to_string(&html_path)
+            .map_err(|e| format!("Falha ao ler index.html: {e}"))?;
+        let slugs = referenced_catalog_slugs(&html);
+        if !slugs.is_empty() {
+            let _ = app.emit("motion://render-progress", MotionRenderProgress {
+                motion_id: motion_id.clone(),
+                stage: "installing".into(),
+                message: format!("Instalando {} componente(s) do catálogo Hyperframes…", slugs.len()),
+                percent: None,
+            });
+            for slug in slugs {
+                // `hyperframes add` prompts interactively in some setups;
+                // we pipe yes via `--yes` (npx flag) and rely on the CLI
+                // being non-interactive in CI mode. If it ever blocks we
+                // hit the spawn timeout, but in practice it streams output
+                // and exits within seconds.
+                let add_result = Command::new(npx_path)
+                    .current_dir(&dir)
+                    .env("PATH", "/usr/local/bin:/usr/bin:/bin:/opt/homebrew/bin")
+                    .arg("--yes")
+                    .arg("hyperframes@0.6.7")
+                    .arg("add")
+                    .arg(slug)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .output()
+                    .await;
+                match add_result {
+                    Ok(out) if out.status.success() => {
+                        eprintln!("[motions] Installed catalog component: {slug}");
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        eprintln!(
+                            "[motions] hyperframes add {slug} returned non-zero: {}",
+                            stderr.trim()
+                        );
+                        // Continue — lint will catch genuinely missing refs.
+                    }
+                    Err(e) => {
+                        eprintln!("[motions] Failed to spawn hyperframes add {slug}: {e}");
+                    }
+                }
+            }
+        }
+    }
 
     // ─── Step 1: Lint pass ────────────────────────────────────────────
     // The official HyperFrames helper kit insists on running `lint` before

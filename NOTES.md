@@ -323,3 +323,68 @@ active → spoken com 0.10/0.15/0.18s). Em teoria suficiente. Na prática:
 (hook) ou **`glass-tech`** pra demais blocos avatar quando nenhuma outra
 regra bate. Karaokê seria a sugestão "premium" pra hooks com TTS, mas
 até voltar nativo, bold-pop cobre o caso de "energia + foco em texto".
+
+---
+
+## Onda Hyperframes Catalog (shipped 2026-05-18)
+
+Reels Studio passa a citar componentes do catálogo Hyperframes diretamente
+nos prompts do Gemini, e o renderer Rust auto-instala os referenciados antes
+do lint. Resultado: motions deixam de hand-rolar UIs/efeitos que o catálogo
+já entrega pré-testados, on-brand e lint-aprovados.
+
+### Como funciona
+
+1. **Prompt (`motionService.ts`)** — SYSTEM_PROMPT ganhou:
+   - `EASING & DURATION VOCABULARY` (tabela canônica do guia oficial)
+   - `HYPERFRAMES CATALOG` (whitelist de 12 slugs com pattern de sub-comp)
+   - `detectAppMention()` injeta `APP MENTION` quando bloco fala
+     Instagram/TikTok/Spotify/YouTube/Reddit/X/macOS
+
+2. **Briefs por preset (`motionStylePresets.ts`)** — cada Style preset (8)
+   + 3 Effect presets (`phone-mockup`, `social-cta-follow`, `notification-pop`)
+   ganhou seção `PREFERRED HYPERFRAMES COMPONENTS` com slugs específicos +
+   easing/duration row recomendada.
+
+3. **`illustrated-explainer` ganhou ILLUSTRATION VOCABULARY** — 6 archetypes
+   (icon stack / diagram / process flow / comparison / marker chart /
+   annotated UI), topic→archetype mapping, animated-connector rules, hard
+   rule contra transcrever a fala. Esse é o preset principal pro perfil de
+   apresentações ilustradas do usuário.
+
+4. **`phone-mockup` agora prefere `vfx-iphone-device`** — iPhone GLTF 3D real
+   com HTML live na tela em vez de CSS frame. Fallback CSS só quando sem asset.
+
+5. **Render Rust (`src-tauri/src/motions.rs`)** — antes do lint:
+   - `referenced_catalog_slugs(html)` parseia o HTML procurando
+     `data-composition-src="(compositions/|components/)?<slug>.html"`
+     contra a `HYPERFRAMES_WHITELIST` (mesma lista do TS).
+   - Pra cada slug encontrado, roda `npx hyperframes@0.6.7 add <slug>` no
+     motion dir. Erros não-fatais.
+   - Lint depois pega referências quebradas (whitelist mismatch).
+
+### Whitelist (19 slugs permitidos)
+
+- Captions (4): caption-editorial-emphasis, caption-clip-wipe,
+  caption-gradient-fill, caption-kinetic-slam
+- Overlays (3): grain-overlay, vignette, shimmer-sweep
+- Backgrounds WebGL (2): vfx-liquid-glass, vfx-liquid-background
+- UI mockups (8): vfx-iphone-device, instagram-follow, tiktok-follow,
+  x-post, spotify-card, yt-lower-third, macos-notification, reddit-post
+- Transitions (2): transitions-dissolve, transitions-push
+
+### Logs
+
+`[motion/audit]` agora inclui `appMention=` e
+`hyperframesCatalogInjected=true`. Pra debugar:
+- DevTools console → buscar `[motion/audit]` → confirma detecção.
+- Terminal stderr → `[motions] Installed catalog component: <slug>` por slug.
+
+### Próximas ondas (relacionadas)
+
+- **Lint feedback loop**: capturar erros do lint e mandar de volta pro Gemini
+  como repair turn (1 retry automático).
+- **Cache local do catálogo**: empacotar os 19 HTMLs em `public/hyperframes-catalog/`
+  pra eliminar dependência de rede no `hyperframes add`.
+- **Karaokê**: voltar a habilitar usando `caption-pill-karaoke` sub-comp em vez
+  de native builder (cancelar o plano original).
