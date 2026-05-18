@@ -24,6 +24,7 @@ import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
 import { createMotionFromBlock, isMotionAssetsStale, type MotionConfig } from './reelsStudio/motionLibrary';
 import { STYLE_PRESETS, type StylePresetId, findStylePreset } from './reelsStudio/motionStylePresets';
+import { isHidden } from './reelsStudio/presetCategory';
 import { generateMotionHtml, buildFullHtmlDoc } from '../services/motionService';
 import { generateInstagramCaption } from '../services/captionService';
 import { copyText } from './reelsStudio/clipboard';
@@ -3298,7 +3299,7 @@ export const ReelsStudio: React.FC = () => {
                     style={{ color: tokens.text.primary, border: `1px solid ${tokens.border.subtle}` }}
                   >
                     <option value="" disabled>🎭 Papel</option>
-                    {STYLE_PRESETS.filter(p => p.id !== 'claude-ui').map(p => (
+                    {STYLE_PRESETS.filter(p => p.id !== 'claude-ui' && !isHidden(p.id)).map(p => (
                       <option key={p.id} value={p.id}>{p.emoji} {p.roleLabel ?? p.label}</option>
                     ))}
                   </select>
