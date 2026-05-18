@@ -21,7 +21,7 @@ import type { ScriptBlock, AppTheme, BlockLayout } from './types';
 import { getTheme } from './theme';
 import { LAYOUT_OPTIONS } from './layouts';
 import { loadAvatarPhotos } from './avatarPhotosStore';
-import { STYLE_PRESETS, type StylePresetId } from './motionStylePresets';
+import { STYLE_PRESETS, findStylePreset, type StylePresetId, type StylePreset } from './motionStylePresets';
 import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS } from './presetCategory';
 import { detectEffect } from './effectDetector';
 
@@ -74,6 +74,7 @@ interface Props {
 
 const STORAGE_KEY_TAB = 'reels.inspector.tab';
 const STORAGE_KEY_COLLAPSED = 'reels.inspector.collapsed';
+const STORAGE_KEY_MOTION_GRID = 'reels.inspector.motionGridOpen';
 
 // ─── Inline LayoutThumbnail (kept local to avoid circular imports) ──────
 const LayoutThumb: React.FC<{ layout: BlockLayout; selected: boolean }> = ({ layout, selected }) => {
@@ -143,6 +144,71 @@ const PhotoPicker: React.FC<{
   );
 };
 
+// ─── DecidedPresetCard ─────────────────────────────────────────────────
+// Hero card that surfaces the SINGLE preset currently driving the block's
+// motion generation. Replaces the previous "grid of 19 chips" as the default
+// view — chip grid still exists but lives behind a "Trocar manualmente"
+// disclosure now. Two modes:
+//   - source='auto'    → eyebrow "🤖 Sistema escolheu", purple border
+//   - source='manual'  → eyebrow "Você escolheu", neutral border, reset link
+const DecidedPresetCard: React.FC<{
+  preset: StylePreset;
+  source: 'auto' | 'manual';
+  reason: string;
+  onReset?: () => void;
+  isLight: boolean;
+  tokens: ReturnType<typeof getTheme>;
+}> = ({ preset, source, reason, onReset, isLight, tokens }) => {
+  const isAuto = source === 'auto';
+  return (
+    <div
+      className="rounded-lg px-4 py-3 flex items-center gap-4 transition-colors"
+      style={{
+        backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)',
+        border: `1px solid ${isAuto ? '#A78BFA' : tokens.border.subtle}`,
+        boxShadow: isAuto ? '0 0 0 3px rgba(167,139,250,0.10)' : 'none',
+      }}
+    >
+      {/* Big emoji + label cluster */}
+      <div className="flex items-center gap-3 shrink-0">
+        <span className="text-3xl leading-none" aria-hidden>{preset.emoji}</span>
+        <div className="text-[15px] font-semibold leading-tight" style={{ color: tokens.text.primary }}>
+          {preset.label}
+        </div>
+      </div>
+      {/* Eyebrow + reason */}
+      <div className="flex-1 min-w-0">
+        <div
+          className="text-[10px] uppercase tracking-wider font-semibold leading-none mb-1"
+          style={{ color: isAuto ? '#A78BFA' : tokens.text.tertiary }}
+        >
+          {isAuto ? '🤖 Sistema escolheu' : 'Você escolheu'}
+        </div>
+        <div className="text-[11px] leading-snug truncate" style={{ color: tokens.text.secondary }}>
+          {reason}
+        </div>
+      </div>
+      {/* Reset to auto link — only when user has a manual override */}
+      {!isAuto && onReset && (
+        <button
+          onClick={onReset}
+          className="shrink-0 text-[11px] font-medium underline-offset-2 hover:underline transition-colors"
+          style={{
+            color: '#A78BFA',
+            backgroundColor: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            padding: 0,
+          }}
+          title="Limpar escolha manual e voltar para a decisão automática do sistema"
+        >
+          Voltar para automático
+        </button>
+      )}
+    </div>
+  );
+};
+
 export const InspectorPanel: React.FC<Props> = ({
   block,
   appTheme,
@@ -181,6 +247,12 @@ export const InspectorPanel: React.FC<Props> = ({
   const [collapsed, setCollapsed] = useState<boolean>(() => {
     try { return sessionStorage.getItem(STORAGE_KEY_COLLAPSED) === '1'; } catch { return false; }
   });
+  // "Trocar manualmente" disclosure — hidden by default. When open, the
+  // 19-chip grid is shown below the DecidedPresetCard. Persists across
+  // tab switches and HMR via sessionStorage.
+  const [showMotionGrid, setShowMotionGrid] = useState<boolean>(() => {
+    try { return sessionStorage.getItem(STORAGE_KEY_MOTION_GRID) === '1'; } catch { return false; }
+  });
 
   useEffect(() => {
     try { sessionStorage.setItem(STORAGE_KEY_TAB, activeTab); } catch { /* ignore */ }
@@ -188,6 +260,9 @@ export const InspectorPanel: React.FC<Props> = ({
   useEffect(() => {
     try { sessionStorage.setItem(STORAGE_KEY_COLLAPSED, collapsed ? '1' : '0'); } catch { /* ignore */ }
   }, [collapsed]);
+  useEffect(() => {
+    try { sessionStorage.setItem(STORAGE_KEY_MOTION_GRID, showMotionGrid ? '1' : '0'); } catch { /* ignore */ }
+  }, [showMotionGrid]);
 
   const isEmpty = !block;
   const isMultiSelect = multiSelectCount > 1;
@@ -228,57 +303,95 @@ export const InspectorPanel: React.FC<Props> = ({
     });
     const motionLabel = (() => {
       if (isBusy) return motionBusy;
-      if (!block.motion) return 'Sem motion · escolha um estilo abaixo';
+      if (!block.motion) return 'Sem motion · pronto para gerar';
       if (motionStatus === 'ready') return 'Motion pronto';
       if (motionStatus === 'generating') return 'Gerando…';
       if (motionStatus === 'rendering') return 'Renderizando…';
       if (motionStatus === 'error') return 'Erro · abra o editor pra ver';
       return 'Rascunho';
     })();
+    // Resolve what the user is effectively going to render with — the manual
+    // override if set, otherwise whatever the detector recommended, otherwise
+    // a safe editorial fallback. This single id drives the DecidedPresetCard.
+    const isManualOverride = !!block.stylePresetOverride;
+    const effectivePresetId: StylePresetId = isManualOverride
+      ? (block.stylePresetOverride as StylePresetId)
+      : (detected.recommendedEffect ?? 'editorial-clean');
+    const effectivePreset = findStylePreset(effectivePresetId);
+    const reasonText = isManualOverride
+      ? effectivePreset.bestFor
+      : (detected.recommendedEffect ? detected.reason : 'Editorial limpo · escolha padrão');
     return (
       <div className="space-y-3">
-        {/* Style preset grid — replaces the dropdown that lived inside the card. */}
-        <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
-          <div className="flex items-center justify-between mb-2 gap-3">
-            <div className="text-[10px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>
-              Estilo do motion
-            </div>
-            <div className="flex items-center gap-3">
-              {/* Dark/Light chip — controls how the NEXT generation paints
-                  backgrounds. Lives here because users typically pick a
-                  preset and a colour scheme in the same gesture. */}
-              {onSetMotionColorMode && (
-                <div
-                  className="flex items-center gap-0.5 p-0.5 rounded-md"
-                  style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)' }}
-                >
-                  {(['light', 'dark'] as const).map(mode => {
-                    const active = (motionColorMode ?? 'dark') === mode;
-                    return (
-                      <button
-                        key={mode}
-                        onClick={() => onSetMotionColorMode(mode)}
-                        className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors"
-                        style={{
-                          backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.1)') : 'transparent',
-                          color: active ? tokens.text.primary : tokens.text.tertiary,
-                          cursor: 'pointer',
-                          border: 'none',
-                        }}
-                        title={mode === 'light' ? 'Motion com fundo claro' : 'Motion com fundo escuro'}
-                      >
-                        <span>{mode === 'light' ? '☀' : '🌙'}</span>
-                        <span>{mode === 'light' ? 'Claro' : 'Escuro'}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-              <div className="text-[10px]" style={{ color: tokens.text.tertiary }}>
-                {motionLabel}
-              </div>
-            </div>
+        {/* "What the system decided" hero card — primary surface for the
+            Motion tab. Click "Trocar manualmente" below to reveal the full
+            chip grid. */}
+        <DecidedPresetCard
+          preset={effectivePreset}
+          source={isManualOverride ? 'manual' : 'auto'}
+          reason={reasonText}
+          onReset={isManualOverride ? () => onSetStylePreset?.(undefined) : undefined}
+          isLight={isLight}
+          tokens={tokens}
+        />
+
+        {/* Status strip — motion lifecycle indicator + dark/light toggle.
+            Used to live in the grid header; surfaced here so users see
+            the render state even when the chip grid is collapsed. */}
+        <div className="flex items-center justify-between gap-3 px-1">
+          <div className="text-[10px] font-medium" style={{ color: tokens.text.tertiary }}>
+            {motionLabel}
           </div>
+          {/* Dark/Light chip — controls how the NEXT generation paints
+              backgrounds. */}
+          {onSetMotionColorMode && (
+            <div
+              className="flex items-center gap-0.5 p-0.5 rounded-md"
+              style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)' }}
+            >
+              {(['light', 'dark'] as const).map(mode => {
+                const active = (motionColorMode ?? 'dark') === mode;
+                return (
+                  <button
+                    key={mode}
+                    onClick={() => onSetMotionColorMode(mode)}
+                    className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors"
+                    style={{
+                      backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.1)') : 'transparent',
+                      color: active ? tokens.text.primary : tokens.text.tertiary,
+                      cursor: 'pointer',
+                      border: 'none',
+                    }}
+                    title={mode === 'light' ? 'Motion com fundo claro' : 'Motion com fundo escuro'}
+                  >
+                    <span>{mode === 'light' ? '☀' : '🌙'}</span>
+                    <span>{mode === 'light' ? 'Claro' : 'Escuro'}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Disclosure toggle — opens/closes the 19-chip grid below. */}
+        <button
+          onClick={() => setShowMotionGrid(s => !s)}
+          className="w-full text-center text-[11px] font-medium py-1.5 rounded transition-colors"
+          style={{
+            color: tokens.text.secondary,
+            backgroundColor: 'transparent',
+            border: `1px dashed ${tokens.border.subtle}`,
+            cursor: 'pointer',
+          }}
+        >
+          {showMotionGrid ? 'Esconder opções ▴' : 'Trocar manualmente ▾'}
+        </button>
+
+        {/* Full chip grid — hidden by default. Status strip + dark/light
+            toggle now live above (always visible), so the grid header used
+            to host them is gone. */}
+        {showMotionGrid && (
+        <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)' }}>
           {/* Style + Effect picker — split into two labeled sections.
               Style = palette/typography/motion grammar (always-applicable vibes).
               Effect = shot template / component with semantic trigger (counter,
@@ -354,6 +467,7 @@ export const InspectorPanel: React.FC<Props> = ({
             );
           })()}
         </div>
+        )}
 
         {/* Primary: regenerate inline (no modal). Secondary: open advanced editor. */}
         <div className="flex items-center gap-2">
