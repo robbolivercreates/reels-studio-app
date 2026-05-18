@@ -181,13 +181,7 @@ NEVER:
   • mais de 1 cor accent por bloco
   • text-align: right
   • pill-shaped cards (rounded > 12px)
-  • decorative dots, blobs, particles — clean é austero por definição
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • atmospheric overlay: vignette + grain-overlay (opacity 0.06–0.08)
-  • NO WebGL backgrounds, NO heavy vfx — clean is restraint by design
-  • easing + duration: row "smooth / elegant" — power3.out / 0.5s
-  • Use hard cuts between beats; transitions-push allowed only at the 1–2 key narrative pivots`.trim(),
+  • decorative dots, blobs, particles — clean é austero por definição`.trim(),
   },
   {
     id: 'bold-pop',
@@ -265,13 +259,7 @@ NEVER:
   • cores purple/magenta/rose no atmosphere (PRINCIPLE 6 — usa cyan/yellow/orange)
   • mais de 3 shapes geométricos visíveis ao mesmo tempo
   • text sem text-shadow no display (digital flat morre nesse preset)
-  • saturação < 60% em qualquer accent
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • transition between beats: transitions-push (snappy, matches the pop)
-  • NO calm overlays (vignette/grain dilute the energy); shimmer-sweep allowed sparingly on hero
-  • easing + duration: row "bouncy / playful" — back.out(2) / 0.4s with overshoot welcome
-  • Pop is dense and packed — use multiple .clip elements active at once on different track-indexes`.trim(),
+  • saturação < 60% em qualquer accent`.trim(),
   },
   {
     id: 'glass-tech',
@@ -353,15 +341,7 @@ NEVER:
   • cores purple/magenta/rose no bg ou accent (PRINCIPLE 6 — usa cyan/blue/teal)
   • mais de 2 glass cards simultaneamente no mesmo frame (depth confusion)
   • backdrop-filter < 16px (não lê como glass) ou > 30px (overkill)
-  • text-shadow em texto — tech é tipografia precisa, não brilhante
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • base background: nest vfx-liquid-glass as the track-0 sub-composition
-    (it provides the flowing glass canvas — your CSS layer sits on top)
-  • accent on the hero word: shimmer-sweep (the catalog explicitly tags it
-    as "ideal for AI accents" — perfect match for glass-tech vibe)
-  • easing + duration: row "smooth / elegant" — power2.out / 0.4–0.8s deliberate
-  • Vignette allowed at low opacity (0.10) for focal pull; NO grain (tech is clean, not analog)`.trim(),
+  • text-shadow em texto — tech é tipografia precisa, não brilhante`.trim(),
   },
   {
     id: 'kinetic-bold',
@@ -513,14 +493,7 @@ NEVER:
   • scale > 1.05 ou translate > 16px
   • brand colors no espectro 250-345 hue (purple/pink/rose/magenta) — força fallback
   • saturação > 50% em qualquer elemento (tudo deve parecer "lavado")
-  • easing back.out, elastic, expo — quebra a calma
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • base background (optional): nest vfx-liquid-background at low opacity (0.4)
-    — soft flowing colorful warmth, perfect for the cream/peach palette
-  • atmospheric overlay: grain-overlay at 0.06 (paper feel, never digital flat)
-  • easing + duration: row "calm / luxury" — sine.inOut / 0.8–1.2s gentle
-  • NO shimmer-sweep (too tech), NO vignette (pastel breathes, doesn't constrict)`.trim(),
+  • easing back.out, elastic, expo — quebra a calma`.trim(),
   },
   {
     id: 'cinematic-dark',
@@ -598,14 +571,7 @@ NEVER:
   • mais de 1 cor accent por bloco
   • saturação > 70% em qualquer elemento
   • blobs, dots, decorative shapes — austeridade absoluta
-  • esquecer o film grain ou a vignette (são identidade do preset)
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • atmospheric overlays (REQUIRED — these ARE the preset's signature):
-    grain-overlay at 0.12 AND vignette together as the top-most chrome layer
-  • optional accent: shimmer-sweep on the hero word for a film-print light leak
-  • easing + duration: row "dramatic / cinematic" — expo.out / 0.5s with patient holds
-  • Transitions between beats: NONE (cinematic dark uses long held shots; let beats breathe)`.trim(),
+  • esquecer o film grain ou a vignette (são identidade do preset)`.trim(),
   },
   {
     id: 'apple-system',
@@ -664,14 +630,7 @@ MOTION:
 VOICE:
   Quiet, precise, OS-like. The motion should feel like macOS itself, not
   like a flashy reel. Less is more. If a frame can be calmer without losing
-  meaning, calm it.
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • optional macOS context: macos-notification block when the block talks about
-    a system notification, alert, or message arriving
-  • atmospheric overlay: vignette at 0.10 ONLY when block is moody; otherwise omit
-  • easing + duration: row "smooth / elegant" — power3.out / 0.4–0.6s
-  • NO grain (Apple is digital-precise, not analog), NO heavy vfx, NO shimmer-sweep`.trim(),
+  meaning, calm it.`.trim(),
   },
   {
     id: 'warm-editorial',
@@ -723,14 +682,7 @@ MOTION:
 
 VOICE:
   Warm, human, unhurried. Think the opening of a travel documentary or a
-  perfume ad — the motion supports a feeling, doesn't shout for attention.
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • atmospheric overlays (REQUIRED — these ARE the preset's signature):
-    grain-overlay at 0.12 + vignette at 0.18 stacked together
-  • easing + duration: row "calm / luxury" — sine.inOut / 0.6–0.8s contemplative
-  • NO shimmer-sweep (too tech), NO WebGL backgrounds (paper warmth, not digital)
-  • Transitions between beats: transitions-dissolve only at narrative pivots`.trim(),
+  perfume ad — the motion supports a feeling, doesn't shout for attention.`.trim(),
   },
   {
     id: 'illustrated-explainer',
@@ -842,52 +794,7 @@ NEVER:
   • rotation in icons or text
   • elastic.out / back.out > 1.8 — bouncy motion breaks the "studious" feel
   • pure #000 text or pure #ffffff bg — always off-tints for paper feel
-  • bright primary colors when brand is muted — respect brand mood
-
-ILLUSTRATION VOCABULARY (THIS preset is for presentations — the brief MUST produce
-a visual essay, not transcribed narration):
-
-  Required elements per beat (pick ONE archetype, illustrate it well):
-    1. Icon stack    — 2-4 inline SVG icons (line-style, 2-3px stroke,
-                       single accent colour), each entering staggered
-    2. Diagram       — 2-4 connected boxes/circles with arrows that DRAW IN
-                       via stroke-dasharray + stroke-dashoffset animation
-    3. Process flow  — numbered steps (1-2-3-4) connected by curves,
-                       each step revealing on its own beat
-    4. Comparison    — side-by-side (left vs right), with a centred divider
-                       and an animated reveal: left fades in, then right
-    5. Marker chart  — bar chart / line chart / dot grid animating UP
-                       to a final value with a marker dot landing on it
-    6. Annotated UI  — a simplified UI sketch with arrow callouts pointing
-                       to specific affordances (NEVER a real screenshot)
-
-  Examples mapping common topics → archetype:
-    "produtividade" → checkbox grid filling in (archetype 5)
-    "comunicação"   → speech bubbles connecting (archetype 2)
-    "crescimento"   → bar chart animating up + marker (archetype 5)
-    "decisão"       → fork in path with one branch highlighting (archetype 3)
-    "tempo"         → clock face with sweeping hand + tick labels (archetype 1)
-    "dados"         → numbered nodes connecting into a graph (archetype 2)
-    "processo"      → numbered horizontal flow with arrows (archetype 3)
-    "antes vs depois" → side-by-side comparison (archetype 4)
-
-  Connectors are animated, NEVER static:
-    • Lines/arrows enter via stroke-dashoffset (length → 0) over 0.4-0.6s
-    • Box outlines draw with stroke-dasharray, then fill fades in
-    • A short label appears NEXT TO each shape (1-3 words MAX), never inside
-
-  HARD RULE: do NOT transcribe the spoken text into big letters. The narrator
-  speaks; the motion ILLUSTRATES the concept. A 3-word label beside an icon
-  beats a 20-word headline floating alone.
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • Captions: AVOID per-word captions entirely — illustrations carry the message
-  • Optional transition between beats (when block has 2+ archetypes): transitions-dissolve
-  • Atmospheric overlay: vignette at 0.10 only when the canvas feels too flat; otherwise omit
-  • easing + duration: row "smooth / elegant" — power2.out / 0.4-0.6s
-    (NEVER bouncy back.out — explainer is studious, not playful)
-  • NO grain (explainer is digital-precise, not paper-aged)
-  • NO WebGL backgrounds (would compete with the illustration)`.trim(),
+  • bright primary colors when brand is muted — respect brand mood`.trim(),
   },
 
   // ─── HyperFrames-inspired presets (Onda 11) ──────────────────────────
@@ -932,20 +839,7 @@ MOTION (5s timeline):
   - 1.15-1.22s: "Follow" text fades out, "Following ✓" fades in
   - 3.8-4.05s: card slides back to y:300, opacity 1→0
 
-VOICE: Authentic social platform overlay — viewers should feel they're seeing a real Instagram/TikTok notification, not a designed graphic.
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • When the block (or brand identity, or App Mention section) names Instagram →
-    emit instagram-follow as a sub-composition. Real card, lint-tested, on-brand.
-  • When it names TikTok → emit tiktok-follow.
-  • When it names X/Twitter → emit x-post.
-  • When it names YouTube → emit yt-lower-third.
-  • When it names Reddit → emit reddit-post.
-  • When it names Spotify → emit spotify-card.
-  • OTHERWISE (generic CTA, no specific platform) → hand-roll using the CSS
-    pattern described above. Don't invent a slug not on the whitelist.
-  • Pass the creator identity (handle, displayName, followerCount, avatarDataUrl)
-    via data-variable-values when emitting any of these blocks.`.trim(),
+VOICE: Authentic social platform overlay — viewers should feel they're seeing a real Instagram/TikTok notification, not a designed graphic.`.trim(),
   },
 
   {
@@ -1024,17 +918,7 @@ MOTION (5s timeline) — Apple notification rhythm:
   - 3.8-4.4s: tiny press scale 0.98 ease "power2.in" then continue
   - 4.4-5.0s: banner slides up to y:-120, opacity 1 → 0, ease "power3.in"
 
-VOICE: Native macOS, real notification — not a designed graphic. Restraint over flash.
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • PRIMARY CHOICE: emit macos-notification as the notification sub-composition.
-    This is the catalog block — already styled like the real macOS toast,
-    lint-tested, on-brand. Pass title/message/appName via data-variable-values.
-  • OTHERWISE (mobile-style notification, dock-style, etc.) → hand-roll using
-    the CSS pattern above. Don't invent slugs not on the whitelist.
-  • Optional atmospheric overlay on the background: vignette at 0.10
-  • easing + duration: row "smooth / elegant" — power3.out / 0.4–0.6s
-  • Match the macOS notification rhythm even when hand-rolling (settle bounce + hold + dismiss).`.trim(),
+VOICE: Native macOS, real notification — not a designed graphic. Restraint over flash.`.trim(),
   },
 
   {
@@ -1366,26 +1250,7 @@ NEVER:
   • add decoration on top of the screen (blobs, particles) — screen is sacred
   • caption longer than 8 words — phone composition needs negative space
   • bright background — preset requires dark moody stage for the spotlight feel
-  • elastic/back.out on the phone body itself (only on Dynamic Island reveal)
-
-PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • STRONGLY PREFER: emit vfx-iphone-device as a sub-composition. This is the
-    catalog block — a REAL GLTF iPhone 15 Pro Max + MacBook Pro model with a
-    live HTML canvas as the screen. Way better than any CSS phone frame:
-    refractive glass, real shadows, 360° turntable, morphing lens.
-  • Pass the attached asset as the screen content via data-variable-values
-    (the block reads the screen HTML from a named variable — confirm the exact
-    variable name by inspecting the installed component's header comment).
-  • Pattern:
-      <div class="clip" id="phone-3d"
-           data-start="0" data-duration="5" data-track-index="2"
-           data-composition-id="phone-3d-inner"
-           data-composition-src="compositions/vfx-iphone-device.html"
-           data-variable-values='{"screenContent": "<img src=\\"assets/screenshot.png\\" />"}'>
-      </div>
-  • Fallback to CSS frame ONLY if the attached asset is missing or not an image.
-  • Optional atmospheric overlay: vignette at 0.18 for the keynote spotlight feel.
-  • easing + duration: row "smooth / elegant" — power2.out / 0.6–0.8s.`.trim(),
+  • elastic/back.out on the phone body itself (only on Dynamic Island reveal)`.trim(),
 });
 
 STYLE_PRESETS.push({
