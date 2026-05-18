@@ -478,42 +478,94 @@ export const InspectorPanel: React.FC<Props> = ({
           />
         )}
 
-        {/* Status strip — motion lifecycle indicator + dark/light toggle.
-            Used to live in the grid header; surfaced here so users see
-            the render state even when the chip grid is collapsed. */}
+        {/* Status strip — combines (left) status OR segmented control with
+            (right) Dark/Light toggle + Esconder link. When the disclosure
+            is closed, the left shows the motion status label. When open,
+            the left becomes the [Estilo (8) | Efeito (11)] segmented
+            control AND a discrete "Esconder ▴" appears on the far right. */}
         <div className="flex items-center justify-between gap-3 px-1">
-          <div className="text-[10px] font-medium" style={{ color: tokens.text.tertiary }}>
-            {motionLabel}
+          <div className="flex items-center gap-3 min-w-0">
+            {showMotionGrid ? (
+              <div
+                className="shrink-0 flex items-center gap-0.5 p-0.5 rounded-md"
+                style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)', border: `1px solid ${tokens.border.subtle}` }}
+              >
+                {([
+                  { id: 'style' as const,  label: 'Estilo', count: STYLE_PRESET_IDS.length },
+                  { id: 'effect' as const, label: 'Efeito', count: EFFECT_PRESET_IDS.length },
+                ]).map(opt => {
+                  const active = motionCategory === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => setMotionCategory(opt.id)}
+                      className="px-2 py-0.5 rounded text-[10px] font-medium transition-colors"
+                      style={{
+                        backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.10)') : 'transparent',
+                        color: active ? tokens.text.primary : tokens.text.tertiary,
+                        cursor: active ? 'default' : 'pointer',
+                        border: 'none',
+                      }}
+                      title={opt.id === 'style' ? 'Visual mood do motion' : 'Componente / shot template — opcional'}
+                    >
+                      {opt.label} <span className="opacity-50">({opt.count})</span>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-[10px] font-medium truncate" style={{ color: tokens.text.tertiary }}>
+                {motionLabel}
+              </div>
+            )}
           </div>
-          {/* Dark/Light chip — controls how the NEXT generation paints
-              backgrounds. */}
-          {onSetMotionColorMode && (
-            <div
-              className="flex items-center gap-0.5 p-0.5 rounded-md"
-              style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)' }}
-            >
-              {(['light', 'dark'] as const).map(mode => {
-                const active = (motionColorMode ?? 'dark') === mode;
-                return (
-                  <button
-                    key={mode}
-                    onClick={() => onSetMotionColorMode(mode)}
-                    className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors"
-                    style={{
-                      backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.1)') : 'transparent',
-                      color: active ? tokens.text.primary : tokens.text.tertiary,
-                      cursor: 'pointer',
-                      border: 'none',
-                    }}
-                    title={mode === 'light' ? 'Motion com fundo claro' : 'Motion com fundo escuro'}
-                  >
-                    <span>{mode === 'light' ? '☀' : '🌙'}</span>
-                    <span>{mode === 'light' ? 'Claro' : 'Escuro'}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            {showMotionGrid && (
+              <button
+                onClick={() => setShowMotionGrid(false)}
+                className="text-[11px] font-medium"
+                style={{
+                  color: tokens.text.secondary,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: 0,
+                }}
+                title="Voltar pra visão principal"
+              >
+                Esconder ▴
+              </button>
+            )}
+            {/* Dark/Light chip — controls how the NEXT generation paints
+                backgrounds. */}
+            {onSetMotionColorMode && (
+              <div
+                className="flex items-center gap-0.5 p-0.5 rounded-md"
+                style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)' }}
+              >
+                {(['light', 'dark'] as const).map(mode => {
+                  const active = (motionColorMode ?? 'dark') === mode;
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() => onSetMotionColorMode(mode)}
+                      className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors"
+                      style={{
+                        backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.1)') : 'transparent',
+                        color: active ? tokens.text.primary : tokens.text.tertiary,
+                        cursor: 'pointer',
+                        border: 'none',
+                      }}
+                      title={mode === 'light' ? 'Motion com fundo claro' : 'Motion com fundo escuro'}
+                    >
+                      <span>{mode === 'light' ? '☀' : '🌙'}</span>
+                      <span>{mode === 'light' ? 'Claro' : 'Escuro'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
         </div>
         {/* ─── Zone 2 (middle): disclosure + horizontal carousel ─────────
@@ -522,10 +574,10 @@ export const InspectorPanel: React.FC<Props> = ({
             below it gets cropped if vertical space runs out. */}
         <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
 
-        {/* Disclosure trigger + segmented control. When opening, auto-switch
-            the category to the one the current preset belongs to so the user
-            sees the right carousel right away. */}
-        {!showMotionGrid ? (
+        {/* Disclosure trigger — only shown when CLOSED. When open, the
+            segmented control + "Esconder ▴" link live in the status strip
+            above. This zone just contains the carousel. */}
+        {!showMotionGrid && (
           <button
             onClick={() => {
               // Auto-pick the category that contains the current preset
@@ -545,51 +597,6 @@ export const InspectorPanel: React.FC<Props> = ({
           >
             Trocar manualmente ▾
           </button>
-        ) : (
-          // Apple-style segmented control + close link on the right
-          <div className="shrink-0 flex items-center gap-3">
-            <div
-              className="flex items-center gap-0.5 p-0.5 rounded-md"
-              style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)', border: `1px solid ${tokens.border.subtle}` }}
-            >
-              {([
-                { id: 'style' as const,  label: 'Estilo', count: STYLE_PRESET_IDS.length },
-                { id: 'effect' as const, label: 'Efeito', count: EFFECT_PRESET_IDS.length },
-              ]).map(opt => {
-                const active = motionCategory === opt.id;
-                return (
-                  <button
-                    key={opt.id}
-                    onClick={() => setMotionCategory(opt.id)}
-                    className="px-2.5 py-1 rounded text-[10px] font-medium transition-colors"
-                    style={{
-                      backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.10)') : 'transparent',
-                      color: active ? tokens.text.primary : tokens.text.tertiary,
-                      cursor: active ? 'default' : 'pointer',
-                      border: 'none',
-                    }}
-                    title={opt.id === 'style' ? 'Visual mood do motion (paleta + tipografia + grammar)' : 'Componente / shot template — opcional'}
-                  >
-                    {opt.label} <span className="opacity-50">({opt.count})</span>
-                  </button>
-                );
-              })}
-            </div>
-            <button
-              onClick={() => setShowMotionGrid(false)}
-              className="ml-auto text-[11px] font-medium"
-              style={{
-                color: tokens.text.secondary,
-                backgroundColor: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                padding: 0,
-              }}
-              title="Voltar pra visão principal"
-            >
-              Esconder ▴
-            </button>
-          </div>
         )}
 
         {/* Full chip carousel — hidden by default. When open, renders TWO
