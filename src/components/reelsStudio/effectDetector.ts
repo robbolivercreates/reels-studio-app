@@ -153,15 +153,13 @@ export const detectEffect = (ctx: EffectDetectorCtx): EffectSuggestion => {
     return { recommendedEffect: 'illustrated-explainer', reason: 'Conteúdo explicativo — ilustrar com ícones e diagrama' };
   }
 
-  // 12. First-block fallback for avatar — hook energy. bold-pop is the
-  //     default opener vibe (karaoke used to live here for avatar+audio,
-  //     hidden until reimplemented).
-  if (index === 0 && block.kind === 'avatar') {
-    return { recommendedEffect: 'bold-pop', reason: 'Primeiro bloco — hook' };
-  }
-
-  // 13. Avatar fallback — glass-tech. Premium / tech-aspirational default
+  // 12. Avatar fallback — glass-tech. Premium / tech-aspirational default
   //     when nothing else fits and the block has an avatar speaking.
+  //     (Historic rule 12 — "first block → bold-pop" — was removed when
+  //     captions stopped being emitted by default. The "hook energy"
+  //     concept lived inside caption-kinetic-slam, which is no longer
+  //     the default treatment. Avatar blocks now fall straight to
+  //     glass-tech, matching the app's long-standing default since 44e8e54.)
   if (block.kind === 'avatar') {
     return { recommendedEffect: 'glass-tech', reason: 'Avatar falando — vibe técnica' };
   }

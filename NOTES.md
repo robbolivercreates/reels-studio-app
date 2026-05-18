@@ -326,6 +326,76 @@ até voltar nativo, bold-pop cobre o caso de "energia + foco em texto".
 
 ---
 
+## Wave correction #2 — motion volta a ser ilustração (2026-05-18)
+
+Cirurgia após segundo teste do usuário:
+
+> "esta adicoinando como se fossem legenas / captios, e isso nao tinha
+> antes... a ideia do motion é ilustrar tralvez aparece com uma palavra
+> ou outro que ilustre, as captions posso colocar de forma separada"
+
+> "Dai deixamos como padrao o glass tech como estava antes?"
+
+Diagnóstico: minhas correções da onda Hyperframes (`ada6060`, `44e6661`)
+introduziram **3 estruturas de captions no SYSTEM_PROMPT que não existiam
+em `44e8e54`**:
+
+1. Seção `CAPTIONS — TONE-DETECTED, NOT PRESET-LOCKED` (~30 linhas
+   incluindo a tabela tom→tipografia + word grouping + position rules)
+2. Bloco `CAPTION VARIETY` no STORYBOARD CONTINUITY
+3. Linha "Captions: follow the TONE-DETECTED table" em 7 Style briefs
+
+Gemini começou a gerar caption-bar sincronizada por palavra na parte
+inferior de cada motion. A detecção automática de tom estava embutida
+nessa tabela — sai junto.
+
+Adicionalmente, `glass-tech` deixou de ser o default visual da app
+quando minhas correções do "dois selecionados" (`96197e2`) trocaram
+o `currentPresetId = stylePresetOverride ?? 'glass-tech'` por
+`effectivePresetId`. O detector tinha rule 12 (primeiro bloco avatar
+→ bold-pop) brigando com o default literal — bug visual real, mas o
+fix tirou glass-tech do trono.
+
+### Mudanças desta correção
+
+- Removida seção CAPTIONS — TONE-DETECTED do SYSTEM_PROMPT
+- Removido bloco CAPTION VARIETY do STORYBOARD CONTINUITY
+- Removidas 7 linhas "Captions: follow" dos Style briefs (editorial-clean,
+  bold-pop, glass-tech, soft-pastel, cinematic-dark, apple-system,
+  warm-editorial)
+- Redirect dentro do HYPERFRAMES CATALOG trocado: agora diz "DO NOT
+  add caption tracks by default — text is part of the visual composition
+  via PRINCIPLE 2 (1-5 words/shot, 120-280px, integrated)"
+- Removida rule 12 do effectDetector (primeiro bloco avatar → bold-pop).
+  Agora rule 12 é o que era rule 13 (avatar → glass-tech). Default
+  histórico volta naturalmente.
+- Restaurado o atalho de clicar no chip `glass-tech` → envia `undefined`
+  (limpa override = "voltar pro padrão")
+
+### Mantido intacto (80%+ da onda Hyperframes)
+
+- UI mockups reais (vfx-iphone-device, instagram-follow, tiktok-follow,
+  x-post, spotify-card, yt-lower-third, macos-notification, reddit-post)
+- Overlays atmosféricos (grain-overlay, vignette, shimmer-sweep)
+- Backgrounds WebGL (vfx-liquid-glass, vfx-liquid-background)
+- Transitions (transitions-dissolve, transitions-push)
+- detectAppMention() helper + APP MENTION userBrief section
+- HYPERFRAMES_WHITELIST + Rust install loop antes do lint
+- EASING & DURATION VOCABULARY table
+- AI DESIGN TELLS section (lista oficial Hyperframes de defaults a evitar)
+- ILLUSTRATION VOCABULARY em `illustrated-explainer` (6 archetypes)
+- Sync `set-block-style-preset` após MotionPickerModal save
+
+### Comportamento final
+
+Avatar block sem override → `glass-tech` (como em `44e8e54`).
+Texto no motion segue PRINCIPLE 2: 1-5 palavras, 120-280px, integrado
+visualmente, NÃO faixa de subtitle no rodapé. Captions sincronizadas
+viram opt-in via toggle no Inspector numa onda futura, se o usuário
+pedir.
+
+---
+
 ## Wave correction — captions tone-detected (2026-05-18)
 
 Cirurgia em cima da onda Hyperframes (abaixo) após primeiro teste do

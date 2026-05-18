@@ -622,7 +622,7 @@ export const InspectorPanel: React.FC<Props> = ({
               <button
                 key={p.id}
                 data-preset-id={p.id}
-                onClick={() => onSetStylePreset?.(p.id as StylePresetId)}
+                onClick={() => onSetStylePreset?.(p.id === 'glass-tech' ? undefined : (p.id as StylePresetId))}
                 className="relative shrink-0 rounded-lg transition-all flex flex-col items-center overflow-hidden"
                 style={{
                   width: STYLE_THUMB_WIDTH,

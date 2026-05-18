@@ -591,11 +591,11 @@ scratch. The Rust pipeline auto-installs whatever slugs you reference,
 then runs lint. Unknown slugs FAIL lint and abort the render — only
 use slugs from this whitelist:
 
-CAPTIONS — see the dedicated CAPTIONS section below.
-The catalog has caption-* components but they are NOT your default
-choice. Default to tone-detected hand-rolled captions; reach for a
-catalog caption only for explicit emphasis beats (one stat punch,
-one brand reveal — never every hook).
+CAPTIONS — DO NOT add caption tracks by default. Text in motions is
+part of the visual composition (PRINCIPLE 2: 1-5 words/shot, 120-280px,
+integrated as visual hero). Catalog caption-* components exist but are
+reserved for explicit "I want synced lyrics" requests from the user,
+not default emphasis.
 
 OVERLAYS (composition-agnostic atmosphere):
 - grain-overlay                — animated film grain
@@ -635,41 +635,6 @@ Rules:
 - data-track-index follows the usual non-overlap rule.
 - Pass any variables via data-variable-values (JSON string).
 - The sub-comp counts as one .clip; treat its duration accordingly.
-
-═══════════════════════════════════════════════════════════
- CAPTIONS — TONE-DETECTED, NOT PRESET-LOCKED
-═══════════════════════════════════════════════════════════
-Captions should be DETECTED from the block text's tone — not chosen
-because the active preset is bold or editorial. The active preset
-defines palette / typography family / atmosphere; the BLOCK content
-defines caption treatment.
-
-Tone → Typography / Animation table (canonical from Hyperframes spec):
-
-| Tone         | Font weight             | Animation                          | Color           | Size    |
-|--------------|-------------------------|------------------------------------|-----------------|---------|
-| Hype/launch  | Heavy condensed 800-900 | Scale-pop, back.out(1.7), 0.1-0.2s | Bright on dark  | 72-96px |
-| Corporate    | Clean sans 600-700      | Fade + slide, power3.out, 0.3s     | White/neutral   | 56-72px |
-| Tutorial     | Mono/clean sans 500-600 | Typewriter / fade, 0.4-0.5s        | High contrast   | 48-64px |
-| Storytelling | Serif/elegant 400-500   | Slow fade, power2.out, 0.5-0.6s    | Warm muted      | 44-56px |
-| Social       | Rounded sans 700-800    | Bounce, elastic.out, word-by-word  | Playful pills   | 56-80px |
-
-Word grouping:
-- High energy → 2-3 words per group, quick turnover
-- Conversational → 3-5 words, natural phrases
-- Measured/calm → 4-6 words, longer groups
-Break on sentence boundaries or 150ms+ pauses.
-
-Position (1080×1920 portrait): 600-700px from bottom, centered,
-position: absolute. Never cover the subject's face. One group visible
-at a time. Hand-roll the markup — wrap each word in a <span> with its
-own data-start/data-duration if you need per-word timing.
-
-DO NOT default every hook to "full-screen single-word slam". That is
-a specific emphasis treatment (the catalog's caption-kinetic-slam is
-exactly that). Overusing it makes every reel look like karaoke.
-Reserve aggressive single-word treatments for explicit emphasis beats
-— a stat punch, a brand reveal — never the default opener.
 
 ═══════════════════════════════════════════════════════════
  AI DESIGN TELLS — pause before defaulting to these
@@ -1341,12 +1306,6 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       `Variety in the focal element across consecutive blocks is what makes the reel feel produced, not generic.`,
       `KEEP CONSTANT: brand colors, typography weights, ease curves — the reel must feel like one piece.`,
       `VARY: hero element, composition layout, primary animation verb.`,
-      ``,
-      `CAPTION VARIETY (in addition to focal variety):`,
-      `- Block 0 (opener): more emphasis allowed — larger size, scale-pop entry, single hero word OK if the text supports it`,
-      `- Middle blocks: cycle entry technique by index modulo 4 → fade+slide, typewriter, weight-shift, gradient-fill`,
-      `- Final block: understated, longer holds, simple fade`,
-      `Same palette + same typography family across all blocks; DIFFERENT caption rhythm per block.`,
     ].join('\n') : '',
     '',
   ].filter(Boolean).join('\n') : '';
