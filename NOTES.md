@@ -326,6 +326,52 @@ até voltar nativo, bold-pop cobre o caso de "energia + foco em texto".
 
 ---
 
+## Wave correction — captions tone-detected (2026-05-18)
+
+Cirurgia em cima da onda Hyperframes (abaixo) após primeiro teste do
+usuário: motions do primeiro bloco saíam parecendo karaokê toda vez.
+
+Causa raiz: o brief de `bold-pop` (preset padrão pro primeiro bloco
+avatar via `effectDetector` rule 12) recomendava
+`caption-kinetic-slam` — que é literalmente "full-screen single word
+alternating directions". Gemini estava cumprindo a recomendação ao pé
+da letra.
+
+Auditoria contra a doc oficial do Hyperframes
+(github.com/heygen-com/hyperframes/tree/main/skills/hyperframes)
+confirmou: captions devem ser **tom-detected**, não preset-locked.
+A `references/captions.md` traz tabela canônica
+Hype/Corporate/Tutorial/Storytelling/Social → font weight + animação
++ cor + size, tudo hand-rolled.
+
+Correção em 2 commits cirúrgicos (sem revert dos 3 commits da onda):
+
+1. **`ada6060` — prompt corretivo**: remove o sub-bloco CAPTIONS dos
+   4 slugs no SYSTEM_PROMPT; adiciona seção `CAPTIONS —
+   TONE-DETECTED` com a tabela oficial; adiciona seção
+   `AI DESIGN TELLS` (lista de defaults preguiçosos a evitar);
+   estende STORYBOARD CONTINUITY com regra CAPTION VARIETY
+   (Block 0 emphasis / middle cycle by index modulo 4 / final
+   understated).
+2. **(este commit) — cirurgia nos briefs**: remove a linha
+   `captions: caption-X` de 7 Style briefs (editorial-clean,
+   bold-pop, glass-tech, soft-pastel, cinematic-dark, apple-system,
+   warm-editorial). Substitui por: "Captions: follow the
+   TONE-DETECTED table in the system prompt". `illustrated-explainer`
+   continua proibindo captions (alinhado com seu archetype
+   vocabulary). Effects que citam blocks de UI real
+   (`phone-mockup → vfx-iphone-device`, `social-cta-follow →
+   instagram-follow/etc.`, `notification-pop → macos-notification`)
+   ficam intactos — usos alinhados com a doc oficial.
+
+Resultado esperado: primeiro bloco para de defaultar pra karaokê;
+captions saem variadas, hand-rolled, respeitando o tom detectado;
+80% da onda Hyperframes original (overlays, backgrounds WebGL, UI
+mockups reais, install loop, app detector, ILLUSTRATION VOCABULARY,
+easing table) fica intacta.
+
+---
+
 ## Onda Hyperframes Catalog (shipped 2026-05-18)
 
 Reels Studio passa a citar componentes do catálogo Hyperframes diretamente

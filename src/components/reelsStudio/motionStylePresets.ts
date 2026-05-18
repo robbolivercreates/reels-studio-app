@@ -184,11 +184,11 @@ NEVER:
   • decorative dots, blobs, particles — clean é austero por definição
 
 PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • captions (only on hook/CTA beats): caption-editorial-emphasis OR caption-clip-wipe
   • atmospheric overlay: vignette + grain-overlay (opacity 0.06–0.08)
   • NO WebGL backgrounds, NO heavy vfx — clean is restraint by design
   • easing + duration: row "smooth / elegant" — power3.out / 0.5s
-  • Use hard cuts between beats; transitions-push allowed only at the 1–2 key narrative pivots`.trim(),
+  • Use hard cuts between beats; transitions-push allowed only at the 1–2 key narrative pivots
+  • Captions: follow the TONE-DETECTED table in the system prompt (Corporate/Editorial tones fit this preset); hand-rolled, not catalog`.trim(),
   },
   {
     id: 'bold-pop',
@@ -269,11 +269,11 @@ NEVER:
   • saturação < 60% em qualquer accent
 
 PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • captions (hook moments): caption-kinetic-slam (full-screen single word) OR caption-clip-wipe
   • transition between beats: transitions-push (snappy, matches the pop)
   • NO calm overlays (vignette/grain dilute the energy); shimmer-sweep allowed sparingly on hero
   • easing + duration: row "bouncy / playful" — back.out(2) / 0.4s with overshoot welcome
-  • Pop is dense and packed — use multiple .clip elements active at once on different track-indexes`.trim(),
+  • Pop is dense and packed — use multiple .clip elements active at once on different track-indexes
+  • Captions: follow the TONE-DETECTED table in the system prompt (Hype/Social tones fit this preset); hand-rolled per-word emphasis OK, but do NOT default to full-screen single-word slam on every hook`.trim(),
   },
   {
     id: 'glass-tech',
@@ -362,9 +362,9 @@ PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
     (it provides the flowing glass canvas — your CSS layer sits on top)
   • accent on the hero word: shimmer-sweep (the catalog explicitly tags it
     as "ideal for AI accents" — perfect match for glass-tech vibe)
-  • captions (only on hook/CTA): caption-editorial-emphasis OR caption-gradient-fill
   • easing + duration: row "smooth / elegant" — power2.out / 0.4–0.8s deliberate
-  • Vignette allowed at low opacity (0.10) for focal pull; NO grain (tech is clean, not analog)`.trim(),
+  • Vignette allowed at low opacity (0.10) for focal pull; NO grain (tech is clean, not analog)
+  • Captions: follow the TONE-DETECTED table in the system prompt (Corporate/Tutorial tones fit this preset); hand-rolled, not catalog`.trim(),
   },
   {
     id: 'kinetic-bold',
@@ -521,10 +521,10 @@ NEVER:
 PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
   • base background (optional): nest vfx-liquid-background at low opacity (0.4)
     — soft flowing colorful warmth, perfect for the cream/peach palette
-  • captions (only on hook): caption-gradient-fill (elastic bounce matches the warmth)
   • atmospheric overlay: grain-overlay at 0.06 (paper feel, never digital flat)
   • easing + duration: row "calm / luxury" — sine.inOut / 0.8–1.2s gentle
-  • NO shimmer-sweep (too tech), NO vignette (pastel breathes, doesn't constrict)`.trim(),
+  • NO shimmer-sweep (too tech), NO vignette (pastel breathes, doesn't constrict)
+  • Captions: follow the TONE-DETECTED table in the system prompt (Social/Storytelling tones fit this preset); hand-rolled, not catalog`.trim(),
   },
   {
     id: 'cinematic-dark',
@@ -608,9 +608,9 @@ PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
   • atmospheric overlays (REQUIRED — these ARE the preset's signature):
     grain-overlay at 0.12 AND vignette together as the top-most chrome layer
   • optional accent: shimmer-sweep on the hero word for a film-print light leak
-  • captions (sparingly): caption-clip-wipe OR caption-editorial-emphasis
   • easing + duration: row "dramatic / cinematic" — expo.out / 0.5s with patient holds
-  • Transitions between beats: NONE (cinematic dark uses long held shots; let beats breathe)`.trim(),
+  • Transitions between beats: NONE (cinematic dark uses long held shots; let beats breathe)
+  • Captions: follow the TONE-DETECTED table in the system prompt (Storytelling tone fits this preset); hand-rolled, sparing, on key beats only`.trim(),
   },
   {
     id: 'apple-system',
@@ -672,12 +672,12 @@ VOICE:
   meaning, calm it.
 
 PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
-  • captions (only on lists/CTA): caption-editorial-emphasis (primary choice)
   • optional macOS context: macos-notification block when the block talks about
     a system notification, alert, or message arriving
   • atmospheric overlay: vignette at 0.10 ONLY when block is moody; otherwise omit
   • easing + duration: row "smooth / elegant" — power3.out / 0.4–0.6s
-  • NO grain (Apple is digital-precise, not analog), NO heavy vfx, NO shimmer-sweep`.trim(),
+  • NO grain (Apple is digital-precise, not analog), NO heavy vfx, NO shimmer-sweep
+  • Captions: follow the TONE-DETECTED table in the system prompt (Corporate tone fits this preset); hand-rolled, restrained, SF-style typography`.trim(),
   },
   {
     id: 'warm-editorial',
@@ -734,10 +734,10 @@ VOICE:
 PREFERRED HYPERFRAMES COMPONENTS (cite by slug when emitting sub-comps):
   • atmospheric overlays (REQUIRED — these ARE the preset's signature):
     grain-overlay at 0.12 + vignette at 0.18 stacked together
-  • captions (sparingly, for pull-quotes): caption-editorial-emphasis OR caption-clip-wipe
   • easing + duration: row "calm / luxury" — sine.inOut / 0.6–0.8s contemplative
   • NO shimmer-sweep (too tech), NO WebGL backgrounds (paper warmth, not digital)
-  • Transitions between beats: transitions-dissolve only at narrative pivots`.trim(),
+  • Transitions between beats: transitions-dissolve only at narrative pivots
+  • Captions: follow the TONE-DETECTED table in the system prompt (Storytelling tone fits this preset); hand-rolled, serif-friendly, sparing`.trim(),
   },
   {
     id: 'illustrated-explainer',
