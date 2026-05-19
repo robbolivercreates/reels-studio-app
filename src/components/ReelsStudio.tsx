@@ -56,6 +56,7 @@ import { computeLayout, hitTest, projectToSourceTime } from './reelsStudio/timel
 import { getLayoutSlots, LAYOUT_OPTIONS, defaultAvatarZoom } from './reelsStudio/layouts';
 import type { SilencePreset, BlockLayout, BlockTransition, LanguageOption, ReelsState, HeyGenModelChoice, ToneOption, BlockKind } from './reelsStudio/types';
 import { ensureProfiles, outputLanguageToTts, type OutputLanguage } from './reelsStudio/voiceProfile';
+import { loadUserIdentity } from './reelsStudio/userIdentity';
 import { ScriptPreviewPanel, type BusyState } from './reelsStudio/ScriptPreviewPanel';
 import { regenerateBlock, generateNewBlock } from '../services/blockGeneratorService';
 import { sliceAudioByBlocks } from './reelsStudio/audioSlicer';
@@ -1118,6 +1119,12 @@ export const ReelsStudio: React.FC = () => {
           const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
           return ttsLanguageOverride ?? profile?.outputLanguage;
         })(),
+        // Creator identity from Settings — fuels social CTA preset (handle,
+        // photo, follower count). Without this, the Inspector's "Gerar motion"
+        // button generated follow cards with invented handles ignoring what
+        // the user configured. MotionPickerModal already passed it; this
+        // mirrors that path for the inline generate flow.
+        userIdentity: loadUserIdentity(),
       });
       // Cache the brand identity if this was the first motion (research happened).
       if (result.brand && !state.brandIdentity) {

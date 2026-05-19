@@ -1393,6 +1393,43 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
   ].join('\n') : '';
 
+  // ─── Dark mode override (analogue of lightModeSection, opposite direction) ──
+  // When the reel's motionColorMode is 'dark' AND the chosen preset is light
+  // (editorial-clean, illustrated-explainer, etc.), inject a mandatory override
+  // forcing a dark palette. Without this, light presets ignore the user's
+  // Dark toggle and continue emitting white backgrounds.
+  const darkModeSection = (input.motionColorMode === 'dark' && preset.bgType === 'light') ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  🌙  DARK MODE OVERRIDE — MANDATORY (user setting)`,
+    `╚══════════════════════════════════════════════════════╝`,
+    `The user switched the reel to DARK MODE. The preset "${preset.label}" is`,
+    `naturally a LIGHT preset — its CSS examples below contain light hex`,
+    `values. Those are STALE REFERENCES. You MUST translate them to the dark`,
+    `palette before emitting HTML.`,
+    ``,
+    `── HARD COLOR REMAPS (apply BEFORE writing any CSS) ──`,
+    ``,
+    `Replace these EXACT tokens whenever they appear in preset CSS examples:`,
+    `  #fff / #ffffff               → #0a0a0c  (deep dark canvas)`,
+    `  #fafafa / #fafbfc / #f5f5f5  → #0a0a0c`,
+    `  #f4f4f5 / #fef3e8            → rgba(255, 255, 255, 0.06)  (subtle card on dark bg)`,
+    `  #1a1a1a / #1d1d1f near-black text → #f5f5f5  (off-white text on dark bg)`,
+    `  rgba(0,0,0,0.04-0.12)        → rgba(255,255,255,0.06)  (hairline / divider)`,
+    `  warm grays (#86868b / #6e6e73) → #a3a3a3 (neutral grey on dark)`,
+    `  light gradients (#fafafa→#fff) → #08080c→#12121a  (subtle dark gradient)`,
+    `  black drop-shadows on text   → remove or use white at alpha 0.04 instead`,
+    ``,
+    `── EFFECTIVE PALETTE for this generation ──`,
+    `brandBackgroundColor: #0a0a0c   (deep dark canvas — never pure #000)`,
+    `brandTextColor:       #f5f5f5   (off-white, never pure #ffffff)`,
+    `brandPrimaryColor:    (keep as-is — accent + icons + bars)`,
+    `brandSecondaryColor / brandAccentColor: (keep as-is)`,
+    `Animation timing, easing, motion grammar: KEEP — only the palette shifts.`,
+    ``,
+    `The composition must feel dark, focused, cinematic — never cheerful/airy.`,
+    '',
+  ].join('\n') : '';
+
   // ─── Brand chrome (persistent visual identity layer) ──────────────────
   // After the FIRST motion of a reel, every subsequent motion gets a small
   // section instructing Gemini to include a faint always-on chrome layer on
@@ -1784,17 +1821,38 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   // copy-paste CSS). vignette is suppressed in light mode (dark vignettes on
   // white look filthy).
   const forceLight = input.motionColorMode === 'light' && preset.bgType === 'dark';
-  const atmBg = forceLight ? '#ffffff' : atm.baseBg;
-  const atmWarmAlpha = forceLight ? Math.min(atm.warmGlow.alpha, 0.06) : atm.warmGlow.alpha;
-  const atmCoolAlpha = forceLight ? Math.min(atm.coolGlow.alpha, 0.06) : atm.coolGlow.alpha;
-  const atmVignette = forceLight ? 0 : atm.vignetteIntensity;
+  // Opposite direction: user clicked dark on a light preset. Atmosphere is
+  // rewritten to a dark canvas so the snippet itself emits dark colors.
+  const forceDark = input.motionColorMode === 'dark' && preset.bgType === 'light';
+  const atmBg = forceLight
+    ? '#ffffff'
+    : forceDark
+      ? '#0a0a0c'
+      : atm.baseBg;
+  const atmWarmAlpha = forceLight
+    ? Math.min(atm.warmGlow.alpha, 0.06)
+    : forceDark
+      ? Math.max(atm.warmGlow.alpha, 0.12)
+      : atm.warmGlow.alpha;
+  const atmCoolAlpha = forceLight
+    ? Math.min(atm.coolGlow.alpha, 0.06)
+    : forceDark
+      ? Math.max(atm.coolGlow.alpha, 0.10)
+      : atm.coolGlow.alpha;
+  const atmVignette = forceLight
+    ? 0
+    : forceDark
+      ? Math.max(atm.vignetteIntensity, 0.5)
+      : atm.vignetteIntensity;
   const atmosphereSection = [
     `╔══════════════════════════════════════════════════════╗`,
     `  🎨 ATMOSPHERE — copy this snippet for track 0`,
     `╚══════════════════════════════════════════════════════╝`,
     forceLight
       ? `User is in LIGHT MODE. The atmosphere below has already been re-tinted to a bright palette — use it AS-IS, don't restore the preset's dark colours.`
-      : `Preset "${preset.label}" declares this atmosphere palette. Use it AS-IS for the track-0 background — do not invent another colour scheme. Then add the vignette pass below as a sibling (track 1, full duration).`,
+      : forceDark
+        ? `User is in DARK MODE. The atmosphere below has already been re-tinted to a dark palette — use it AS-IS, don't restore the preset's light colours.`
+        : `Preset "${preset.label}" declares this atmosphere palette. Use it AS-IS for the track-0 background — do not invent another colour scheme. Then add the vignette pass below as a sibling (track 1, full duration).`,
     ``,
     `Track 0 — atmosphere base:`,
     `  <div id="atmos-bg" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="0"`,
@@ -1813,7 +1871,9 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       : '',
     forceLight
       ? `The base bg color is "${atmBg}" (white). ALL other elements should harmonise with a bright canvas: dark text (#1d1d1f), subtle shadows tinted with the brand accent, NEVER pure black shadows on white. NO dark vignettes.`
-      : `The base bg color "${atmBg}" is the canvas. ALL other elements should harmonise with it: text colours that contrast 7:1+ against it, accents that sit warmly on it, shadows tinted to its hue (warm bg → warm shadows, NEVER black shadows on cream).`,
+      : forceDark
+        ? `The base bg color is "${atmBg}" (deep dark). ALL other elements should harmonise with a dark canvas: off-white text (#f5f5f5, never pure #fff), accents that pop against dark, vignette welcomed. NO bright white backgrounds.`
+        : `The base bg color "${atmBg}" is the canvas. ALL other elements should harmonise with it: text colours that contrast 7:1+ against it, accents that sit warmly on it, shadows tinted to its hue (warm bg → warm shadows, NEVER black shadows on cream).`,
     ``,
   ].filter(Boolean).join('\n');
 
@@ -1884,6 +1944,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
     reelContextSection,
     lightModeSection,
+    darkModeSection,
     brandSection,
     brandChromeSection,
     atmosphereSection,
@@ -1956,6 +2017,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '· preset=', preset.id,
     '· presetBgType=', preset.bgType,
     '· forceLight=', forceLight,
+    '· forceDark=', forceDark,
     '· lightModeSection chars=', lightModeSection.length,
     '· atmosphere baseBg=', atmBg,
     '· appMention=', appMention?.app ?? 'none',
