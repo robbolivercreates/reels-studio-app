@@ -58,8 +58,15 @@ const dimensionsFor = (aspect: '9:16' | '16:9' | '1:1' | 'carousel', quality: 'h
   return { width: big, height: big };
 };
 
+// Targeting "visually lossless for 1080p/30fps high-motion content" on `high`
+// and a comfortable margin above starvation on `lite`. The previous 5.5/2.5
+// were producing visible blocking + edge-smear during fast motion graphics
+// (window expansions, rapid pans, click feedback animations). Industry guidance
+// for 1080p H.264 high-motion: 8-10 Mbps. 10 Mbps is generous but the export
+// is a one-shot operation, not a stream — file size remains manageable
+// (~50MB for a 40s Reel).
 const bitrateFor = (quality: 'high' | 'lite'): number =>
-  quality === 'high' ? 5_500_000 : 2_500_000;
+  quality === 'high' ? 10_000_000 : 5_000_000;
 
 type BlendMode =
   | 'source-over'   // normal composite
@@ -112,9 +119,19 @@ const FADE_FRAMES = 6; // ~200ms at 30fps — modern Reels/TikTok pacing
  * TAIL_PADDING_SEC=0.18s with a small safety margin, matching FADE_FRAMES.
  */
 const OVERRUN_FADE = 6 / FRAMERATE;
-const overrunAlpha = (localT: number, clipDur: number | undefined): number => {
-  if (!clipDur || !Number.isFinite(clipDur) || clipDur <= 0) return 1;
-  const slack = clipDur - localT;
+const overrunAlpha = (localT: number, clipDur: number | undefined, fallbackDur?: number): number => {
+  // Pick the most restrictive valid duration: measured (if known) vs.
+  // block-intended (fallback). Falling back to "no fade" when measured is
+  // missing produced a hard freeze on the last frame whenever a video had
+  // not been profiled yet (most commonly: video assets the renderer doesn't
+  // own, and clips whose preload timeout fired). Always pass a fallback at
+  // the callsite so we still get a graceful 200ms fade-out instead.
+  const candidates: number[] = [];
+  if (clipDur !== undefined && Number.isFinite(clipDur) && clipDur > 0) candidates.push(clipDur);
+  if (fallbackDur !== undefined && Number.isFinite(fallbackDur) && fallbackDur > 0) candidates.push(fallbackDur);
+  if (candidates.length === 0) return 1;
+  const dur = Math.min(...candidates);
+  const slack = dur - localT;
   if (slack >= OVERRUN_FADE) return 1;
   if (slack <= 0) return 0;
   return slack / OVERRUN_FADE;
@@ -158,7 +175,9 @@ const composeForBlock = (
   // timeouts; the fade is done via motionAlpha (overrunAlpha) so the visible
   // last-frame freeze becomes a fade-out instead of a hard hold.
   const motionSeek = Math.min(localT, motionDur - 0.05);
-  const motionAlpha = overrunAlpha(localT, motionDur);
+  // motionDur is already resolved (measured ?? configured ?? 4), but pass it
+  // as fallback too so the helper never enters its "no fade" branch.
+  const motionAlpha = overrunAlpha(localT, motionDur, motionDur);
 
   // Motion-replace: full frame.
   if (motionLayer === 'replace' && motionUrl) {
@@ -178,7 +197,11 @@ const composeForBlock = (
     const clip = block.kind === 'avatar' ? inputs.avatarClips[block.id] : null;
     if (clip?.videoUrl) {
       const zoom = block.avatarZoom ?? 1;
-      const alpha = overrunAlpha(localT, clipDurations.get(clip.videoUrl));
+      // Fallback: block's intended avatar visibility (avatarVisibleSec or full
+      // block). Without this fallback, an unmeasured avatar clip would skip
+      // the overrun fade entirely and freeze on its last frame at boundary.
+      const avatarFallbackDur = block.avatarVisibleSec ?? (block.end - block.start);
+      const alpha = overrunAlpha(localT, clipDurations.get(clip.videoUrl), avatarFallbackDur);
       if (alpha > 0) {
         layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: avatarBox, zoom, offsetY: block.avatarOffsetY, alpha });
       }
@@ -201,7 +224,8 @@ const composeForBlock = (
       const clip = inputs.avatarClips[block.id];
       if (clip?.videoUrl) {
         const zoom = block.avatarZoom ?? defaultAvatarZoom(inputs.aspect, block.layout);
-        const alpha = overrunAlpha(localT, clipDurations.get(clip.videoUrl));
+        const avatarFallbackDur = block.avatarVisibleSec ?? (block.end - block.start);
+        const alpha = overrunAlpha(localT, clipDurations.get(clip.videoUrl), avatarFallbackDur);
         if (alpha > 0) {
           layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: slots.avatar, zoom, offsetY: block.avatarOffsetY, alpha });
         }
@@ -290,8 +314,18 @@ const frameAtProjectTime = (
     if (incomingTransition === 'fade' || (!prevBlock && true)) {
       fadeAlpha = Math.min(fadeAlpha, localFrame / FADE_FRAMES);
     } else if (prevBlock && prevSlot && incomingTransition !== 'cut') {
-      const prevLocalT = (prevSlot.sourceEnd - prevSlot.sourceStart) - ((FADE_FRAMES - localFrame) / FRAMERATE);
-      const prev = composeForBlock(prevBlock, Math.max(0, prevLocalT), inputs, motionUrls, clipDurations);
+      const prevDur = prevSlot.sourceEnd - prevSlot.sourceStart;
+      const prevLocalT = prevDur - ((FADE_FRAMES - localFrame) / FRAMERATE);
+      // When the previous block is shorter than the fade window, prevLocalT
+      // goes negative. Clamping to 0 (the old behavior) drew the FIRST frame
+      // of the previous block during the fade-in — a visible time-jump back
+      // to the start of that clip. Falling through to "last available frame"
+      // instead keeps the transition reading as a clean cross-dissolve from
+      // the end of prev into the start of own.
+      const safePrevLocalT = prevLocalT < 0
+        ? Math.max(0, prevDur - 1 / FRAMERATE)
+        : prevLocalT;
+      const prev = composeForBlock(prevBlock, safePrevLocalT, inputs, motionUrls, clipDurations);
       const t = localFrame / FADE_FRAMES; // 0..1 (going from prev → current)
       applyTransition(incomingTransition, prev.layers, layers, decorations, t, 'in');
     }
@@ -900,6 +934,12 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
 
     const microsPerFrame = 1_000_000 / FRAMERATE;
     let lastThumbAt = 0;
+    // Track which block is being rendered so we can scope the seek-timeout
+    // counter per block. Without this, three slow seeks across a transition
+    // (3 layers × ~400ms each in a single fade frame) flag the video as
+    // permanently broken for the rest of the export — even if the video is
+    // perfectly fine and the slowness was just temporary I/O pressure.
+    let lastFrameBlockId: string | null = null;
 
     for (let frame = 0; frame < totalFrames; frame++) {
       if (cancelled) {
@@ -911,6 +951,24 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       const outT = frame / FRAMERATE;
       const projT = mapOutToProject(outT);
       const composition = frameAtProjectTime(projT, inputs, layout, motionUrls, clipDurations);
+
+      // Reset seek-timeout counters on block boundaries. This keeps the
+      // "broken video" classification scoped to a single block — a video
+      // that timed-out once at a transition is given a fresh budget at the
+      // next block instead of being silently skipped for the whole export.
+      // `brokenVideoUrls` is intentionally NOT cleared: a video that hits 3
+      // consecutive timeouts within a single block is genuinely broken.
+      const frameHit = hitTest(layout, projT);
+      const currentBlockId = frameHit.kind === 'block' ? frameHit.slot.blockId : null;
+      // Capture the boundary BEFORE we mutate lastFrameBlockId so the encoder
+      // below can force a keyframe on the first frame of every new block. An
+      // I-frame at the boundary keeps the bloco-trocou transition crisp instead
+      // of relying on P-frame motion compensation across a large visual delta.
+      const blockBoundaryNow = currentBlockId !== lastFrameBlockId;
+      if (blockBoundaryNow) {
+        for (const v of videoMap.values()) timeoutCount.delete(v);
+        lastFrameBlockId = currentBlockId;
+      }
 
       drawBlackFrame();
 
@@ -925,9 +983,9 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       // less surprising than burning in the spoken sentence.
       const decodedLayers = composition.layers.filter(l => videoMap.has(l.videoUrl));
       if (decodedLayers.length === 0) {
-        const hit = hitTest(layout, projT);
-        if (hit.kind === 'block') {
-          const block = inputs.blocks.find(b => b.id === hit.slot.blockId);
+        // Reuse the hitTest computed above for block-boundary tracking.
+        if (frameHit.kind === 'block') {
+          const block = inputs.blocks.find(b => b.id === frameHit.slot.blockId);
           if (block) {
             const hasMotion = !!block.motion?.videoPath;
             const hasAvatarClip = block.kind === 'avatar' && !!inputs.avatarClips[block.id]?.videoUrl;
@@ -944,6 +1002,20 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         const v = videoMap.get(lyr.videoUrl);
         if (!v) continue;
         await seekVideo(v, lyr.sourceSeek, cancelSignal);
+        // Defensive verification: the `seeked` event can fire before the
+        // decoder has actually presented the new frame for `drawImage` to
+        // read (race common with heavy H.264 streams — e.g. when motion
+        // contains an embedded asset video). If currentTime didn't land
+        // within 1.5 frames of the target, retry the seek once. After this
+        // single retry we draw regardless; a 1-frame mismatch is preferable
+        // to freezing the previous frame.
+        if (!brokenVideoUrls.has(v)) {
+          const target = Math.max(0, Math.min(v.duration || lyr.sourceSeek, lyr.sourceSeek));
+          if (Math.abs(v.currentTime - target) > 0.05) {
+            console.warn('[render] currentTime mismatch after seek · target=', target.toFixed(3), '· cur=', v.currentTime.toFixed(3), '· retrying');
+            await seekVideo(v, lyr.sourceSeek, cancelSignal);
+          }
+        }
         drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0, lyr.offsetX ?? 0, lyr.filter, lyr.rgbSplit);
       }
 
@@ -976,7 +1048,18 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       while (videoEncoder.encodeQueueSize > 4) {
         await new Promise(r => setTimeout(r, 1));
       }
-      videoEncoder.encode(videoFrame, { keyFrame: frame % (FRAMERATE * 2) === 0 });
+      // Force keyframe on the first frame of each block in addition to the
+      // 2s heartbeat. Without this, the first frame of a new block depends on
+      // P-frame motion compensation from the previous block's last frame — a
+      // big visual delta that the encoder approximates poorly at any bitrate,
+      // showing up as a "piscada" / smeared frame in the user-perceived
+      // transition. Cost: ~1 extra I-frame per block (~5-10% byte overhead
+      // local to that frame, amortized over the whole clip).
+      const forceKeyframe = blockBoundaryNow || frame % (FRAMERATE * 2) === 0;
+      if (blockBoundaryNow) {
+        console.log('[render] keyframe forced at block boundary · frame=', frame, '· blockId=', currentBlockId);
+      }
+      videoEncoder.encode(videoFrame, { keyFrame: forceKeyframe });
       videoFrame.close();
 
       // Throttle thumbnail updates to ~5fps to avoid main-thread thrash.

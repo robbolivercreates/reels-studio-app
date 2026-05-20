@@ -32,6 +32,15 @@ export interface GenerationOutput {
   text: string;
   htmlBody: string;
   rationale: string;
+  /**
+   * Which model actually produced this output. For the Gemini path, it's the
+   * MotionModelId that succeeded in the fallback chain (may differ from the
+   * user's selected model if the first attempt errored). For the claude-ui
+   * native preset, it's the sentinel 'native-claude-ui'. Surfaced on the
+   * MotionConfig and in the picker badge so users can audit per-motion which
+   * engine made it, independent of the currently-selected preference.
+   */
+  modelUsed: string;
 }
 
 const getApiKey = (): string => {
@@ -78,6 +87,24 @@ const getModelCandidates = (): readonly MotionModelId[] => {
 export const getActiveMotionModel = (): { id: MotionModelId; label: string } => {
   const id = readSelectedMotionModel();
   return { id, label: MOTION_MODEL_LABELS[id] };
+};
+
+/**
+ * Resolves a `modelUsed` string (saved on `MotionConfig.modelUsed`) into a
+ * short, user-facing label for the badge.
+ * - One of the 3 Gemini IDs → its short label ("3.5 Flash", "3.1 Pro", "3 Flash")
+ * - 'native-claude-ui'      → "Nativo" (preset hand-built, no LLM call)
+ * - 'claude-passthrough'    → "Claude" (HTML produced by the agent chat)
+ * - undefined / unknown     → "—"  (legacy motions generated before tracking landed)
+ */
+export const getMotionModelLabel = (modelUsed?: string): string => {
+  if (!modelUsed) return '—';
+  if (modelUsed === 'native-claude-ui') return 'Nativo';
+  if (modelUsed === 'claude-passthrough') return 'Claude';
+  if ((SUPPORTED_MOTION_MODELS as readonly string[]).includes(modelUsed)) {
+    return MOTION_MODEL_LABELS[modelUsed as MotionModelId];
+  }
+  return modelUsed;
 };
 
 const RESPONSE_SCHEMA = {
@@ -1239,6 +1266,7 @@ ${lineGsap}
     text: cmd,
     htmlBody,
     rationale: `Preset claude-ui nativo: interface escura do Claude com digitação e resposta progressiva (${resp.lines.length} linhas).`,
+    modelUsed: 'native-claude-ui',
   };
 }
 
@@ -2075,6 +2103,29 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         parsed = JSON.parse(match[0]);
       }
       if (parsed.htmlBody && parsed.htmlBody.length > 100) {
+        // Sanitize self-closing media tags before HyperFrames lints the HTML.
+        // Gemini 3.5 Flash in particular emits `<video src="..." />` which the
+        // browser parses as an open tag that swallows everything after it as
+        // invisible fallback content. HyperFrames' lint catches this and aborts
+        // the render with [self_closing_media_tag]. We rewrite to explicit
+        // `<video ...></video>` so the composition renders. Same trick for
+        // <img>, <audio>, <source>, <track>. Idempotent: tags already in
+        // explicit form are left alone (regex requires the `/>` suffix).
+        const beforeLen = parsed.htmlBody.length;
+        parsed.htmlBody = parsed.htmlBody.replace(
+          /<(video|audio|source|track|img)([^>]*?)\s*\/>/gi,
+          (_match, tag, attrs) => {
+            // <img> and <source>/<track> are void elements; leaving them
+            // self-closed is technically OK in HTML5, but HyperFrames'
+            // strict lint rejects all of them uniformly. Emit explicit
+            // closing tags for everything to stay on the safe side.
+            return `<${tag}${attrs}></${tag}>`;
+          },
+        );
+        if (parsed.htmlBody.length !== beforeLen) {
+          console.log('[motion/sanitize] rewrote self-closing media tags · model=', model, '· delta=', parsed.htmlBody.length - beforeLen);
+        }
+
         // Debug: see if Gemini honoured the light-mode override. We count
         // the suspicious dark hex literals that *should* have been remapped.
         if (input.motionColorMode === 'light' && preset.bgType === 'dark') {
@@ -2092,6 +2143,10 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           text: (parsed.text ?? input.text ?? '').trim(),
           htmlBody: parsed.htmlBody,
           rationale: (parsed.rationale ?? '').trim(),
+          // Record which model in the fallback chain produced this output.
+          // Used by the picker badge to show what actually ran, not just the
+          // current preference (which the user can change between generations).
+          modelUsed: model,
           // Return the brand so the caller can cache it on the reel state and
           // pass it back via existingBrand on subsequent motions.
           brand: brand ?? undefined,

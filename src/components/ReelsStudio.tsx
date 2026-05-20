@@ -23,6 +23,7 @@ import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
 import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
 import { createMotionFromBlock, isMotionAssetsStale, type MotionConfig } from './reelsStudio/motionLibrary';
+import { requiresAssetAttachment } from './reelsStudio/motionGating';
 import { STYLE_PRESETS, type StylePresetId, findStylePreset } from './reelsStudio/motionStylePresets';
 import { isHidden } from './reelsStudio/presetCategory';
 import { generateMotionHtml, buildFullHtmlDoc } from '../services/motionService';
@@ -69,6 +70,15 @@ import { CreationWizard } from './reelsStudio/CreationWizard';
 import { useTheme } from './reelsStudio/useTheme';
 
 const PRICE_PER_AVATAR_SECOND = 0.058;
+// Per-model pricing (used by the single-block regen confirm modal so the user
+// sees an accurate cost estimate when choosing a different HeyGen model for
+// the retry). Mirrors PRICE_PER_SECOND in GenerateAvatarsModal.tsx — if those
+// numbers ever change, update both.
+const PRICE_PER_SECOND_BY_MODEL: Record<HeyGenModelChoice, number> = {
+  avatar3: 0.030,
+  avatar4: 0.058,
+  avatar5: 0.058,
+};
 const PRICE_AUDIO = 0.04;
 
 const formatTime = (s: number): string => {
@@ -141,6 +151,30 @@ export const ReelsStudio: React.FC = () => {
   const [motionPickerBlockId, setMotionPickerBlockId] = useState<string | null>(null);
   const [assetPickerBlockId, setAssetPickerBlockId] = useState<string | null>(null);
   const [motionBusyByBlock, setMotionBusyByBlock] = useState<Record<string, string>>({});
+  // Batch progress for the "Gerar todos os motions" run. Surfaced on the
+  // toolbar button so the user sees "Bloco 2 de 5" advancing instead of
+  // wondering whether the loop hung after the first block finished. Each
+  // motion takes ~30s (Gemini + HyperFrames render); without this, the
+  // gap between blocks looks like the batch died.
+  const [batchMotionProgress, setBatchMotionProgress] = useState<{
+    current: number;
+    total: number;
+    blockId: string;
+  } | null>(null);
+  // How many files live in the project's assets folder on disk. Used to gate
+  // motion generation: when this is > 0, every block must have an explicitly
+  // attached asset before generation runs. Refreshed on mount, after the
+  // AssetPicker closes (user may have added files), and after "Abrir pasta
+  // de assets" (Finder window opened — user often drops files in then).
+  const [projectAssetsCount, setProjectAssetsCount] = useState(0);
+  // Confirmation gate for per-block avatar regeneration. The timeline button
+  // sets this id; clicking "Regerar" in the modal kicks off runRegenerateOneClip
+  // and clears it. Costs HeyGen credits — worth a confirm step.
+  const [regenAvatarBlockId, setRegenAvatarBlockId] = useState<string | null>(null);
+  // Per-regen model override. Initialized lazily to state.avatarModel when the
+  // modal opens (see the JSX block). Allows trying a different HeyGen version
+  // for a single problematic block without changing the project-wide default.
+  const [regenAvatarModel, setRegenAvatarModel] = useState<HeyGenModelChoice | null>(null);
   const [avatarsModalOpen, setAvatarsModalOpen] = useState(false);
   const [generatingClips, setGeneratingClips] = useState(false);
   // When the user clicks "Gerar clipes" but silence is detected and not
@@ -966,6 +1000,29 @@ export const ReelsStudio: React.FC = () => {
 
   const avatarBlocks = useMemo(() => blocks.filter(b => b.kind === 'avatar' && b.end > b.start), [blocks]);
 
+  // ─── Project assets count ──────────────────────────────────────────────
+  // Refreshes the cached count of files in the project's assets folder. Called
+  // on mount, after AssetPickerModal closes, and after the user opens the
+  // Finder window via "Abrir pasta de assets" (they often drop files in then).
+  // The count gates motion generation — see requiresAssetAttachment().
+  const refreshProjectAssetsCount = useCallback(async () => {
+    try {
+      const raw = await invoke<Array<{ name: string; path: string }>>(
+        'list_project_assets',
+        { projectName: state.projectName },
+      );
+      setProjectAssetsCount(raw.length);
+    } catch {
+      // Folder may not exist yet — treat as empty so the gate doesn't lock.
+      setProjectAssetsCount(0);
+    }
+  }, [state.projectName]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    void refreshProjectAssetsCount();
+  }, [hydrated, refreshProjectAssetsCount]);
+
   // ─── Motion auto-pipeline ──────────────────────────────────────────────
   // Apple-style one-shot: click "Motion" on a block → Gemini decides everything,
   // generates HTML, HyperFrames renders MP4, the result lands on the timeline.
@@ -974,6 +1031,16 @@ export const ReelsStudio: React.FC = () => {
     const block = blocks.find(b => b.id === blockId);
     if (!block) return;
     if (motionBusyByBlock[blockId]) return; // already running
+    // Gate: if the project folder has assets but this block hasn't picked one,
+    // refuse to generate. Sending the universal asset list confuses Gemini
+    // (picks one at random, references it with paths the runtime can't
+    // resolve, HyperFrames lint then aborts the render). Pop the AssetPicker
+    // so the user can attach one before retrying.
+    if (requiresAssetAttachment(block, projectAssetsCount)) {
+      console.warn('[motion] block', blockId, 'blocked — project has assets but block has none attached');
+      setAssetPickerBlockId(blockId);
+      return;
+    }
     const setBusy = (msg: string | null) => setMotionBusyByBlock(prev => {
       const next = { ...prev };
       if (msg === null) delete next[blockId]; else next[blockId] = msg;
@@ -1144,6 +1211,7 @@ export const ReelsStudio: React.FC = () => {
         status: 'rendering',
         generatedAt: Date.now(),
         canvasAspect,
+        modelUsed: result.modelUsed,
         // Snapshot the carousel at generation time — used later to detect
         // staleness (user added/removed/reordered/swapped an asset).
         assetSnapshots: hasPinnedAssets
@@ -1181,7 +1249,7 @@ export const ReelsStudio: React.FC = () => {
       setBusy(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [blocks, dispatch, motionBusyByBlock, state.motionColorMode, state.motionEnergy, state.appTheme, state.brandIdentity, state.projectName, state.audio.words, slotById, aspect, ttsLanguageOverride]);
+  }, [blocks, dispatch, motionBusyByBlock, projectAssetsCount, state.motionColorMode, state.motionEnergy, state.appTheme, state.brandIdentity, state.projectName, state.audio.words, slotById, aspect, ttsLanguageOverride]);
 
   const handleRenderMotionMp4 = useCallback(async (blockId: string) => {
     const block = blocks.find(b => b.id === blockId);
@@ -1259,40 +1327,63 @@ export const ReelsStudio: React.FC = () => {
       let ok = 0;
       let failed = 0;
       const failedIds: string[] = [];
+      const total = ids.length;
+      console.log('[batch-motion] starting', total, 'blocks:', ids);
 
-      for (const id of ids) {
-        try {
-          // Each block processed in sequence. handleAutoMotion / handle-
-          // RenderMotionMp4 read `blocks` from their own captured closure,
-          // which is fine because they're dispatched-via-reducer and the
-          // reducer state at the time of the next iteration reflects the
-          // previous one's dispatch.
-          const target = blocks.find(b => b.id === id);
-          if (!target) {
+      try {
+        for (let i = 0; i < ids.length; i++) {
+          const id = ids[i];
+          setBatchMotionProgress({ current: i + 1, total, blockId: id });
+          console.log('[batch-motion] iteration', i + 1, '/', total, '· blockId=', id);
+          try {
+            // Each block processed in sequence. handleAutoMotion / handle-
+            // RenderMotionMp4 read `blocks` from their own captured closure,
+            // which is fine because they're dispatched-via-reducer and the
+            // reducer state at the time of the next iteration reflects the
+            // previous one's dispatch.
+            const target = blocks.find(b => b.id === id);
+            if (!target) {
+              console.warn('[batch-motion] block', id, 'not found in snapshot blocks — skipping');
+              failed += 1;
+              failedIds.push(id);
+              continue;
+            }
+            if (motionBusyByBlock[id]) {
+              // Already in-flight (e.g. user clicked Motion on this block
+              // manually right before the batch). Skip silently.
+              console.log('[batch-motion] block', id, 'already busy — skipping');
+              continue;
+            }
+            if (requiresAssetAttachment(target, projectAssetsCount)) {
+              // The project folder has assets but this block has none pinned.
+              // Skip rather than fail — failing would mark it as errored in the
+              // UI, but the actual fix is "user must attach an asset", which
+              // isn't really a failure of THIS batch run.
+              console.log('[batch-motion] block', id, 'skipped — no asset attached (project has', projectAssetsCount, 'assets)');
+              continue;
+            }
+            if (target.motion?.html) {
+              await handleRenderMotionMp4(id);
+            } else {
+              await handleAutoMotion(id);
+            }
+            ok += 1;
+            console.log('[batch-motion] iteration', i + 1, '/', total, '· blockId=', id, '· DONE');
+          } catch (e) {
+            console.warn('[batch-motion] iteration', i + 1, '/', total, '· blockId=', id, '· FAILED:', e);
             failed += 1;
             failedIds.push(id);
-            continue;
           }
-          if (motionBusyByBlock[id]) {
-            // Already in-flight (e.g. user clicked Motion on this block
-            // manually right before the batch). Skip silently.
-            continue;
-          }
-          if (target.motion?.html) {
-            await handleRenderMotionMp4(id);
-          } else {
-            await handleAutoMotion(id);
-          }
-          ok += 1;
-        } catch (e) {
-          console.warn('[batch-motion] block', id, 'failed:', e);
-          failed += 1;
-          failedIds.push(id);
         }
+      } finally {
+        // Always clear — even if the whole loop throws (it shouldn't, but
+        // we don't want the progress chip stuck on screen).
+        setBatchMotionProgress(null);
+        console.log('[batch-motion] finished · ok=', ok, '· failed=', failed, '· failedIds=', failedIds);
       }
       return { ok, failed, failedIds };
     },
-    [blocks, motionBusyByBlock, handleAutoMotion, handleRenderMotionMp4],
+    [blocks, motionBusyByBlock, projectAssetsCount, handleAutoMotion, handleRenderMotionMp4],
   );
 
   // Core clip generation. Reads the *current* audio.url (which is the
@@ -1354,6 +1445,64 @@ export const ReelsStudio: React.FC = () => {
       setGeneratingClips(false);
     }
   }, [audio.url, avatarBlocks, state.aspect]);
+
+  // Re-runs the full slice + HeyGen call for a SINGLE avatar block. Mirrors
+  // runGenerateClips but limits the ranges and the API call to one id. Used
+  // by the per-block "regenerate" button in the timeline so the user can fix
+  // a bad lipsync without paying for the entire reel again.
+  const runRegenerateOneClip = useCallback(async (blockId: string, modelOverride?: HeyGenModelChoice): Promise<void> => {
+    const url = audio.url;
+    if (!url) return;
+    const target = avatarBlocks.find(b => b.id === blockId);
+    if (!target) return;
+    if (!state.selectedPhotoId) {
+      alert('Selecione uma foto de avatar antes de regenerar.');
+      return;
+    }
+    const photos = loadAvatarPhotos();
+    const photo = photos.find(p => p.id === state.selectedPhotoId);
+    if (!photo) {
+      alert('Foto não encontrada. Selecione novamente.');
+      return;
+    }
+    setGeneratingClips(true);
+    try {
+      const audioResp = await fetch(url);
+      const audioBlob = await audioResp.blob();
+      const blockLen = target.end - target.start;
+      const visible = Math.min(target.avatarVisibleSec ?? blockLen, blockLen);
+      const slices = await sliceAudioByBlocks(audioBlob, [
+        { blockId: target.id, start: target.start, end: target.start + visible },
+      ]);
+      const photosById = new Map(photos.map(p => [p.id, p]));
+      const talkingPhotoIdByBlock: Record<string, string> = {};
+      if (target.avatarPhotoId) {
+        const override = photosById.get(target.avatarPhotoId);
+        if (override) talkingPhotoIdByBlock[target.id] = override.talkingPhotoId;
+      }
+      const effectiveModel = modelOverride ?? state.avatarModel;
+      await generateAvatarClips(slices, {
+        talkingPhotoId: photo.talkingPhotoId,
+        talkingPhotoIdByBlock,
+        model: effectiveModel,
+        aspect: state.aspect,
+        onClipUpdate: (id, update) => {
+          dispatch({
+            type: 'clip-update',
+            blockId: id,
+            status: update.status,
+            message: 'message' in update ? update.message : undefined,
+            videoUrl: 'videoUrl' in update ? update.videoUrl : undefined,
+            error: 'error' in update ? update.error : undefined,
+          });
+        },
+      });
+    } catch (err) {
+      console.error('[reels] regenerate-one failed:', err);
+    } finally {
+      setGeneratingClips(false);
+    }
+  }, [audio.url, avatarBlocks, state.aspect, state.selectedPhotoId, state.avatarModel]);
 
   // Entry point from the GenerateAvatarsModal. Decides whether to
   // surface the anti-dessync warning before kicking off the real
@@ -2169,6 +2318,30 @@ export const ReelsStudio: React.FC = () => {
     if (!playing && !v.paused) v.pause();
   }, [playhead, playing, currentBlock, currentClip, slotById]);
 
+  // When the src of the preview <video> swaps (block changed to a different
+  // avatar clip), the browser starts loading the new file but currentTime
+  // resets to 0. The sync effect above sets currentTime, but it only sticks
+  // once metadata is available. Force a re-seek on loadedmetadata so the
+  // first paint of the new clip is at the right offset — mirrors the pattern
+  // in MotionLayerOverlay.tsx and prevents a brief "jump to 0" between
+  // blocks. Same precedence as the sync effect: trust slotById + playhead.
+  useEffect(() => {
+    const v = previewVideoRef.current;
+    if (!v || !currentBlock || currentBlock.kind !== 'avatar') return;
+    if (!currentClip?.videoUrl) return;
+    const slot = slotById.get(currentBlock.id);
+    if (!slot) return;
+    const target = Math.max(0, playhead - slot.projectStart);
+    const onMeta = () => {
+      try { v.currentTime = target; } catch { /* ignore */ }
+      if (playing) v.play().catch(() => {});
+    };
+    v.addEventListener('loadedmetadata', onMeta);
+    return () => v.removeEventListener('loadedmetadata', onMeta);
+    // playhead/playing intentionally omitted — only re-attach on src change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentClip?.videoUrl, currentBlock?.id]);
+
   const statusPill = (() => {
     if (audio.status === 'generating') return { dotColor: 'warn' as const, pulse: true, text: 'Gerando áudio...' };
     if (audio.status === 'ready') {
@@ -2714,7 +2887,16 @@ export const ReelsStudio: React.FC = () => {
               <>
                 <video
                   ref={previewVideoRef}
-                  key={`${currentBlock?.id}-${currentClip.videoUrl}`}
+                  // Stable key — never remount the element when blocks change.
+                  // The original key={`${blockId}-${videoUrl}`} caused React to
+                  // unmount the previous <video> and mount a fresh one on every
+                  // block boundary, producing a 1-2 frame gap where the
+                  // element didn't exist while `blockFadeOpacity` was still
+                  // interpolating (= the visible "piscada"). Now the element
+                  // persists across blocks; only the `src` attribute swaps,
+                  // which triggers a load + the existing useEffect re-syncs
+                  // currentTime. Mirrors the pattern used by MotionLayerOverlay.
+                  key="avatar-preview-video"
                   src={currentClip.videoUrl}
                   muted
                   playsInline
@@ -3472,6 +3654,7 @@ export const ReelsStudio: React.FC = () => {
                     onSetStylePreset: (preset: StylePresetId | undefined) => dispatch({ type: 'set-block-style-preset-cascade', id: b.id, preset }),
                     onDuplicate: () => dispatch({ type: 'duplicate-block', id: b.id }),
                     motionBusyMessage: motionBusyByBlock[b.id] ?? null,
+                    requiresAsset: requiresAssetAttachment(b, projectAssetsCount),
                     carouselRole: undefined,
                   });
 
@@ -3634,6 +3817,7 @@ export const ReelsStudio: React.FC = () => {
             brandHasLogo={brandHasLogo}
             brandHasIdentity={brandHasIdentity}
             audioWordCount={selAudioWordCount}
+            requiresAsset={selBlock ? requiresAssetAttachment(selBlock, projectAssetsCount) : false}
           />
         );
       })()}
@@ -3668,7 +3852,16 @@ export const ReelsStudio: React.FC = () => {
               const motionBusy = motionBusyCount > 0;
               // Blocks that have no motion at all yet — candidates for "Gerar todos".
               const blocksWithoutMotion = blocks.filter(b => !b.motion?.html);
-              const generateAllCount = blocksWithoutMotion.length;
+              // Of those, the ones that ALSO pass the asset-attachment gate.
+              // A block waiting on an asset isn't a real candidate — running it
+              // would just no-op in handleAutoMotion. We exclude it from both
+              // the count and the batch list so the button never lies about
+              // what's about to happen.
+              const blocksReadyForMotion = blocksWithoutMotion.filter(
+                b => !requiresAssetAttachment(b, projectAssetsCount),
+              );
+              const blocksAwaitingAsset = blocksWithoutMotion.length - blocksReadyForMotion.length;
+              const generateAllCount = blocksReadyForMotion.length;
 
               const items: Array<{
                 key: string;
@@ -3729,20 +3922,26 @@ export const ReelsStudio: React.FC = () => {
                 {
                   key: 'generate-all-motions',
                   icon: '⚡',
-                  label: motionBusy
-                    ? `Gerando motions… (${motionBusyCount})`
-                    : `Gerar todos os motions (${generateAllCount})`,
+                  label: batchMotionProgress
+                    ? `Gerando motion ${batchMotionProgress.current} de ${batchMotionProgress.total}…`
+                    : motionBusy
+                      ? `Gerando motions… (${motionBusyCount})`
+                      : blocksAwaitingAsset > 0
+                        ? `Gerar motions (${generateAllCount}) · ${blocksAwaitingAsset} aguardam asset`
+                        : `Gerar todos os motions (${generateAllCount})`,
                   hint: 'Gemini cria HTML + HyperFrames renderiza MP4 pra cada bloco sem motion',
                   onClick: () => {
                     if (motionBusy || generateAllCount === 0) return;
                     console.log('[generate-all-motions] iniciando em', generateAllCount, 'blocos');
-                    void handleAutoMotionMany(blocksWithoutMotion.map(b => b.id));
+                    void handleAutoMotionMany(blocksReadyForMotion.map(b => b.id));
                   },
                   disabled: motionBusy || generateAllCount === 0,
                   disabledHint: motionBusy
                     ? 'Geração em andamento…'
                     : generateAllCount === 0
-                    ? 'Todos os blocos já têm motion'
+                    ? blocksAwaitingAsset > 0
+                      ? `${blocksAwaitingAsset} bloco(s) aguardam asset — anexe um a cada bloco antes de gerar`
+                      : 'Todos os blocos já têm motion'
                     : undefined,
                   visible: blocks.length > 0,
                 },
@@ -3771,7 +3970,14 @@ export const ReelsStudio: React.FC = () => {
                   icon: '🖼',
                   label: 'Abrir pasta de assets',
                   hint: 'Coloque imagens e clipes pra usar no projeto',
-                  onClick: () => invoke('reveal_assets_dir', { projectName: state.projectName }),
+                  onClick: async () => {
+                    await invoke('reveal_assets_dir', { projectName: state.projectName });
+                    // Refresh count — user likely opened the folder to add files.
+                    // The recheck happens when AssetPickerModal closes too, but
+                    // many users drop files via Finder without ever opening the
+                    // modal. Without this, the gate is stale until next mount.
+                    void refreshProjectAssetsCount();
+                  },
                 },
                 {
                   key: 'suggest-roles',
@@ -4203,8 +4409,47 @@ export const ReelsStudio: React.FC = () => {
                   {isGenerating && (
                     <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent" style={{ animation: 'shimmer 1.6s linear infinite' }}></div>
                   )}
-                  {isReady && clip?.videoUrl && (
+                  {!isGenerating && (
                     <div className="absolute top-1 right-1 flex items-center gap-1 z-20" onPointerDown={(e) => e.stopPropagation()}>
+                      {/* Generate/Regen button — same affordance, label changes
+                          per state. When no clip exists yet the user clicks
+                          this to make one; when ready, to redo a bad take;
+                          when errored, to retry after fixing whatever. The
+                          color shifts (sparkle violet for first gen → amber
+                          loop arrows for regen/retry) to telegraph intent. */}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setRegenAvatarBlockId(b.id); }}
+                        disabled={generatingClips}
+                        className={`w-5 h-5 rounded-full backdrop-blur flex items-center justify-center text-white transition-all hover:scale-110 disabled:opacity-40 disabled:cursor-not-allowed ${
+                          isReady
+                            ? 'bg-amber-500/80 hover:bg-amber-500'
+                            : isError
+                              ? 'bg-red-500/80 hover:bg-red-500'
+                              : 'bg-violet-500/80 hover:bg-violet-500'
+                        }`}
+                        title={
+                          isReady
+                            ? 'Regerar este avatar (HeyGen)'
+                            : isError
+                              ? 'Tentar gerar de novo'
+                              : 'Gerar avatar deste bloco'
+                        }
+                      >
+                        {isReady ? (
+                          <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        ) : (
+                          // Sparkle/wand for first-time generation. Visually
+                          // distinct from the loop-arrow regen icon so the
+                          // user immediately reads "fresh generate" vs "redo".
+                          <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 3v4M3 5h4M6 17v4m-2-2h4m5-16l2.286 6.857L21 12l-5.714 2.143L13 21l-2.286-6.857L5 12l5.714-2.143L13 3z" />
+                          </svg>
+                        )}
+                      </button>
+                  {isReady && clip?.videoUrl && (
+                    <>
                       <button
                         onClick={(e) => { e.stopPropagation(); window.open(clip.videoUrl, '_blank', 'noopener,noreferrer'); }}
                         className="w-5 h-5 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur flex items-center justify-center text-white transition-all hover:scale-110"
@@ -4240,6 +4485,8 @@ export const ReelsStudio: React.FC = () => {
                       >
                         <svg className="w-2.5 h-2.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                       </button>
+                    </>
+                  )}
                     </div>
                   )}
                   {b.dirty && <div className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-200" title="Texto alterado · regenere o áudio"></div>}
@@ -4620,7 +4867,12 @@ export const ReelsStudio: React.FC = () => {
           <AssetPickerModal
             projectName={state.projectName}
             currentAssets={block.attachedAssets ?? []}
-            onClose={() => setAssetPickerBlockId(null)}
+            onClose={() => {
+              setAssetPickerBlockId(null);
+              // User may have dropped files into the folder via Finder while
+              // the modal was open. Refresh so the gate updates immediately.
+              void refreshProjectAssetsCount();
+            }}
             onAdd={(asset) => dispatch({ type: 'add-block-asset', id: block.id, asset })}
             onRemove={(index) => dispatch({ type: 'remove-block-asset', id: block.id, index })}
             onReorder={(fromIndex, toIndex) => dispatch({ type: 'reorder-block-assets', id: block.id, fromIndex, toIndex })}
@@ -5110,6 +5362,100 @@ export const ReelsStudio: React.FC = () => {
         </div>
       )}
 
+      {regenAvatarBlockId && (() => {
+        const target = avatarBlocks.find(b => b.id === regenAvatarBlockId);
+        if (!target) {
+          // Selection went stale (block removed?). Clear and skip.
+          setRegenAvatarBlockId(null);
+          return null;
+        }
+        const visible = Math.min(target.avatarVisibleSec ?? (target.end - target.start), target.end - target.start);
+        const effectiveModel = regenAvatarModel ?? state.avatarModel;
+        const existingClip = state.avatarClips[target.id];
+        const isFirstGen = !existingClip || existingClip.status === 'idle' || existingClip.status === 'error' || !existingClip.videoUrl;
+        const modalTitle = isFirstGen ? 'Gerar avatar deste bloco?' : 'Regerar avatar deste bloco?';
+        const modalSubtitle = isFirstGen
+          ? 'Um novo clipe HeyGen será criado pra este bloco.'
+          : 'O clipe atual será substituído pelo novo.';
+        // Per-second pricing varies by model — calculate from the same table
+        // the global GenerateAvatarsModal uses so the user sees consistent
+        // numbers between the two flows.
+        const pricePerSec = PRICE_PER_SECOND_BY_MODEL[effectiveModel] ?? PRICE_PER_AVATAR_SECOND;
+        const cost = visible * pricePerSec;
+        const modelOptions: { id: HeyGenModelChoice; label: string; hint: string }[] = [
+          { id: 'avatar5', label: 'Avatar V',  hint: 'mais realista' },
+          { id: 'avatar4', label: 'Avatar 4', hint: 'recomendado' },
+          { id: 'avatar3', label: 'Avatar 3', hint: 'mais barato' },
+        ];
+        return (
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[100] p-6">
+            <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-md w-full overflow-hidden">
+              <div className="px-6 pt-6 pb-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <div className="w-10 h-10 rounded-full flex items-center justify-center bg-amber-500/15 border border-amber-500/30">
+                    <svg className="w-5 h-5 text-amber-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                  </div>
+                  <div>
+                    <div className="text-base font-semibold text-zinc-100">{modalTitle}</div>
+                    <div className="text-xs text-zinc-500">{modalSubtitle}</div>
+                  </div>
+                </div>
+                <div className="text-[12.5px] text-zinc-400 leading-relaxed mb-4">
+                  <div className="mb-2">"{target.text.slice(0, 80)}{target.text.length > 80 ? '…' : ''}"</div>
+                </div>
+                <div className="mb-2 text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">Modelo</div>
+                <div className="flex items-center gap-1.5 mb-3">
+                  {modelOptions.map(opt => {
+                    const active = effectiveModel === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        onClick={() => setRegenAvatarModel(opt.id)}
+                        className={`flex-1 px-2 py-2 rounded-lg border text-[11px] font-semibold transition-all ${
+                          active
+                            ? 'bg-amber-500/15 border-amber-400/50 text-amber-100'
+                            : 'bg-black/20 border-white/10 text-zinc-400 hover:border-white/20'
+                        }`}
+                      >
+                        <div>{opt.label}</div>
+                        <div className="text-[9px] font-normal opacity-70 mt-0.5">{opt.hint}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="text-[11px] text-zinc-500">
+                  Duração visível: <span className="text-zinc-300">{visible.toFixed(1)}s</span> · Custo estimado: <span className="text-zinc-300">${cost.toFixed(2)}</span>
+                </div>
+              </div>
+              <div className="px-6 py-4 bg-black/30 border-t border-white/5 flex gap-2">
+                <button
+                  onClick={() => { setRegenAvatarBlockId(null); setRegenAvatarModel(null); }}
+                  disabled={generatingClips}
+                  className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors disabled:opacity-40"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={async () => {
+                    const id = regenAvatarBlockId;
+                    const model = regenAvatarModel ?? state.avatarModel;
+                    setRegenAvatarBlockId(null);
+                    setRegenAvatarModel(null);
+                    if (id) await runRegenerateOneClip(id, model);
+                  }}
+                  disabled={generatingClips}
+                  className="flex-1 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-xs font-semibold text-zinc-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {generatingClips ? 'Gerando…' : isFirstGen ? 'Gerar' : 'Regerar'}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {reviewTakeId && (() => {
         const take = state.takes.find(t => t.id === reviewTakeId);
         if (!take) return null;
@@ -5308,6 +5654,9 @@ interface BlockCardProps {
   onSetStylePreset: (preset: StylePresetId | undefined) => void;
   onDuplicate: () => void;
   motionBusyMessage: string | null;
+  /** True when the project's asset folder has files but this block has none
+   *  attached — motion generation is blocked until the user attaches one. */
+  requiresAsset: boolean;
   /** Shown as a badge in the card header when in carousel mode. */
   carouselRole?: 'cover' | 'body' | 'cta';
 }
@@ -5717,7 +6066,7 @@ const BlockAvatarPhotoPicker: React.FC<{
   );
 };
 
-const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, onSetAvatarPhoto, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, carouselRole }) => {
+const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, onSetAvatarPhoto, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, requiresAsset, carouselRole }) => {
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // Note: Onda 1 moved all "advanced" controls (zoom, offset, layout, photo,
@@ -5785,46 +6134,55 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         const isError = m?.status === 'error';
 
         const noun = (n: number) => n === 0 ? 'asset' : n === 1 ? 'asset' : 'carrossel';
+        // requiresAsset takes precedence over the normal label tree: even if
+        // the motion has an old html (e.g. user removed the previously-attached
+        // asset), we want the user to fix the gap before regenerating.
         const motionLabel = isBusy
           ? motionBusyMessage
-          : isStale
-            ? (snapCount === 0 && currentAssets.length > 0
-                ? `Regenerar com ${noun(currentAssets.length)}`
-                : snapCount > 0 && currentAssets.length === 0
-                  ? 'Regenerar sem asset'
-                  : 'Regenerar')
-            : isReady
-              ? 'Motion ✓'
-              : isError
-                ? 'Motion ⚠'
-                : currentAssets.length > 0
-                  ? `Gerar com ${noun(currentAssets.length)}`
-                  : 'Gerar motion';
+          : requiresAsset
+            ? '📎 Anexar asset primeiro'
+            : isStale
+              ? (snapCount === 0 && currentAssets.length > 0
+                  ? `Regenerar com ${noun(currentAssets.length)}`
+                  : snapCount > 0 && currentAssets.length === 0
+                    ? 'Regenerar sem asset'
+                    : 'Regenerar')
+              : isReady
+                ? 'Motion ✓'
+                : isError
+                  ? 'Motion ⚠'
+                  : currentAssets.length > 0
+                    ? `Gerar com ${noun(currentAssets.length)}`
+                    : 'Gerar motion';
 
         const motionCls = isBusy
           ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-200 cursor-progress'
-          : isStale
-            ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
-            : isReady
-              ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
-              : isError
-                ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
-                : 'bg-fuchsia-500/[0.08] border-fuchsia-400/30 text-fuchsia-200 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/50';
+          : requiresAsset
+            ? 'bg-amber-500/15 border-amber-400/50 text-amber-100 hover:bg-amber-500/25'
+            : isStale
+              ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
+              : isReady
+                ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
+                : isError
+                  ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
+                  : 'bg-fuchsia-500/[0.08] border-fuchsia-400/30 text-fuchsia-200 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/50';
 
         const describeList = (items: { name: string }[]): string =>
           items.length === 0 ? '(nenhum)' : items.map(x => `"${x.name}"`).join(' → ');
         const snapItems = m?.assetSnapshots ?? (m?.assetSnapshot ? [m.assetSnapshot] : []);
         const motionTooltip = isBusy
           ? motionBusyMessage ?? 'Gerando…'
-          : isStale
-            ? `Motion foi gerado com ${describeList(snapItems)}. Atual: ${describeList(currentAssets)}. Clique pra regerar.`
-            : isReady
-              ? `Editar motion · ${m?.intent ?? ''}`
-              : isError
-                ? `Erro: ${m?.errorMessage ?? ''}. Clique pra tentar de novo.`
-                : currentAssets.length > 0
-                  ? `Gerar motion com ${currentAssets.length} ${currentAssets.length === 1 ? 'asset' : 'slides em sequência'}`
-                  : 'Gerar motion automaticamente (Gemini decide)';
+          : requiresAsset
+            ? 'A pasta do projeto tem assets, mas este bloco não tem nenhum anexado. Anexe um antes de gerar.'
+            : isStale
+              ? `Motion foi gerado com ${describeList(snapItems)}. Atual: ${describeList(currentAssets)}. Clique pra regerar.`
+              : isReady
+                ? `Editar motion · ${m?.intent ?? ''}`
+                : isError
+                  ? `Erro: ${m?.errorMessage ?? ''}. Clique pra tentar de novo.`
+                  : currentAssets.length > 0
+                    ? `Gerar motion com ${currentAssets.length} ${currentAssets.length === 1 ? 'asset' : 'slides em sequência'}`
+                    : 'Gerar motion automaticamente (Gemini decide)';
 
         const assetCount = currentAssets.length;
         const assetLabel = assetCount === 0
@@ -5865,7 +6223,15 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
 
               <div className="flex items-center gap-1 flex-1 min-w-0 justify-end">
                 <button
-                  onClick={(e) => { e.stopPropagation(); if (!isBusy) onOpenMotion(); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isBusy) return;
+                    // When blocked by missing asset, redirect the click to the
+                    // AssetPicker so the user can fix it in one tap instead of
+                    // hunting for the right button.
+                    if (requiresAsset) { onOpenAssetPicker(); return; }
+                    onOpenMotion();
+                  }}
                   disabled={isBusy}
                   className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors flex items-center gap-1.5 min-w-0 ${motionCls}`}
                   title={motionTooltip}

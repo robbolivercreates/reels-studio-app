@@ -1073,6 +1073,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                   createdAt: existing?.createdAt ?? now,
                   videoPath: undefined,
                   canvasAspect: existing?.canvasAspect ?? '9:16',
+                  modelUsed: 'claude-passthrough',
                 };
                 dispatch({ type: 'set-block-motion', id, motion });
                 console.log(
@@ -1184,6 +1185,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                         createdAt: existing?.createdAt ?? now,
                         videoPath: undefined,
                         canvasAspect: existing?.canvasAspect ?? '9:16',
+                        modelUsed: 'claude-passthrough',
                       };
                       dispatch({ type: 'set-block-motion', id: bid, motion });
                       claudeBlocks.push(bid);

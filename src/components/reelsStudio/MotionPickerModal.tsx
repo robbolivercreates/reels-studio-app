@@ -13,7 +13,7 @@ import {
   type MotionLayer,
   newMotionId,
 } from './motionLibrary';
-import { generateMotionHtml, buildFullHtmlDoc, getActiveMotionModel } from '../../services/motionService';
+import { generateMotionHtml, buildFullHtmlDoc, getActiveMotionModel, getMotionModelLabel } from '../../services/motionService';
 import type { ScriptBlock, MotionColorMode, AppTheme } from './types';
 import { useTheme } from './useTheme';
 import { loadUserIdentity } from './userIdentity';
@@ -174,6 +174,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
         status: 'ready',
         generatedAt: Date.now(),
         errorMessage: undefined,
+        modelUsed: result.modelUsed,
       };
       setMotion(generated);
 
@@ -264,6 +265,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
         status: 'ready',
         generatedAt: Date.now(),
         errorMessage: undefined,
+        modelUsed: result.modelUsed,
       }));
       setPreviewMode('live');
       setBusy(null);
@@ -380,15 +382,28 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
           <div>
             <div className="flex items-center gap-2 mb-1">
               <div className="text-base font-semibold" style={{ color: tokens.text.primary }}>Motion graphic</div>
-              {/* Active-model badge — read on every modal render. localStorage
-                  is the source of truth; user changes it in Settings. */}
-              <span
-                className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
-                style={{ backgroundColor: 'rgba(124, 58, 237, 0.15)', color: 'rgb(196, 181, 253)', border: '1px solid rgba(124, 58, 237, 0.35)' }}
-                title="Modelo de IA usado para gerar este motion. Mude em Configurações."
-              >
-                {getActiveMotionModel().label}
-              </span>
+              {/* Model badge — when the motion already has HTML, show the model
+                  that *actually generated it* (motion.modelUsed). Otherwise show
+                  the currently-selected model, which is what will run on the next
+                  Gerar. Two-mode design so users can audit what made an existing
+                  motion vs. preview what's about to run. */}
+              {motion.html ? (
+                <span
+                  className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
+                  style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.35)' }}
+                  title={`Este motion foi gerado com ${getMotionModelLabel(motion.modelUsed)}. Mude o modelo padrão em Configurações.`}
+                >
+                  {getMotionModelLabel(motion.modelUsed)}
+                </span>
+              ) : (
+                <span
+                  className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
+                  style={{ backgroundColor: 'rgba(124, 58, 237, 0.15)', color: 'rgb(196, 181, 253)', border: '1px solid rgba(124, 58, 237, 0.35)' }}
+                  title="Modelo de IA que será usado ao gerar. Mude em Configurações."
+                >
+                  {getActiveMotionModel().label}
+                </span>
+              )}
             </div>
             <div className="text-xs max-w-xl truncate" style={{ color: tokens.text.tertiary }}>"{block.text}"</div>
           </div>

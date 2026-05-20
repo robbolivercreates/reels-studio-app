@@ -104,6 +104,14 @@ export interface MotionConfig {
     path: string;
     name: string;
   };
+  /**
+   * Which model produced the current `html`. Captured at generation time so the
+   * UI badge can show "made with 3.5 Flash" / "Pro" / "Claude" independently of
+   * the currently-selected motion model preference. Resolved via
+   * `getMotionModelLabel(modelUsed)` for display. Undefined on motions
+   * generated before this field was introduced — badge falls back to "—".
+   */
+  modelUsed?: string;
 }
 
 export const newMotionId = (): string =>

@@ -25,6 +25,7 @@ import { loadAvatarPhotos } from './avatarPhotosStore';
 import { STYLE_PRESETS, findStylePreset, type StylePresetId, type StylePreset } from './motionStylePresets';
 import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS, isHidden } from './presetCategory';
 import { detectEffect } from './effectDetector';
+import { getActiveMotionModel, getMotionModelLabel } from '../../services/motionService';
 
 // Local mm:ss.cc formatter — formatTime in ReelsStudio.tsx isn't exported.
 const formatTime = (sec: number): string => {
@@ -75,6 +76,10 @@ interface Props {
   brandHasIdentity?: boolean;
   /** Word-count from state.audio.words for the selected block — feeds karaoke detection. */
   audioWordCount?: number;
+  /** True when the project's asset folder has files but the selected block has
+   *  none attached. Inspector blocks the Gerar/Regerar action and surfaces an
+   *  amber "anexe um asset" status so the user fixes the gap before retrying. */
+  requiresAsset?: boolean;
 }
 
 const STORAGE_KEY_TAB = 'reels.inspector.tab';
@@ -293,6 +298,7 @@ export const InspectorPanel: React.FC<Props> = ({
   brandHasLogo,
   brandHasIdentity,
   audioWordCount,
+  requiresAsset = false,
 }) => {
   const tokens = getTheme(appTheme ?? 'dark');
   const isLight = (appTheme ?? 'dark') === 'light';
@@ -374,6 +380,9 @@ export const InspectorPanel: React.FC<Props> = ({
     });
     const motionLabel = (() => {
       if (isBusy) return motionBusy;
+      // requiresAsset takes precedence over the normal status tree — the user
+      // needs to fix the missing attachment before any other status matters.
+      if (requiresAsset) return '⚠ Anexe um asset antes de gerar';
       if (!block.motion) return 'Sem motion · pronto para gerar';
       if (motionStatus === 'ready') return 'Motion pronto';
       if (motionStatus === 'generating') return 'Gerando…';
@@ -459,8 +468,36 @@ export const InspectorPanel: React.FC<Props> = ({
                 })}
               </div>
             ) : (
-              <div className="text-[10px] font-medium truncate" style={{ color: tokens.text.tertiary }}>
-                {motionLabel}
+              <div className="flex items-center gap-2 min-w-0">
+                <div
+                  className="text-[10px] font-medium truncate"
+                  style={{ color: requiresAsset ? 'rgb(252, 211, 77)' : tokens.text.tertiary }}
+                >
+                  {motionLabel}
+                </div>
+                {/* Model badge — green when this block's motion was already
+                    generated (shows which model made it), violet otherwise
+                    (shows the active preference that will run on Gerar).
+                    Mirrors the same two-mode design used in MotionPickerModal,
+                    so users can see the model from either entry point without
+                    opening the modal. */}
+                {block.motion?.html ? (
+                  <span
+                    className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
+                    style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.35)' }}
+                    title={`Este motion foi gerado com ${getMotionModelLabel(block.motion.modelUsed)}. Mude o modelo padrão em Configurações.`}
+                  >
+                    {getMotionModelLabel(block.motion.modelUsed)}
+                  </span>
+                ) : (
+                  <span
+                    className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
+                    style={{ backgroundColor: 'rgba(124, 58, 237, 0.15)', color: 'rgb(196, 181, 253)', border: '1px solid rgba(124, 58, 237, 0.35)' }}
+                    title="Modelo que será usado ao gerar. Mude em Configurações."
+                  >
+                    {getActiveMotionModel().label}
+                  </span>
+                )}
               </div>
             )}
           </div>
@@ -655,22 +692,42 @@ export const InspectorPanel: React.FC<Props> = ({
         {/* ─── Zone 3 (bottom): action buttons (pinned to floor) ──────── */}
         {/* Primary: regenerate inline (no modal). Secondary: open advanced editor. */}
         <div className="shrink-0 flex items-center gap-2">
-          <button
-            onClick={onGenerateMotion}
-            disabled={isBusy}
-            className="px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
-            style={{
-              backgroundColor: '#A78BFA',
-              color: '#fff',
-              border: 'none',
-              cursor: isBusy ? 'wait' : 'pointer',
-              opacity: isBusy ? 0.6 : 1,
-            }}
-          >
-            {isBusy
-              ? '⏳ Gerando…'
-              : block.motion?.status === 'ready' ? '↻ Regerar motion' : '✨ Gerar motion'}
-          </button>
+          {requiresAsset ? (
+            // Replace the generate button with an amber "Anexar asset" CTA when
+            // the gate is closed. Clicking it opens the AssetPickerModal — the
+            // same shortcut the card chip uses. Without this, the user sees the
+            // status strip warning but has no obvious next step.
+            <button
+              onClick={onOpenAssetPicker}
+              className="px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
+              style={{
+                backgroundColor: 'rgb(245, 158, 11)',
+                color: '#1a1a1a',
+                border: 'none',
+                cursor: 'pointer',
+              }}
+              title="A pasta do projeto tem assets, mas este bloco não tem nenhum anexado. Clique para anexar."
+            >
+              📎 Anexar asset
+            </button>
+          ) : (
+            <button
+              onClick={onGenerateMotion}
+              disabled={isBusy}
+              className="px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
+              style={{
+                backgroundColor: '#A78BFA',
+                color: '#fff',
+                border: 'none',
+                cursor: isBusy ? 'wait' : 'pointer',
+                opacity: isBusy ? 0.6 : 1,
+              }}
+            >
+              {isBusy
+                ? '⏳ Gerando…'
+                : block.motion?.status === 'ready' ? '↻ Regerar motion' : '✨ Gerar motion'}
+            </button>
+          )}
           <button
             onClick={onOpenMotion}
             disabled={isBusy}
