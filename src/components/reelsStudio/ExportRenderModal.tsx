@@ -197,6 +197,38 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       }
       if (!audioBlob) throw new Error('Áudio não encontrado. Gere o áudio novamente (o blob expirou).');
 
+      // Trust the actual audioBlob length over state.audio.duration.
+      // state.audio.duration reflects the timeline at the moment of the last
+      // silence-cut apply; the blob we just selected can be the UNCUT
+      // original (when the cut session was dropped above as stale). If we
+      // size the render to state.audio.duration but mux a longer blob,
+      // ffmpeg's `-shortest` lops off the audio tail — the user loses the
+      // last seconds of speech. Measuring the blob once via a hidden
+      // <audio> element avoids that whole class of drift.
+      const measuredAudioDuration: number | null = await (async () => {
+        const url = URL.createObjectURL(audioBlob);
+        try {
+          return await new Promise<number>((resolve, reject) => {
+            const a = new Audio();
+            a.preload = 'metadata';
+            const cleanup = () => { a.src = ''; };
+            a.onloadedmetadata = () => {
+              const d = a.duration;
+              cleanup();
+              if (!Number.isFinite(d) || d <= 0) reject(new Error('duration not finite'));
+              else resolve(d);
+            };
+            a.onerror = () => { cleanup(); reject(new Error('audio metadata load failed')); };
+            a.src = url;
+          });
+        } catch (e) {
+          console.warn('[export] could not measure audioBlob duration, will fall back to state.audio.duration:', e);
+          return null;
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      })();
+
       // When using the cut session, also use its remapped blocks/duration
       // — the React state may not have caught up yet. But: if the cut
       // session's blocks are STALE (e.g. user resplit AFTER the cut and
@@ -259,7 +291,16 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
           };
         });
       })();
-      let effectiveDuration = (!cutSession || dropSession) ? state.audio.duration : cutSession.duration;
+      // Prefer the measured blob duration over state.audio.duration when
+      // available — see the comment block above the measurement helper.
+      const fallbackStateDuration = (!cutSession || dropSession) ? state.audio.duration : cutSession.duration;
+      let effectiveDuration = measuredAudioDuration ?? fallbackStateDuration;
+      if (measuredAudioDuration && Math.abs(measuredAudioDuration - fallbackStateDuration) > 0.1) {
+        console.warn(
+          '[export] audioBlob duration ≠ state.audio.duration — using measured blob duration to prevent ffmpeg -shortest from truncating audio.',
+          { measuredSec: measuredAudioDuration.toFixed(3), stateSec: fallbackStateDuration.toFixed(3) },
+        );
+      }
       // Sync drift fix: the renderer derives the project duration from the
       // sum of block start/end (`layout.totalDuration`) when that's > 0,
       // overriding `inputs.duration`. When the audio is shorter than that
