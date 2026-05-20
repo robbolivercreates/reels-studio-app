@@ -707,3 +707,191 @@ puro). Depois do fix, cross-dissolve real entre own@(1-t) e next@(t).
 
 Bugs A e B se reforçavam: o motion congelava nos últimos 400ms, e a
 cross-dissolve que deveria mascarar o freeze nunca rodava.
+
+---
+
+## Sessão 2026-05-20 — Model tracking, asset gate, single-block regen, frame-pacing
+
+Commit: `f5e3e14`. Reúne 8 mudanças relacionadas em torno do fluxo
+motion/avatar + qualidade do export.
+
+### Problema 1 — Não dava pra saber qual modelo Gemini gerou o motion
+
+O badge no MotionPickerModal mostrava o modelo **selecionado agora**, não
+o que efetivamente foi usado pra gerar cada motion. Se o usuário trocasse
+de 3.5 Flash → 3.1 Pro nas Configurações depois de gerar, abrir um motion
+antigo mostrava "3.1 Pro" no badge — mas ele tinha sido feito com 3.5
+Flash. Engana.
+
+**Fix:** `GenerationOutput.modelUsed` + `MotionConfig.modelUsed` (string).
+Loop do Gemini grava qual modelo do fallback chain efetivamente funcionou
+(`motionService.ts`). Native `claude-ui` preset retorna `'native-claude-ui'`.
+Helper `getMotionModelLabel(id?)` traduz pra label curto (3.5 Flash / 3.1
+Pro / 3 Flash / Nativo / Claude / —). UI:
+- Badge **verde** no MotionPickerModal quando `motion.html` existe (modelo
+  que gerou); **violeta** quando ainda não gerado (modelo que vai rodar).
+- Mesma lógica no InspectorPanel, ao lado do status strip.
+
+### Problema 2 — `<video />` self-closing quebrando HyperFrames
+
+Gemini 3.5 Flash emite `<video src="..." />` com self-closing — HTML
+inválido. HyperFrames lint catches com `[self_closing_media_tag]` e
+aborta o render. Cada motion gerado falhava no exit code 1 do CLI.
+
+**Fix:** Sanitizador em `motionService.ts:2105-2125`. Regex substitui
+`<(video|audio|source|track|img) ... />` por `<tag ...></tag>` antes do
+`htmlBody` ser retornado. Log `[motion/sanitize] rewrote self-closing
+media tags` quando aciona. Idempotente — tags já com closing explícito
+passam intactas.
+
+### Problema 3 — Gemini se confundia com assets quando bloco não tinha pinned
+
+Quando a pasta de assets do projeto tinha vídeos/imagens mas o bloco
+atual não tinha nenhum anexado, a code path em `ReelsStudio.tsx:1072`
+caía em `universalAssetsToSend` (lista do projeto inteiro). Gemini então
+"escolhia" um asset random pra ilustrar o bloco — gerava HTML referenciando
+paths que o runtime não resolvia, ou aleatorizava qual asset usar por
+bloco. HyperFrames falhava com erros diversos.
+
+**Decisão do usuário:** "Sempre que tiver assets numa pasta, precisam ser
+associados a cada bloco antes de gerar."
+
+**Fix:** Novo helper `src/components/reelsStudio/motionGating.ts` com
+`requiresAssetAttachment(block, projectAssetsCount)`. Gate aplicado em:
+1. `handleAutoMotion` — early return + abre `AssetPickerModal` no bloco
+2. `handleAutoMotionMany` — skip com log `[batch-motion] block X skipped`
+3. Chip do card — vira amber **"📎 Anexar asset primeiro"**; click abre
+   AssetPicker em vez de gerar
+4. InspectorPanel — status strip mostra **"⚠ Anexe um asset antes de
+   gerar"** em amber; botão Gerar vira amber "📎 Anexar asset"
+5. Toolbar batch — `Gerar motions (N) · M aguardam asset` quando há
+   bloqueados; só roda os prontos
+
+Estado novo: `projectAssetsCount` em `ReelsStudio.tsx` refresca on mount,
+on AssetPicker close, on `reveal_assets_dir` click.
+
+### Problema 4 — "Gerar todos os motions" parecia travar no primeiro
+
+Cada motion leva ~30s (Gemini + HyperFrames). Com 5 blocos, batch demora
+~2.5min. O label do botão mostrava só "Gerando motions… (1)" o tempo
+todo (motionBusyCount = sempre 1 num loop sequencial), então o usuário
+achava que parou.
+
+**Fix:** `batchMotionProgress` state em `ReelsStudio.tsx` rastreia
+`{current, total, blockId}`. Atualizado a cada iteração no loop. Label do
+botão vira **"Gerando motion 2 de 5…"**. `try/finally` garante limpeza
+do chip mesmo se o loop crashar. Logs verbosos `[batch-motion] iteration
+X/Y · blockId=… · DONE/FAILED` pra debug.
+
+### Problema 5 — Avatar ruim num bloco específico exigia regerar tudo
+
+Não dava pra regenerar só 1 bloco de avatar. Quando o lipsync saía
+torto num bloco, o jeito era voltar pro modal global "Gerar clipes de
+avatar" e rodar tudo de novo (custo HeyGen).
+
+**Fix:** Botão no canto direito de cada bloco avatar na timeline:
+- **Violeta + ✨** quando não tem clipe (gerar primeira vez)
+- **Âmbar + ↻** quando ready (regerar)
+- **Vermelho + ✨** quando erro (retry)
+
+Click abre modal de confirmação com:
+- Trecho do texto do bloco
+- 3 pílulas de seletor de modelo (Avatar V / 4 / 3) com preço por segundo
+- Custo total estimado (atualiza ao vivo conforme troca modelo)
+- Cancelar / Gerar|Regerar
+
+Implementação: `runRegenerateOneClip(blockId, modelOverride?)` em
+`ReelsStudio.tsx` — mesmo pipeline do `runGenerateClips` (slice + HeyGen),
+mas com `ranges` e `talkingPhotoIdByBlock` limitados ao bloco alvo.
+`generatingClips` flag global previne conflito com batch run.
+
+### Problema 6 — Frame-skip e dessincronia no export MP4
+
+Sintomas verificados via ffprobe + extração de frames sequenciais:
+- 30fps CFR está correto (`r_frame_rate == avg_frame_rate == 30/1`)
+- Bitrate real do export era **2.17 Mbps** (lite mode 2.5 Mbps target)
+- Frames sendo capturados corretamente, mas motion graphics em movimento
+  rápido (expansão de janela, traçado de gráfico, click animations)
+  sofriam smearing/blocking — **bitrate starvation** clássico
+
+Mais 4 issues estruturais no `mp4Renderer.ts`:
+
+**A — `overrunAlpha` retornava 1 quando `clipDur` era undefined.** Clips
+não-medidos congelavam no último frame sem fade. Para avatar clips que
+não estavam em `clipDurations` (preload race), o resultado era freeze.
+Fix: helper aceita `fallbackDur` (intent do bloco: `avatarVisibleSec` ou
+duração) e pega o `Math.min(measured, fallback)` quando ambos válidos.
+
+**B — Seek race no draw loop.** `seekVideo` resolvia no `seeked` event
+mas o decoder podia ainda não ter apresentado o frame para o canvas.
+`drawImage` lia frame stale. Fix: verificação pós-seek — se
+`|currentTime - target| > 0.05s` (1.5 frame), re-seek 1x. Log
+`[render] currentTime mismatch after seek`.
+
+**C — `brokenVideoUrls` era global no export.** 3 timeouts seguidos
+marcavam o vídeo como permanentemente quebrado pelo resto do export.
+Em transições multi-layer com 4 vídeos × 400ms timeout, fácil de
+explodir sem o vídeo estar realmente broken. Fix: reset do `timeoutCount`
+em cada boundary de bloco (rastreado via `lastFrameBlockId`).
+`brokenVideoUrls` continua válido — só pega quem timeoutar 3x no MESMO
+bloco.
+
+**D — `prevLocalT` negativo clampava em 0.** Em transições onde o bloco
+anterior é curto demais (< 0.2s), `prevLocalT` ia negativo. `Math.max(0,
+prevLocalT)` mostrava o **primeiro** frame do bloco anterior (= jump
+visual para trás no tempo). Fix: quando negativo, usar `prevDur -
+1/FRAMERATE` (último frame disponível).
+
+### Problema 7 — "Piscada" entre blocos no preview
+
+Sintoma visível tanto no preview quanto no MP4. Causa raiz:
+
+`ReelsStudio.tsx:2866` declarava o avatar `<video>` com **key dinâmico**:
+```tsx
+<video key={`${currentBlock?.id}-${currentClip.videoUrl}`} ... />
+```
+
+Toda mudança de bloco → key muda → React **unmounta** o `<video>` antigo
+e **mounta** um novo. Por 1-2 frames o elemento não existe. `blockFadeOpacity`
+ainda interpola opacidade nessa janela vazia → flash preto visível.
+
+Comparativo: `MotionLayerOverlay` usa key estável e só troca `src` +
+force-seek — não tem o problema.
+
+**Fix:** `key="avatar-preview-video"` (estático). Adicionado useEffect
+que reage a `currentClip?.videoUrl` change — em `loadedmetadata` do
+novo src, força `currentTime = target` (mesmo padrão de
+`MotionLayerOverlay.tsx:84-92`). O elemento DOM persiste; só `src`
+troca. `blockFadeOpacity` (200ms) continua produzindo o cross-fade
+suave.
+
+### Problema 8 — Export degradava motion graphics em movimento rápido
+
+Confirmado via ffprobe + observação visual em 3 timestamps específicos
+(00:02-09 expansão de janela, 00:11-14 traçado de gráfico, 00:29-33
+clicks). Bitrate starvation produzia "teleporte" e edges borradas.
+
+**Fix:**
+1. `bitrateFor` em `mp4Renderer.ts:61` — `high` 5.5 → **10 Mbps**, `lite`
+   2.5 → **5 Mbps**. 10 Mbps é o industry standard pra 1080p H.264 com
+   motion graphics; visualmente lossless. ~50 MB para um Reel de 40s.
+2. Keyframe forçado no primeiro frame de cada bloco novo. Usa o
+   `lastFrameBlockId` já rastreado (Problema 6C). `keyFrame:
+   blockBoundaryNow || frame % (FRAMERATE * 2) === 0`. Custo: ~1 I-frame
+   extra por bloco. Benefício: primeiro frame do bloco novo é I-frame
+   limpo, sem dependência de P-frame motion comp através de mudança
+   visual grande.
+
+### Sumário dos arquivos modificados
+
+| Arquivo | Mudança |
+|---|---|
+| `src/services/motionService.ts` | `modelUsed` no GenerationOutput, helper `getMotionModelLabel`, sanitizer de self-closing tags |
+| `src/components/reelsStudio/motionLibrary.ts` | Campo `modelUsed` no MotionConfig |
+| `src/components/reelsStudio/motionGating.ts` | Helper `requiresAssetAttachment` (novo) |
+| `src/components/reelsStudio/MotionPickerModal.tsx` | Badge de modelo (verde/violeta) |
+| `src/components/reelsStudio/InspectorPanel.tsx` | Badge no status strip + gate amber quando bloqueado |
+| `src/components/agent/useAgentToolBridge.ts` | `modelUsed: 'claude-passthrough'` nos 2 paths Claude |
+| `src/components/reelsStudio/mp4Renderer.ts` | overrunAlpha fallback, seek verify, broken-counter scope, prevLocalT clamp, bitrate bump, keyframe at boundary |
+| `src/components/ReelsStudio.tsx` | `projectAssetsCount` state + gate em handleAutoMotion[Many], `batchMotionProgress`, regen button + modal, stable key avatar `<video>` |
+
