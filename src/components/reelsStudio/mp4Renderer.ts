@@ -914,18 +914,28 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
 
       drawBlackFrame();
 
-      // Empty-block fallback: when a block has no motion, no asset,
-      // no active take, and no avatar clip — e.g. a broll piece that
-      // resulted from a resplit + bookend flip but never got a motion
-      // generated — the frame would otherwise be pure black. Paint a
-      // designed text placeholder so the user gets a readable
-      // slide-style fallback in the final MP4.
+      // Empty-block fallback: only paint the text-placeholder slide when
+      // the block was genuinely never given any visual — no motion configured,
+      // no avatar clip available, no active take. Without that guard the
+      // placeholder also triggered whenever a configured motion *temporarily*
+      // produced no layers (motionAlpha=0 during the tail overrun fade, or a
+      // replace-motion that ended a beat before the block did) and rendered
+      // the block's spoken text on a dark gradient — a jarring "ghost caption"
+      // mid-reel. Showing nothing (black) for those one-or-two frames is far
+      // less surprising than burning in the spoken sentence.
       const decodedLayers = composition.layers.filter(l => videoMap.has(l.videoUrl));
       if (decodedLayers.length === 0) {
         const hit = hitTest(layout, projT);
         if (hit.kind === 'block') {
           const block = inputs.blocks.find(b => b.id === hit.slot.blockId);
-          if (block) drawTextPlaceholder(block.text);
+          if (block) {
+            const hasMotion = !!block.motion?.videoPath;
+            const hasAvatarClip = block.kind === 'avatar' && !!inputs.avatarClips[block.id]?.videoUrl;
+            const hasTake = !!inputs.activeTake;
+            if (!hasMotion && !hasAvatarClip && !hasTake) {
+              drawTextPlaceholder(block.text);
+            }
+          }
         }
       }
 
