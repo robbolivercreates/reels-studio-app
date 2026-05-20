@@ -11,6 +11,18 @@ import {
 } from '../services/minimaxService';
 import { AgentSettingsTab } from './agent/AgentSettingsTab';
 import { loadUserIdentity, saveUserIdentity, type UserIdentity } from './reelsStudio/userIdentity';
+import {
+  SUPPORTED_MOTION_MODELS,
+  DEFAULT_MOTION_MODEL,
+  MOTION_MODEL_STORAGE_KEY,
+  type MotionModelId,
+} from '../services/motionService';
+
+const MOTION_MODEL_OPTIONS: { id: MotionModelId; label: string; hint: string }[] = [
+  { id: 'gemini-3.5-flash',       label: 'Gemini 3.5 Flash',         hint: 'recomendado · stable · rápido' },
+  { id: 'gemini-3.1-pro-preview', label: 'Gemini 3.1 Pro Preview',   hint: 'qualidade máxima · preview' },
+  { id: 'gemini-3-flash-preview', label: 'Gemini 3 Flash Preview',   hint: 'mais barato · preview' },
+];
 
 export type SettingsTab = 'api-keys' | 'voice' | 'voices' | 'agents' | 'identity';
 
@@ -137,6 +149,9 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
   const [newVoiceModel, setNewVoiceModel] = useState<MinimaxCloneModel>('speech-02-hd');
   const [voiceFormError, setVoiceFormError] = useState<string | null>(null);
 
+  // Motion HTML generation model — read on open, persisted on Salvar.
+  const [motionModel, setMotionModel] = useState<MotionModelId>(DEFAULT_MOTION_MODEL);
+
   const refreshClonedVoices = () => setClonedVoices(loadClonedVoices());
 
   // Creator identity (used by social CTA motions — follow card etc).
@@ -213,6 +228,13 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
       };
     }
     setFields(next);
+    // Motion model preference.
+    const storedModel = localStorage.getItem(MOTION_MODEL_STORAGE_KEY);
+    setMotionModel(
+      storedModel && (SUPPORTED_MOTION_MODELS as readonly string[]).includes(storedModel)
+        ? (storedModel as MotionModelId)
+        : DEFAULT_MOTION_MODEL,
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialTab]);
 
@@ -236,6 +258,9 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
       if (v) localStorage.setItem(k.storageKey, v);
       else localStorage.removeItem(k.storageKey);
     }
+    // Persist motion model preference. Default is also explicitly written so
+    // a downgrade from a non-default + Salvar takes effect immediately.
+    localStorage.setItem(MOTION_MODEL_STORAGE_KEY, motionModel);
     onSave();
   };
 
@@ -579,6 +604,30 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
         ) : (
         <>
         <div className="px-6 pt-4 pb-2 flex-1 overflow-y-auto space-y-5">
+          {/* Motion model selector — sits above the API keys because it's
+              the most frequently-touched preference once keys are configured. */}
+          <div>
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+                Modelo de Motion
+              </label>
+            </div>
+            <select
+              value={motionModel}
+              onChange={e => setMotionModel(e.target.value as MotionModelId)}
+              className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors"
+            >
+              {MOTION_MODEL_OPTIONS.map(opt => (
+                <option key={opt.id} value={opt.id}>
+                  {opt.label} · {opt.hint}
+                </option>
+              ))}
+            </select>
+            <div className="mt-1.5 text-[10px] text-zinc-600">
+              Aplica nos próximos motions gerados. Em caso de erro, o app cai automaticamente nos outros modelos.
+            </div>
+          </div>
+
           {KEYS.map(k => {
             const f = fields[k.storageKey] ?? { value: '', editing: true, visible: false, validation: 'idle' as ValidationState, validationMessage: '' };
             const hasStored = !!localStorage.getItem(k.storageKey);

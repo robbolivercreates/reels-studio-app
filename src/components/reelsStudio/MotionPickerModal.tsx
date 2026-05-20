@@ -13,7 +13,7 @@ import {
   type MotionLayer,
   newMotionId,
 } from './motionLibrary';
-import { generateMotionHtml, buildFullHtmlDoc } from '../../services/motionService';
+import { generateMotionHtml, buildFullHtmlDoc, getActiveMotionModel } from '../../services/motionService';
 import type { ScriptBlock, MotionColorMode, AppTheme } from './types';
 import { useTheme } from './useTheme';
 import { loadUserIdentity } from './userIdentity';
@@ -378,7 +378,18 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
           style={{ borderBottom: `1px solid ${tokens.border.subtle}` }}
         >
           <div>
-            <div className="text-base font-semibold mb-1" style={{ color: tokens.text.primary }}>Motion graphic</div>
+            <div className="flex items-center gap-2 mb-1">
+              <div className="text-base font-semibold" style={{ color: tokens.text.primary }}>Motion graphic</div>
+              {/* Active-model badge — read on every modal render. localStorage
+                  is the source of truth; user changes it in Settings. */}
+              <span
+                className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
+                style={{ backgroundColor: 'rgba(124, 58, 237, 0.15)', color: 'rgb(196, 181, 253)', border: '1px solid rgba(124, 58, 237, 0.35)' }}
+                title="Modelo de IA usado para gerar este motion. Mude em Configurações."
+              >
+                {getActiveMotionModel().label}
+              </span>
+            </div>
             <div className="text-xs max-w-xl truncate" style={{ color: tokens.text.tertiary }}>"{block.text}"</div>
           </div>
           <button

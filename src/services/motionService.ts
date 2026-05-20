@@ -40,14 +40,45 @@ const getApiKey = (): string => {
   return key;
 };
 
-// Pro for highest quality HTML/GSAP generation; Flash as fallback.
-// Motion HTML generation — Pro and Flash only. Lite is not capable enough for
-// motion graphics quality (user requirement).
-// Note: pro-preview uses '3.1' but flash uses '3' (no minor) — that's how Google ships them.
-const MODEL_CANDIDATES = [
+// User-selectable motion model. The selected one is tried first; the
+// remaining models stay in the chain so a transient error in the chosen
+// model still falls through to one that works. Lite is intentionally
+// excluded — not capable enough for motion graphics quality.
+export const SUPPORTED_MOTION_MODELS = [
+  'gemini-3.5-flash',
   'gemini-3.1-pro-preview',
   'gemini-3-flash-preview',
-];
+] as const;
+export type MotionModelId = (typeof SUPPORTED_MOTION_MODELS)[number];
+export const DEFAULT_MOTION_MODEL: MotionModelId = 'gemini-3.5-flash';
+export const MOTION_MODEL_STORAGE_KEY = 'MOTION_MODEL_ID';
+
+const MOTION_MODEL_LABELS: Record<MotionModelId, string> = {
+  'gemini-3.5-flash': '3.5 Flash',
+  'gemini-3.1-pro-preview': '3.1 Pro',
+  'gemini-3-flash-preview': '3 Flash',
+};
+
+const readSelectedMotionModel = (): MotionModelId => {
+  try {
+    const stored = localStorage.getItem(MOTION_MODEL_STORAGE_KEY);
+    if (stored && (SUPPORTED_MOTION_MODELS as readonly string[]).includes(stored)) {
+      return stored as MotionModelId;
+    }
+  } catch { /* localStorage unavailable — fall through */ }
+  return DEFAULT_MOTION_MODEL;
+};
+
+const getModelCandidates = (): readonly MotionModelId[] => {
+  const selected = readSelectedMotionModel();
+  const rest = SUPPORTED_MOTION_MODELS.filter(m => m !== selected);
+  return [selected, ...rest];
+};
+
+export const getActiveMotionModel = (): { id: MotionModelId; label: string } => {
+  const id = readSelectedMotionModel();
+  return { id, label: MOTION_MODEL_LABELS[id] };
+};
 
 const RESPONSE_SCHEMA = {
   type: Type.OBJECT,
@@ -2023,7 +2054,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '· appMention=', appMention?.app ?? 'none',
     '· hyperframesCatalogInjected=true');
   let lastError: unknown;
-  for (const model of MODEL_CANDIDATES) {
+  for (const model of getModelCandidates()) {
     try {
       const response = await ai.models.generateContent({
         model,
