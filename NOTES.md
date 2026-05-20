@@ -1029,3 +1029,49 @@ explicitamente, basta dispatch com `skip: false` (não exposto em UI ainda).
 Arquivos: `types.ts`, `reducer.ts`, `motionGating.ts`, `AssetPickerModal.tsx`,
 `ReelsStudio.tsx` (props no JSX do modal).
 
+---
+
+## Sessão 2026-05-20 (cont. final) — Lip sync correction + handoff
+
+### Bug do AVATAR_TAIL_CUT_FRAMES
+
+Mais cedo nesta sessão, ao tentar mascarar "robot pose" no final dos blocos
+avatar, defini `AVATAR_TAIL_CUT_FRAMES = 5` em `mp4Renderer.ts:116` — cortando
+os últimos 5 frames (167ms) de todo avatar. **Era misdiagnóstico.**
+
+Causa real: `audioSlicer.ts` envia ao HeyGen o áudio do bloco + 0.18s de tail
+padding (TAIL_PADDING_SEC). HeyGen anima através dessa cauda — os últimos
+frames são lipsync REAL da finalização da última sílaba, não pose congelada.
+Cortar esses frames produziu desync visível: usuário ouve último fonema,
+avatar já sumiu há 167ms.
+
+**Fix shipped (uncommitted no momento do handoff):** `AVATAR_TAIL_CUT_FRAMES = 0`.
+Avatar volta a aparecer até o último frame do bloco. Comentário explica a
+intenção do código pra ninguém reativar isso por engano.
+
+### Outras suspeitas mapeadas, não corrigidas
+
+**Rescaling de blocos** (`ExportRenderModal.tsx:316-340`): quando
+`audioDurationSec` > `blocksSumSec` (caso comum quando silence cut foi
+parcialmente revertido), o exporter estica TODOS os blocos proporcionalmente
+pra preencher o áudio. Mas avatar clips tocam em 1x — não são reescalados.
+Pequena drift acumulada por bloco. Não confirmado se o usuário sofre disso —
+depende de testar export pós-fix do TAIL_CUT.
+
+### Estado do projeto no handoff
+
+Working tree: 1 arquivo modificado (`mp4Renderer.ts` com fix do TAIL_CUT).
+Vai ser commitado antes do handoff.
+
+Branch: `main`, 7 commits à frente de `origin/main` (não-pushed).
+
+App em execução: `npm run tauri dev` rodando, HMR funcionando.
+
+### Próxima sessão começa por
+
+1. Testar o fix do TAIL_CUT — re-exportar reel + validar lipsync
+2. Se ainda houver drift, investigar rescaling de blocos
+3. Considerar `git push` pra remote
+4. Considerar build de produção (`npm run tauri build`) — foi iniciado antes
+   mas matei pra não competir recursos
+

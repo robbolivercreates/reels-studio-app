@@ -106,14 +106,15 @@ interface FrameComposition {
 
 const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
 
-// HeyGen avatars freeze on the last frame after the speech ends (the system
-// renders with a 0.18s tail padding to avoid phoneme cut; after the audio
-// stops, the avatar mouth/eyes lock in place). Those frozen frames at the
-// tail of each block look robotic. Hide the avatar's last 5 frames (~167ms)
-// so the user-visible transition starts from a moving mouth, not a held pose.
-// The motion graphic below/around the avatar stays — only the avatar layer
-// gets the early-cut.
-const AVATAR_TAIL_CUT_FRAMES = 5;
+// Avatar tail-cut was an early misdiagnosis: the assumption was that HeyGen
+// freezes the avatar's last frames into a "robot pose" after the audio ends.
+// In reality, the audioSlicer feeds HeyGen the block audio + 0.18s of tail
+// padding precisely so the avatar animates the final phoneme decay — those
+// last frames are NOT frozen, they contain real lipsync content. Cutting
+// them produced visible desync (audio still playing while avatar already
+// gone). Set to 0 — defer to overrunAlpha which fades only when the clip
+// is genuinely shorter than the block (HeyGen occasionally under-renders).
+const AVATAR_TAIL_CUT_FRAMES = 0;
 
 // 3 frames (~100ms) at 30fps. Reels/TikTok pacing prefers sub-100ms scene
 // changes — a 200ms cross-fade reads as sluggish on short-form content.
