@@ -17,6 +17,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import type { ScriptBlock, AppTheme, BlockLayout } from './types';
 import { getTheme } from './theme';
 import { LAYOUT_OPTIONS } from './layouts';
@@ -33,7 +34,7 @@ const formatTime = (sec: number): string => {
   return `${m.toString().padStart(2, '0')}:${s.toFixed(2).padStart(5, '0')}`;
 };
 
-export type InspectorTab = 'motion' | 'avatar' | 'layout' | 'voz' | 'stats';
+export type InspectorTab = 'motion' | 'avatar' | 'layout' | 'voz' | 'assets' | 'stats';
 
 interface Props {
   block: ScriptBlock | null;
@@ -284,7 +285,7 @@ export const InspectorPanel: React.FC<Props> = ({
   motionBusy,
   motionColorMode,
   onSetMotionColorMode,
-  onOpenAssetPicker: _onOpenAssetPicker,
+  onOpenAssetPicker,
   onRegenAvatar: _onRegenAvatar,
   onToggleKind,
   blockIndex,
@@ -298,7 +299,7 @@ export const InspectorPanel: React.FC<Props> = ({
   const [activeTab, setActiveTab] = useState<InspectorTab>(() => {
     try {
       const v = sessionStorage.getItem(STORAGE_KEY_TAB);
-      if (v === 'motion' || v === 'avatar' || v === 'layout' || v === 'voz' || v === 'stats') return v;
+      if (v === 'motion' || v === 'avatar' || v === 'layout' || v === 'voz' || v === 'assets' || v === 'stats') return v;
     } catch { /* ignore */ }
     return 'motion';
   });
@@ -856,6 +857,95 @@ export const InspectorPanel: React.FC<Props> = ({
     </div>
   );
 
+  const assetsBody = () => {
+    if (!block) return null;
+    const assets = block.attachedAssets ?? [];
+    const hasAny = assets.length > 0;
+    return (
+      <div className="h-full flex flex-col gap-2 py-2">
+        <div className="flex items-center justify-between">
+          <div className="text-[11px] font-semibold" style={{ color: tokens.text.primary }}>
+            {hasAny ? `${assets.length} asset${assets.length === 1 ? '' : 's'} neste bloco` : 'Sem assets anexados'}
+          </div>
+          {onOpenAssetPicker && (
+            <button
+              onClick={onOpenAssetPicker}
+              className="px-2.5 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1.5"
+              style={{
+                backgroundColor: isLight ? 'rgba(167,139,250,0.10)' : 'rgba(167,139,250,0.18)',
+                borderColor: 'rgba(167,139,250,0.40)',
+                color: '#A78BFA',
+              }}
+            >
+              <span>📎</span>
+              <span>{hasAny ? 'Gerenciar' : 'Anexar asset'}</span>
+            </button>
+          )}
+        </div>
+        {hasAny ? (
+          <div className="flex-1 overflow-y-auto -mx-1 px-1">
+            <div className="grid grid-cols-4 gap-2">
+              {assets.map((a, idx) => {
+                const url = convertFileSrc(a.path);
+                return (
+                  <button
+                    key={`${a.path}-${idx}`}
+                    onClick={onOpenAssetPicker}
+                    className="relative rounded-lg overflow-hidden border aspect-[9/16] group"
+                    style={{
+                      backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)',
+                      borderColor: isLight ? 'rgba(0,0,0,0.08)' : 'rgba(255,255,255,0.10)',
+                    }}
+                    title={`${idx + 1}. ${a.name}`}
+                  >
+                    {a.type === 'image' ? (
+                      <img src={url} alt={a.name} className="w-full h-full object-cover" />
+                    ) : (
+                      <video src={url} muted playsInline className="w-full h-full object-cover" />
+                    )}
+                    <span className="absolute top-1 left-1 text-[9px] font-bold px-1 rounded bg-black/60 text-white">
+                      {idx + 1}
+                    </span>
+                    <span className="absolute top-1 right-1 text-[9px] px-1 rounded bg-black/60 text-white">
+                      {a.type === 'image' ? '🖼️' : '🎬'}
+                    </span>
+                    <div className="absolute inset-x-0 bottom-0 px-1 py-0.5 bg-gradient-to-t from-black/80 to-transparent">
+                      <div className="text-[9px] text-white truncate">{a.name}</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            {assets.length > 1 && (
+              <div className="mt-2 text-[10px] text-center" style={{ color: tokens.text.tertiary }}>
+                Múltiplos assets viram um carrossel automático dentro do bloco.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center px-4">
+            <div
+              className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
+              style={{
+                backgroundColor: isLight ? 'rgba(167,139,250,0.10)' : 'rgba(167,139,250,0.15)',
+                color: '#A78BFA',
+              }}
+              aria-hidden
+            >
+              📎
+            </div>
+            <div className="text-[12px] font-medium" style={{ color: tokens.text.primary }}>
+              Anexe uma imagem ou vídeo
+            </div>
+            <div className="text-[11px] max-w-[260px]" style={{ color: tokens.text.tertiary }}>
+              O motion vai usar esse asset como peça central. Anexe vários e eles viram um carrossel sequencial dentro do bloco.
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const renderTabBody = () => {
     if (isEmpty || isMultiSelect) return null;
     switch (effectiveTab) {
@@ -863,6 +953,7 @@ export const InspectorPanel: React.FC<Props> = ({
       case 'avatar': return avatarBody();
       case 'layout': return layoutBody();
       case 'voz':    return vozBody();
+      case 'assets': return assetsBody();
       case 'stats':  return statsBody();
     }
   };
@@ -872,6 +963,7 @@ export const InspectorPanel: React.FC<Props> = ({
     { id: 'avatar', label: 'Avatar', disabled: !block || block.kind !== 'avatar' },
     { id: 'layout', label: 'Layout', disabled: !block },
     { id: 'voz',    label: 'Voz',    disabled: !block || block.kind !== 'avatar' },
+    { id: 'assets', label: 'Assets', disabled: !block },
     { id: 'stats',  label: 'Stats',  disabled: !block },
   ];
 

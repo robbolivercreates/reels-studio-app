@@ -1916,6 +1916,23 @@ export const ReelsStudio: React.FC = () => {
     ? blocks.find(b => b.id === layoutHit.slot.blockId) ?? null
     : null;
   const currentClip = currentBlock ? state.avatarClips[currentBlock.id] : undefined;
+  // Tail/head fade for preview block transitions. Mirrors the mp4Renderer
+  // FADE_FRAMES (200ms) — without this, each block's <video> element holds
+  // its final frame for ~100-200ms during the React swap to the next block,
+  // creating a visible "freeze" between blocks. With the fade, the outgoing
+  // block dims to 0 and the incoming block fades from 0, hiding the swap.
+  const blockFadeOpacity = (() => {
+    if (!currentBlock) return 1;
+    const slot = slotById.get(currentBlock.id);
+    if (!slot) return 1;
+    const dur = slot.projectEnd - slot.projectStart;
+    const localT = playhead - slot.projectStart;
+    const FADE = 0.2;
+    if (localT < FADE) return Math.max(0, Math.min(1, localT / FADE));
+    const slack = dur - localT;
+    if (slack < FADE) return Math.max(0, Math.min(1, slack / FADE));
+    return 1;
+  })();
   // Avatar is visible only while we're inside the block AND within the configured visibility window.
   const avatarVisibilityCutoff = currentBlock && currentBlock.kind === 'avatar' && currentBlock.avatarVisibleSec !== undefined
     ? (slotById.get(currentBlock.id)?.projectStart ?? 0) + currentBlock.avatarVisibleSec
@@ -2688,7 +2705,7 @@ export const ReelsStudio: React.FC = () => {
 
             {/* Media layer (B-roll) — draws below the avatar layer. Renders if layout has media slot AND a take is available. */}
             {mediaBoxStyle && activeTake && (
-              <div className="absolute z-10 overflow-hidden bg-black" style={mediaBoxStyle as React.CSSProperties}>
+              <div className="absolute z-10 overflow-hidden bg-black" style={{ ...(mediaBoxStyle as React.CSSProperties), opacity: blockFadeOpacity }}>
                 <TakeVideoPlayer key={`media-${currentBlock?.id}-${activeTake.id}`} take={activeTake} />
               </div>
             )}
@@ -2713,6 +2730,7 @@ export const ReelsStudio: React.FC = () => {
                     // overlay → avatar below motion (z-index 20, motion is z-index 30)
                     // all other modes → avatar and motion don't overlap, keep at z-index 20
                     zIndex: 20,
+                    opacity: blockFadeOpacity,
                     transform: `scale(${currentBlock?.kind === 'avatar' ? (currentBlock.avatarZoom ?? defaultAvatarZoom(state.aspect, currentBlock.layout)) : 1})`,
                     transformOrigin: 'center center',
                   } as React.CSSProperties}
@@ -2836,13 +2854,15 @@ export const ReelsStudio: React.FC = () => {
               const slot = slotById.get(currentBlock.id);
               const localTime = slot ? Math.max(0, playhead - slot.projectStart) : undefined;
               return (
-                <MotionLayerOverlay
-                  key={`motion-${motion.id}-${motion.renderedAt ?? 0}`}
-                  motion={motion}
-                  playing={playing}
-                  layer={displayLayer}
-                  localTime={localTime}
-                />
+                <div className="absolute inset-0" style={{ opacity: blockFadeOpacity, pointerEvents: 'none' }}>
+                  <MotionLayerOverlay
+                    key={`motion-${motion.id}-${motion.renderedAt ?? 0}`}
+                    motion={motion}
+                    playing={playing}
+                    layer={displayLayer}
+                    localTime={localTime}
+                  />
+                </div>
               );
             })()}
 

@@ -102,21 +102,22 @@ const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
 const FADE_FRAMES = 6; // ~200ms at 30fps — modern Reels/TikTok pacing
 
 /**
- * For an avatar clip whose actual MP4 duration is shorter than the block's
- * audio (HeyGen often delivers ~50–150ms shorter than the audio because it
- * trims trailing silence), return an alpha multiplier in 0..1 that:
- *   - = 1 while localT is within the clip's playable range
+ * For any video layer whose actual MP4 duration may differ from the block's
+ * logical duration (HeyGen often delivers ±50–180ms off; motion graphics are
+ * usually shorter than the block; b-roll takes are usually longer), return
+ * an alpha multiplier in 0..1 that:
+ *   - = 1 while localT is comfortably within the clip's playable range
  *   - fades down to 0 across the overrun (instead of holding a frozen final frame)
- * The fade window is short (3 frames) so the avatar disappears smoothly into
- * whatever's behind (motion / black / next block via cross-dissolve).
+ * Window of 6 frames (~200ms at 30fps) chosen to fully cover audioSlicer's
+ * TAIL_PADDING_SEC=0.18s with a small safety margin, matching FADE_FRAMES.
  */
-const AVATAR_OVERRUN_FADE = 3 / FRAMERATE;
-const avatarOverrunAlpha = (localT: number, clipDur: number | undefined): number => {
+const OVERRUN_FADE = 6 / FRAMERATE;
+const overrunAlpha = (localT: number, clipDur: number | undefined): number => {
   if (!clipDur || !Number.isFinite(clipDur) || clipDur <= 0) return 1;
   const slack = clipDur - localT;
-  if (slack >= AVATAR_OVERRUN_FADE) return 1;
+  if (slack >= OVERRUN_FADE) return 1;
   if (slack <= 0) return 0;
-  return slack / AVATAR_OVERRUN_FADE;
+  return slack / OVERRUN_FADE;
 };
 
 /** Render layers + decorations for a single block at a given local time (no fade logic). */
@@ -146,14 +147,23 @@ const composeForBlock = (
     }
   })();
   const motionUrl = motionUrls.get(block.id);
-  const motionDur = block.motion?.durationSec || 4;
-  // Motion plays ONCE and freezes on its last frame for the rest of the block.
-  // No looping — looping motion graphics looks amateurish.
+  // ACTUAL measured MP4 duration of the motion clip — when the Hyperframes
+  // timeline is shorter than the block (frequent: Gemini animates 3-4s but
+  // block lasts 6s), the player holds the last frame for the gap. Using the
+  // configured `block.motion.durationSec` (a 4s default) misses this entirely.
+  // Falls back to the configured value if the URL hasn't been measured yet.
+  const measuredMotionDur = motionUrl ? clipDurations.get(motionUrl) : undefined;
+  const motionDur = measuredMotionDur ?? (block.motion?.durationSec || 4);
+  // Seek is clamped slightly before clip end to avoid WebKit seek-to-end
+  // timeouts; the fade is done via motionAlpha (overrunAlpha) so the visible
+  // last-frame freeze becomes a fade-out instead of a hard hold.
   const motionSeek = Math.min(localT, motionDur - 0.05);
+  const motionAlpha = overrunAlpha(localT, motionDur);
 
   // Motion-replace: full frame.
   if (motionLayer === 'replace' && motionUrl) {
-    return { layers: [{ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME }], decorations: [] };
+    if (motionAlpha <= 0) return { layers: [], decorations: [] };
+    return { layers: [{ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME, alpha: motionAlpha }], decorations: [] };
   }
 
   // Motion split: avatar occupies one half, motion the other.
@@ -168,12 +178,14 @@ const composeForBlock = (
     const clip = block.kind === 'avatar' ? inputs.avatarClips[block.id] : null;
     if (clip?.videoUrl) {
       const zoom = block.avatarZoom ?? 1;
-      const alpha = avatarOverrunAlpha(localT, clipDurations.get(clip.videoUrl));
+      const alpha = overrunAlpha(localT, clipDurations.get(clip.videoUrl));
       if (alpha > 0) {
         layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: avatarBox, zoom, offsetY: block.avatarOffsetY, alpha });
       }
     }
-    layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: motionBox });
+    if (motionAlpha > 0) {
+      layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: motionBox, alpha: motionAlpha });
+    }
     return { layers, decorations: [{ kind: 'split-seam', splitY: 0.5 }] };
   }
 
@@ -189,18 +201,19 @@ const composeForBlock = (
       const clip = inputs.avatarClips[block.id];
       if (clip?.videoUrl) {
         const zoom = block.avatarZoom ?? defaultAvatarZoom(inputs.aspect, block.layout);
-        const alpha = avatarOverrunAlpha(localT, clipDurations.get(clip.videoUrl));
+        const alpha = overrunAlpha(localT, clipDurations.get(clip.videoUrl));
         if (alpha > 0) {
           layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: slots.avatar, zoom, offsetY: block.avatarOffsetY, alpha });
         }
       }
     } else if (inputs.activeTake) {
+      // B-roll loops via mapBrollTime — never freezes, so no overrun fade.
       const localBroll = localT - (block.avatarVisibleSec ?? 0);
       layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localBroll, inputs.activeTake), box: slots.avatar });
     }
   }
 
-  // Media layer (B-roll take).
+  // Media layer (B-roll take). B-roll loops, no overrun fade needed.
   if (slots.media && inputs.activeTake) {
     layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localT, inputs.activeTake), box: slots.media });
   }
@@ -209,7 +222,7 @@ const composeForBlock = (
   // avatar's face stays clean (TV news kicker pattern). Screen blend + contrast
   // tweak makes the motion's black backdrop disappear so the type/graphics
   // float over the bottom of the frame like a real broadcast lower-third.
-  if (motionLayer === 'overlay' && motionUrl) {
+  if (motionLayer === 'overlay' && motionUrl && motionAlpha > 0) {
     // Floating overlay band (NOT a TV-style lower-third). Lives at y:0.58–0.80
     // of the frame — center-lower, above the platform UI zone (bottom 15-20%
     // of Reels/TikTok/Shorts is occluded by likes/comments/caption rail).
@@ -218,7 +231,7 @@ const composeForBlock = (
       videoUrl: motionUrl,
       sourceSeek: motionSeek,
       box: LOWER_THIRD,
-      alpha: 1,
+      alpha: motionAlpha,
       blend: 'screen',
       filter: 'contrast(1.35) brightness(1.05)',
     });
@@ -318,40 +331,43 @@ const applyTransition = (
   t: number,
   mode: 'in' | 'out',
 ): void => {
-  // Helper: prepend (incoming mode) or no-op (outgoing — fromLayers IS toLayers already).
+  // The caller's `layers` (the array that's actually rendered) is `toLayers` in
+  // 'in' mode and `fromLayers` in 'out' mode — that's because the caller passes
+  // (prev, own) for 'in' and (own, next) for 'out'. Resolve the visible container
+  // once so both helpers and the math below read symmetrically.
+  const visible = mode === 'in' ? toLayers : fromLayers;
+  const leavingLayers = fromLayers;
+  const enteringLayers = mode === 'in' ? fromLayers : toLayers;
+
+  // prependFrom: take "leaving" layers, mutate, and prepend them to the visible
+  // stack so they draw underneath. For 'out' the leaving layers ARE the visible
+  // ones — mutate in place (no prepend needed).
   const prependFrom = (mutators: (l: FrameLayer) => FrameLayer) => {
     if (mode === 'in') {
-      for (let i = fromLayers.length - 1; i >= 0; i--) {
-        toLayers.unshift(mutators(fromLayers[i]));
+      for (let i = leavingLayers.length - 1; i >= 0; i--) {
+        visible.unshift(mutators(leavingLayers[i]));
       }
     } else {
-      // mode === 'out': toLayers already contains "from" — mutate in place.
-      for (let i = 0; i < toLayers.length; i++) {
-        toLayers[i] = mutators(toLayers[i]);
+      for (let i = 0; i < visible.length; i++) {
+        visible[i] = mutators(visible[i]);
       }
     }
   };
+  // appendTo: take "entering" layers (in 'in' the own layers already in visible
+  // at offset prev.length; in 'out' the next block's layers separate from
+  // visible) and apply mutators + ensure they sit at the end of visible.
   const appendTo = (mutators: (l: FrameLayer) => FrameLayer) => {
     if (mode === 'in') {
-      // mode === 'in': toLayers already contains "to" (after the prepend). Walk from the offset.
-      const start = fromLayers.length;
-      for (let i = start; i < toLayers.length; i++) {
-        toLayers[i] = mutators(toLayers[i]);
+      const start = leavingLayers.length;
+      for (let i = start; i < visible.length; i++) {
+        visible[i] = mutators(visible[i]);
       }
     } else {
-      for (const lyr of fromLayers) {
-        // fromLayers here is the SECOND parameter (next block) — APPEND it.
-        toLayers.push(mutators(lyr));
+      for (const lyr of enteringLayers) {
+        visible.push(mutators(lyr));
       }
     }
   };
-
-  // Naming shim: in 'out' mode the function was called with (fromLayers=own, toLayers=next),
-  // but here it's cleaner to think of "leaving" (own) and "entering" (next).
-  // Re-bind so the math below reads naturally regardless of mode.
-  const leaving = mode === 'in' ? fromLayers : fromLayers; // fromLayers param ALWAYS = the block that's leaving the screen
-  const entering = mode === 'in' ? toLayers : fromLayers;  // dummy — actual entering is handled by prepend/append
-  void leaving; void entering;
 
   switch (type) {
     case 'dissolve': {

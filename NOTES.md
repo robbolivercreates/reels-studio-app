@@ -636,3 +636,74 @@ foi o estilo dos blocos do usuário — em 11/05 ele usava verbos UI
 
 Pra testar o novo prompt: clicar **"↻ Regerar motion"**, não apenas
 re-renderizar. Re-renderizar usa o HTML cacheado no IndexedDB.
+
+---
+
+## Bug fix — Travada de ~180ms no último frame entre blocos (2026-05-19)
+
+Sintoma reportado: tanto no **preview** quanto no **MP4 exportado**, cada
+bloco "travava" por ~100-200ms no último frame antes de transicionar pro
+próximo. Acontecia em todos os tipos (avatar, motion, b-roll).
+
+### Causa
+
+A duração bate exatamente com o `TAIL_PADDING_SEC = 0.18s` em
+`audioSlicer.ts` — esse padding é mandado pra HeyGen pra evitar corte de
+fonema na última palavra, mas vira frame congelado quando o clip dura
+mais que o bloco. Três pontos somavam pro mesmo sintoma:
+
+1. **Avatar fade curto demais** em `mp4Renderer.ts:113`:
+   `AVATAR_OVERRUN_FADE = 3 / FRAMERATE` (100ms) cobria só metade do
+   overrun real (~180ms).
+2. **Motion overlay sem fade nenhum** — clamp duro `Math.min(localT, motionDur - 0.05)` segurava o penúltimo frame parado.
+3. **Preview swap de `<video>`** entre blocos: ao mudar `currentBlock`, o
+   browser segurava o último frame do video antigo enquanto o novo
+   carregava.
+
+### Correção
+
+**Render (`mp4Renderer.ts`):**
+- `avatarOverrunAlpha` renomeado pra `overrunAlpha` (generalizado).
+- Fade window aumentado de 3 → **6 frames (200ms)**, batendo com `FADE_FRAMES`.
+- Aplicado também aos motion layers (`replace`, `split-*`, `overlay`).
+- B-roll mantido sem fade — `mapBrollTime` faz loop, nunca congela.
+
+**Preview (`ReelsStudio.tsx`):**
+- Novo `blockFadeOpacity` calculado a partir do slot + playhead.
+- Aplicado via `opacity` no `<video>` do avatar, wrapper do b-roll e
+  wrapper do `MotionLayerOverlay`. Fade in nos primeiros 200ms do bloco +
+  fade out nos últimos 200ms.
+
+### Não mudou
+
+- `TAIL_PADDING_SEC = 0.18s` (proposital — resolve corte de fonema da HeyGen).
+- Cross-dissolve inter-bloco no export (já existia, FADE_FRAMES = 6).
+- B-roll loop via `mapBrollTime` (já não freezava).
+- Carousel preview (slides estáticos, sem transição automática).
+
+### Follow-up — 2 bugs mais profundos descobertos via análise frame-a-frame
+
+Análise SSIM frame-a-frame de um MP4 exportado mostrou freeze REAL de
+**300-400ms** entre blocos (não 180ms). Duas raízes adicionais:
+
+**Bug A — motionDur usava intent em vez da duração real do MP4.**
+`composeForBlock` lia `block.motion?.durationSec || 4`. Esse campo é o
+**alvo** da animação (4s default), não a duração efetiva do MP4 do
+Hyperframes. Quando Gemini gera um motion de 6.7s pra um bloco de 7.1s,
+o player segura o último frame por 400ms. Fix: usar
+`clipDurations.get(motionUrl)` (que já tem a duração medida do MP4
+preloaded — `mp4Renderer.ts:668`) como fonte de verdade, com fallback
+pra `block.motion.durationSec` quando ainda não medido.
+
+**Bug B — cross-dissolve em mode='out' era NO-OP.**
+`applyTransition` em mode='out' chamava `prependFrom`/`appendTo` que
+mutavam `toLayers` (= `next.layers`, **nunca renderizado**) em vez de
+mutarem o `layers` do caller. Resultado: nos últimos 200ms do bloco,
+nenhuma mistura com o próximo acontecia — só o frame congelado do bloco
+atual. Fix: ambos helpers agora resolvem o "visible container" pelo
+mode (`toLayers` em 'in', `fromLayers` em 'out'). Confirma frame-a-frame:
+SSIM de 1.000000 entre frames consecutivos antes do corte (= freeze
+puro). Depois do fix, cross-dissolve real entre own@(1-t) e next@(t).
+
+Bugs A e B se reforçavam: o motion congelava nos últimos 400ms, e a
+cross-dissolve que deveria mascarar o freeze nunca rodava.
