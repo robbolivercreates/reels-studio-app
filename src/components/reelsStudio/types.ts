@@ -137,6 +137,14 @@ export interface ScriptBlock {
   /** @deprecated kept on the type only so the hydrator can still see it. Migrated to attachedAssets. */
   attachedAsset?: AttachedAsset;
   /**
+   * Per-block opt-out from the asset-attachment gate. When the project folder
+   * has assets but this block intentionally doesn't need one (e.g. text-only
+   * motion graphic), set this to true and the motion generation runs without
+   * any pinned asset for this block. Default undefined = gate applies.
+   * Toggled via "Continuar sem asset" in the AssetPickerModal.
+   */
+  skipAssetGate?: boolean;
+  /**
    * Transition into the NEXT block. undefined = default fade (back-compat).
    * Last block's value is ignored (no next block).
    */
@@ -377,6 +385,7 @@ export type ReelsAction =
   | { type: 'add-block-asset'; id: string; asset: AttachedAsset }
   | { type: 'remove-block-asset'; id: string; index: number }
   | { type: 'reorder-block-assets'; id: string; fromIndex: number; toIndex: number }
+  | { type: 'set-block-skip-asset-gate'; id: string; skip: boolean }
   | { type: 'set-block-style-preset'; id: string; preset: StylePresetId | undefined }
   | { type: 'set-block-style-preset-cascade'; id: string; preset: StylePresetId | undefined }
   | { type: 'split-block'; id: string; atSec: number }

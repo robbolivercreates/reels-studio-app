@@ -4504,7 +4504,12 @@ export const ReelsStudio: React.FC = () => {
               const slot = slotById.get(b.id);
               if (!slot) return null;
               const leftPct = viewPct(slot.projectEnd);
-              const trans: BlockTransition = b.transition ?? 'fade';
+              // Default to 'cut' to match the compositor's new default for
+              // middle blocks (see mp4Renderer.ts). The previous 'fade' default
+              // here was a stale label — the renderer was actually doing
+              // 'dissolve' under the hood, so the circle icon misled users
+              // about what would actually be exported.
+              const trans: BlockTransition = b.transition ?? 'cut';
               const icon = trans === 'cut' ? '╳' : trans === 'dissolve' ? '◐' : '▾';
               const tone = trans === 'cut' ? 'bg-red-500/70 hover:bg-red-500 border-red-300/60' : trans === 'dissolve' ? 'bg-cyan-500/70 hover:bg-cyan-500 border-cyan-300/60' : 'bg-zinc-700 hover:bg-zinc-600 border-white/30';
               return (
@@ -4661,16 +4666,30 @@ export const ReelsStudio: React.FC = () => {
             const slot = slotById.get(fromBlock.id);
             if (!slot) return null;
             const leftPct = viewPct(slot.projectEnd);
-            const current: BlockTransition = fromBlock.transition ?? 'fade';
-            const opts: { value: BlockTransition; label: string; desc: string }[] = [
-              { value: 'cut',         label: '╳ Cut',         desc: 'Corte seco, sem transição' },
-              { value: 'fade',        label: '▾ Fade',        desc: 'Fade pro preto (~333ms)' },
-              { value: 'dissolve',    label: '◐ Dissolve',    desc: 'Cross-dissolve com áudio' },
+            const current: BlockTransition = fromBlock.transition ?? 'cut';
+            const opts: { value: BlockTransition; label: string; desc: string; recommended?: boolean }[] = [
+              { value: 'cut',         label: '╳ Cut',         desc: 'Corte seco — padrão moderno pra Reels/TikTok', recommended: true },
+              { value: 'fade',        label: '▾ Fade',        desc: 'Fade pro preto — use só pra chapter break' },
+              { value: 'dissolve',    label: '◐ Dissolve',    desc: 'Cross-dissolve suave (100ms)' },
               { value: 'whip-pan',    label: '↔ Whip pan',    desc: 'Câmera varrendo lateral com motion blur' },
               { value: 'zoom-blur',   label: '⊕ Zoom blur',   desc: 'Zoom dramático com blur' },
               { value: 'glitch',      label: '⚡ Glitch',      desc: 'RGB split + jitter digital' },
               { value: 'light-flash', label: '✶ Light flash', desc: 'Flash branco no meio do corte' },
             ];
+            // Position the popover using fixed viewport coords (escapes the
+            // timeline wrapper's overflow-hidden). Clamp horizontally so it
+            // never spills off the screen edges. Anchor above the timeline.
+            const POPOVER_W = 240;
+            const EDGE_PAD = 12;
+            const tlRect = timelineRef.current?.getBoundingClientRect();
+            const anchorX = tlRect
+              ? tlRect.left + (leftPct / 100) * tlRect.width
+              : window.innerWidth / 2;
+            const leftPx = Math.max(
+              EDGE_PAD + POPOVER_W / 2,
+              Math.min(window.innerWidth - EDGE_PAD - POPOVER_W / 2, anchorX),
+            );
+            const topPx = tlRect ? tlRect.top - 8 : window.innerHeight / 2;
             return (
               <>
                 <div
@@ -4680,8 +4699,8 @@ export const ReelsStudio: React.FC = () => {
                 <div
                   data-no-scrub="true"
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="absolute -top-1 -translate-x-1/2 -translate-y-full rounded-lg bg-[#141416] border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.8)] z-40 p-1.5 min-w-[200px]"
-                  style={{ left: `calc(${leftPct}% + 8px)` }}
+                  className="rounded-lg bg-[#141416] border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.8)] z-40 p-1.5"
+                  style={{ position: 'fixed', left: `${leftPx}px`, top: `${topPx}px`, transform: 'translate(-50%, -100%)', width: `${POPOVER_W}px` }}
                 >
                   <div className="text-[9px] uppercase tracking-wider text-zinc-500 font-semibold px-2 pt-1 pb-1.5">Transição entre blocos</div>
                   {opts.map(opt => (
@@ -4693,7 +4712,14 @@ export const ReelsStudio: React.FC = () => {
                       }}
                       className={`w-full text-left px-2 py-1.5 rounded-md transition-colors ${current === opt.value ? 'bg-violet-500/20 border border-violet-500/40' : 'border border-transparent hover:bg-white/5'}`}
                     >
-                      <div className="text-[11px] font-medium text-zinc-100">{opt.label}</div>
+                      <div className="text-[11px] font-medium text-zinc-100 flex items-center gap-1.5">
+                        {opt.label}
+                        {opt.recommended && (
+                          <span className="text-[8px] uppercase tracking-wider px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-semibold">
+                            recomendado
+                          </span>
+                        )}
+                      </div>
                       <div className="text-[9px] text-zinc-500 leading-tight">{opt.desc}</div>
                     </button>
                   ))}
@@ -4867,6 +4893,12 @@ export const ReelsStudio: React.FC = () => {
           <AssetPickerModal
             projectName={state.projectName}
             currentAssets={block.attachedAssets ?? []}
+            gateActive={requiresAssetAttachment(block, projectAssetsCount)}
+            onSkipGate={() => {
+              dispatch({ type: 'set-block-skip-asset-gate', id: block.id, skip: true });
+              setAssetPickerBlockId(null);
+              void refreshProjectAssetsCount();
+            }}
             onClose={() => {
               setAssetPickerBlockId(null);
               // User may have dropped files into the folder via Finder while
@@ -5008,12 +5040,20 @@ export const ReelsStudio: React.FC = () => {
         onTakeRecorded={handleNewTake}
       />
 
-      <ExportRenderModal
-        open={exportOpen}
-        state={state}
-        audioBlob={audioBlobRef.current}
-        onClose={() => setExportOpen(false)}
-      />
+      {exportOpen && (
+        // Conditional mount instead of toggling `open`. The modal's internal
+        // state (phase, resultBlob, muxedOutputPath, caption…) persisted across
+        // open/close cycles even with the reset useEffect inside the component
+        // — closing then re-opening trapped the user on the "Reel pronto" done
+        // screen with the previous MP4, blocking a fresh export. Unmounting
+        // guarantees React drops all the state.
+        <ExportRenderModal
+          open={true}
+          state={state}
+          audioBlob={audioBlobRef.current}
+          onClose={() => setExportOpen(false)}
+        />
+      )}
 
       <SettingsModal
         appTheme={state.appTheme ?? 'dark'}

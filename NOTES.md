@@ -895,3 +895,137 @@ clicks). Bitrate starvation produzia "teleporte" e edges borradas.
 | `src/components/reelsStudio/mp4Renderer.ts` | overrunAlpha fallback, seek verify, broken-counter scope, prevLocalT clamp, bitrate bump, keyframe at boundary |
 | `src/components/ReelsStudio.tsx` | `projectAssetsCount` state + gate em handleAutoMotion[Many], `batchMotionProgress`, regen button + modal, stable key avatar `<video>` |
 
+---
+
+## Sessão 2026-05-20 (cont.) — Piscada entre blocos no export, finalmente resolvida
+
+**Sintoma persistente:** Mesmo após bitrate bump (10 Mbps), keyframe-at-boundary e
+skip do overrun fade pra motions que cobrem o bloco, o MP4 exportado **continuava
+piscando** em todas as transições. Visualmente: bloco A toca limpo, na transição
+o conteúdo de B aparece, depois SUME, depois reaparece — 1-2 frames de
+"descontinuidade luminosa" perceptíveis como flash.
+
+### Investigação frame-a-frame
+
+Extração via `ffmpeg -ss 4.60 -frames:v 12` nos 400ms ao redor do boundary
+4.8s no MP4 do usuário. 4 frames consecutivos (33ms cada) mostraram:
+
+| Frame | localT projeto | Conteúdo |
+|---|---|---|
+| 5 | 4.73s | 100% bloco A (composição pequena) |
+| 6 | 4.77s | 100% bloco A — **sem indício de blend** |
+| 7 | 4.80s | 100% bloco B (composição maior) |
+| 8 | 4.83s | 100% bloco B |
+
+Se o cross-dissolve estivesse rodando, os frames 5-6 deveriam mostrar B fazendo
+fade-in sobre A. Os frames 7-8 deveriam mostrar A fazendo fade-out sob B. Nada
+disso aparecia — corte seco.
+
+### Causa raiz #1 — Matemática do cross-blend em `applyTransition`
+
+Em [`mp4Renderer.ts:407-413`](src/components/reelsStudio/mp4Renderer.ts:407),
+o caso `'dissolve'` aplicava:
+```ts
+const leavingAlpha = 1 - t;
+const enteringAlpha = t;
+```
+
+Com canvas2d `source-over`, drawImage com alpha faz `dest = source*α + dest*(1-α)`.
+Sequência de draws (background black → leaving layer → entering layer):
+```
+canvas = black
+canvas = leaving * (1-t) + black * t              = leaving*(1-t)
+canvas = entering * t + leaving*(1-t) * (1-t)
+      = entering*t + leaving*(1-t)²
+```
+
+No meio do fade (`t=0.5`): leaving contribui com 25% (em vez dos 50% esperados).
+**Midpoint do fade fica 25% mais escuro** — lido pelo olho humano como
+"piscada escura".
+
+**Fix:** leaving fica em `alpha=1`, só o entering varia com `alpha=t`. Com
+`source-over` isso produz a fórmula correta `entering*t + leaving*(1-t)`.
+
+### Causa raiz #2 — Descontinuidade na alpha do entering entre boundaries
+
+Tracing manual frame a frame:
+- Último frame de A (localFrame=143 num bloco de 144 frames): `t_out = (143-138)/6 = 0.83` →
+  B com alpha **0.83** via `applyTransition('out')`
+- Primeiro frame de B (localFrame=0): `t_in = 0/6 = 0` →
+  B com alpha **0** via `applyTransition('in')`
+
+Entre dois frames consecutivos (33ms), a opacidade de B **caiu de 0.83 para 0**.
+O fade rodava em **dois lados do boundary** (último 200ms de A E primeiro 200ms
+de B), com salto bruto no meio. O olho lia esse salto como a piscada.
+
+**Fix:** desabilitar o `applyTransition` no `outFadeRegion` quando a transição é
+`dissolve` (ou similar cross-fade). Toda a lógica de mistura passa pro
+`inFadeRegion` apenas — A toca puro até o último frame, B aparece prepended em
+`alpha=1` no início do seu próprio bloco e fade in via `t = 0 → 1` ao longo de
+6 frames. Sem descontinuidade.
+
+### Implementação
+
+[`mp4Renderer.ts:407-419`](src/components/reelsStudio/mp4Renderer.ts:407):
+```ts
+case 'dissolve': {
+  const enteringAlpha = t;
+  prependFrom(l => ({ ...l, alpha: l.alpha ?? 1 }));  // leaving NO LONGER multiplied by (1-t)
+  appendTo(l => ({ ...l, alpha: (l.alpha ?? 1) * enteringAlpha }));
+  return;
+}
+```
+
+[`mp4Renderer.ts:346-356`](src/components/reelsStudio/mp4Renderer.ts:346):
+```ts
+if (outFadeRegion) {
+  if (outgoingTransition === 'fade' || !nextBlock) {
+    fadeAlpha = Math.min(fadeAlpha, (totalBlockFrames - localFrame) / FADE_FRAMES);
+  }
+  // 'dissolve' / outras cross-fade intencionalmente PULAM o outgoing region
+  // — todo o blend acontece só no incoming do próximo bloco.
+}
+```
+
+### Confirmação
+
+Usuário re-exportou: "no último vídeo que acabei de criar parece que o problema
+da transição não está mais aqui". Cross-fade visual smooth, sem flash perceptível.
+
+### Lição
+
+Cross-fade visual requer **DOIS cuidados simultâneos**:
+1. Matemática correta de blending (não duplicar `(1-t)` no leaving sob source-over)
+2. Continuidade de alpha entre frames consecutivos no boundary (fade em UM lado só)
+
+Falhar em qualquer um produz um artefato visual perceptível. Os 2 bugs estavam
+combinados — o fade no outgoing region fazia B aparecer parcialmente antes do
+boundary, mas a math errada já degradava o brilho, e o reset no incoming criava
+o salto final. Resolver só um dos 2 não eliminava a piscada.
+
+---
+
+## Sessão 2026-05-20 (cont.) — Opt-out per-block do gate de assets
+
+**Problema:** O gate `requiresAssetAttachment` (implementado anteriormente) força
+o usuário a anexar um asset em **todo bloco** quando a pasta do projeto tem
+arquivos. Mas alguns blocos são intencionalmente text-only (sem asset) — não
+há como "destravar" um bloco específico sem esvaziar a pasta inteira.
+
+**Fix:** novo campo `block.skipAssetGate?: boolean` (em `types.ts`) + action
+`set-block-skip-asset-gate` no reducer. O helper `requiresAssetAttachment`
+agora retorna `false` quando o flag está true, independente do conteúdo da
+pasta.
+
+UI: `AssetPickerModal` ganha duas props novas (`gateActive`, `onSkipGate`) e,
+quando o gate está ativo + bloco sem assets, surge um botão **"Continuar sem
+asset"** no footer (cinza, ao lado do "Concluído"). Click → dispatch +
+fecha modal → bloco fica destravado para gerar motion text-only.
+
+Reset: anexar qualquer asset depois remove o flag implicitamente (o helper
+não checa skipAssetGate quando `attachedAssets.length > 0`). Para reverter
+explicitamente, basta dispatch com `skip: false` (não exposto em UI ainda).
+
+Arquivos: `types.ts`, `reducer.ts`, `motionGating.ts`, `AssetPickerModal.tsx`,
+`ReelsStudio.tsx` (props no JSX do modal).
+

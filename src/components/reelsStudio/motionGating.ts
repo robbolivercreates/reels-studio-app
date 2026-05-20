@@ -11,7 +11,11 @@
  * (no asset list sent to Gemini) and this gate stays open.
  */
 export const requiresAssetAttachment = (
-  block: { attachedAssets?: unknown[] },
+  block: { attachedAssets?: unknown[]; skipAssetGate?: boolean },
   projectAssetsCount: number,
-): boolean =>
-  projectAssetsCount > 0 && (block.attachedAssets?.length ?? 0) === 0;
+): boolean => {
+  // Per-block opt-out — the user clicked "Continuar sem asset" in the picker,
+  // declaring this block intentionally text-only. Gate stays closed.
+  if (block.skipAssetGate) return false;
+  return projectAssetsCount > 0 && (block.attachedAssets?.length ?? 0) === 0;
+};

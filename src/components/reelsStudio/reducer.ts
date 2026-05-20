@@ -410,6 +410,22 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       };
     }
 
+    case 'set-block-skip-asset-gate': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          // Strip the flag when false to keep persistence payload small —
+          // undefined and false read identically through the gate helper.
+          if (!action.skip) {
+            const { skipAssetGate: _, ...rest } = b;
+            return rest;
+          }
+          return { ...b, skipAssetGate: true };
+        }),
+      };
+    }
+
     case 'set-avatar-visible-sec': {
       return {
         ...state,

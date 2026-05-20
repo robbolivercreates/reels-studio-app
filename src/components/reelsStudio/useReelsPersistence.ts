@@ -15,7 +15,12 @@ import {
 import { computePeaks } from './audioEngine';
 import type { AvatarClipState, ReelsAction, ReelsState, ScreenTake } from './types';
 
-const SAVE_DEBOUNCE_MS = 600;
+// Aggressively short debounce so work-loss-on-kill stays under 150ms. Previous
+// 600ms was wide enough for a crash/kill to land between the last edit and the
+// save, destroying state. Combined with the flush-on-blur listener below, the
+// window of unsaved state is now effectively zero unless the user kills the
+// process during an active typing burst.
+const SAVE_DEBOUNCE_MS = 120;
 const ACTIVE_PROJECT_KEY = 'reels.activeProjectId';
 
 interface Options {
@@ -276,9 +281,14 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── DEBOUNCED AUTO-SAVE OF PROJECT ────────────────────────────────
+  // ─── DEBOUNCED AUTO-SAVE OF PROJECT + FLUSH-ON-BLUR ─────────────────
   // Writes go to the named_projects store, keyed by state.activeProjectId.
   // First touch of an empty boot creates a new entry and adopts its id.
+  // The same effect also wires up blur/visibilitychange/beforeunload
+  // listeners that fire an immediate flush — that way work-loss-on-kill
+  // is bounded by the time between the last interaction and the next blur
+  // event (effectively zero in normal use). Listeners re-bind on each
+  // state change so they always close over the latest snapshot.
   useEffect(() => {
     if (!hydratedRef.current) return;
     setSaving(true);
@@ -296,7 +306,25 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
         setSaving(false);
       }
     }, SAVE_DEBOUNCE_MS);
-    return () => clearTimeout(handle);
+
+    // Immediate flush on focus loss / window close. Fire-and-forget — the
+    // IDB write queues on the same connection and the transaction completes
+    // even after the handler returns.
+    const flush = () => {
+      void saveNamedProject(state, state.activeProjectId ?? undefined).catch(() => {});
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('blur', flush);
+    window.addEventListener('beforeunload', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearTimeout(handle);
+      window.removeEventListener('blur', flush);
+      window.removeEventListener('beforeunload', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [state, dispatch]);
 
   // ─── DOWNLOAD FRESH HEYGEN CLIPS ───────────────────────────────────

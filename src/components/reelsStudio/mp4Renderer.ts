@@ -106,7 +106,22 @@ interface FrameComposition {
 
 const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
 
-const FADE_FRAMES = 6; // ~200ms at 30fps — modern Reels/TikTok pacing
+// HeyGen avatars freeze on the last frame after the speech ends (the system
+// renders with a 0.18s tail padding to avoid phoneme cut; after the audio
+// stops, the avatar mouth/eyes lock in place). Those frozen frames at the
+// tail of each block look robotic. Hide the avatar's last 5 frames (~167ms)
+// so the user-visible transition starts from a moving mouth, not a held pose.
+// The motion graphic below/around the avatar stays — only the avatar layer
+// gets the early-cut.
+const AVATAR_TAIL_CUT_FRAMES = 5;
+
+// 3 frames (~100ms) at 30fps. Reels/TikTok pacing prefers sub-100ms scene
+// changes — a 200ms cross-fade reads as sluggish on short-form content.
+// Was 6 frames originally; reduced because the user explicitly noted "tela
+// preta longa" at every transition. 3 frames is the sweet spot: still
+// perceptually smooth (the eye can't isolate 1 frame, 3 reads as a fade)
+// without holding the dark midpoint long enough to break the watch loop.
+const FADE_FRAMES = 3;
 
 /**
  * For any video layer whose actual MP4 duration may differ from the block's
@@ -175,9 +190,32 @@ const composeForBlock = (
   // timeouts; the fade is done via motionAlpha (overrunAlpha) so the visible
   // last-frame freeze becomes a fade-out instead of a hard hold.
   const motionSeek = Math.min(localT, motionDur - 0.05);
-  // motionDur is already resolved (measured ?? configured ?? 4), but pass it
-  // as fallback too so the helper never enters its "no fade" branch.
-  const motionAlpha = overrunAlpha(localT, motionDur, motionDur);
+  // Skip the overrun fade entirely when the motion clip is at least as long
+  // as the block — the clip has frames for every moment of the block, so
+  // there's nothing to mask and the artificial dimming was reading as a
+  // "piscada" on every transition (the screen briefly darkens in the last
+  // 200ms of each block before the cross-dissolve catches up). The fade
+  // remains active only when the clip is genuinely shorter than the block,
+  // which is the case the helper was originally designed for.
+  //
+  // 0.05s tolerance (~1.5 frame) absorbs float mismatch between the
+  // configured durationSec and the measured MP4 length from HyperFrames.
+  const blockDur = block.end - block.start;
+  const motionCoversBlock = motionDur >= blockDur - 0.05;
+  const motionAlpha = motionCoversBlock
+    ? 1
+    : overrunAlpha(localT, motionDur, motionDur);
+
+  // Hide the avatar in the last AVATAR_TAIL_CUT_FRAMES of every block. HeyGen
+  // freezes the avatar's last frames after the audio ends (no more lipsync
+  // signal → mouth stops), and showing those frozen frames reads as "robot
+  // pose held mid-air" right before each transition. Cutting them early lets
+  // the next block's content cover what would otherwise be a dead robot face.
+  // Computed once per frame and reused by both split and standalone avatar
+  // codepaths below.
+  const avatarVisibleDur = block.avatarVisibleSec ?? blockDur;
+  const avatarCutBeforeSec = AVATAR_TAIL_CUT_FRAMES / FRAMERATE;
+  const avatarEarlyCut = localT >= Math.max(0, avatarVisibleDur - avatarCutBeforeSec);
 
   // Motion-replace: full frame.
   if (motionLayer === 'replace' && motionUrl) {
@@ -195,7 +233,7 @@ const composeForBlock = (
       : { x: 0, y: 0,   w: 1, h: 0.5 };
     const layers: FrameLayer[] = [];
     const clip = block.kind === 'avatar' ? inputs.avatarClips[block.id] : null;
-    if (clip?.videoUrl) {
+    if (clip?.videoUrl && !avatarEarlyCut) {
       const zoom = block.avatarZoom ?? 1;
       // Fallback: block's intended avatar visibility (avatarVisibleSec or full
       // block). Without this fallback, an unmeasured avatar clip would skip
@@ -220,7 +258,7 @@ const composeForBlock = (
   // Avatar layer.
   if (block.kind === 'avatar' && slots.avatar) {
     const stillVisible = block.avatarVisibleSec === undefined || localT < block.avatarVisibleSec;
-    if (stillVisible) {
+    if (stillVisible && !avatarEarlyCut) {
       const clip = inputs.avatarClips[block.id];
       if (clip?.videoUrl) {
         const zoom = block.avatarZoom ?? defaultAvatarZoom(inputs.aspect, block.layout);
@@ -296,8 +334,13 @@ const frameAtProjectTime = (
   // Default between-block transition is cross-dissolve (Apple/CapCut style —
   // no black flash). The reel's intro/outro still uses 'fade' to black for
   // a clean entry/exit. User can override per-block via block.transition.
-  const incomingTransition: BlockTransition = prevBlock ? (prevBlock.transition ?? 'dissolve') : 'fade';
-  const outgoingTransition: BlockTransition = block.transition ?? (nextBlock ? 'dissolve' : 'fade');
+  // Default transition for middle blocks is now 'cut' (hard cut). Modern
+  // short-form (Reels/TikTok) pacing prefers cuts: motion graphics already
+  // animate their own entrances via GSAP, and any cross-fade applied on top
+  // dims the first 100ms perceptibly. First-block-incoming and last-block-
+  // outgoing keep 'fade' so the reel opens/closes from/to black cleanly.
+  const incomingTransition: BlockTransition = prevBlock ? (prevBlock.transition ?? 'cut') : 'fade';
+  const outgoingTransition: BlockTransition = block.transition ?? (nextBlock ? 'cut' : 'fade');
 
   const inFadeRegion = localFrame < FADE_FRAMES;
   const outFadeRegion = localFrame > totalBlockFrames - FADE_FRAMES;
@@ -334,12 +377,15 @@ const frameAtProjectTime = (
   if (outFadeRegion) {
     if (outgoingTransition === 'fade' || !nextBlock) {
       fadeAlpha = Math.min(fadeAlpha, (totalBlockFrames - localFrame) / FADE_FRAMES);
-    } else if (nextBlock && nextSlot && outgoingTransition !== 'cut') {
-      const nextLocalT = ((localFrame - (totalBlockFrames - FADE_FRAMES)) / FRAMERATE);
-      const next = composeForBlock(nextBlock, Math.max(0, nextLocalT), inputs, motionUrls, clipDurations);
-      const t = (localFrame - (totalBlockFrames - FADE_FRAMES)) / FADE_FRAMES; // 0..1 (going from current → next)
-      applyTransition(outgoingTransition, layers, next.layers, decorations, t, 'out');
     }
+    // 'dissolve' / other cross-fade transitions intentionally skip the
+    // outgoing region — the cross-fade is now done ENTIRELY in the
+    // incoming region of the next block. Running it on both sides created
+    // a discontinuity at the boundary (B's alpha jumped from ~0.83 at A's
+    // last frame down to 0 at B's first frame, then climbed back to 1
+    // across B's first 6 frames), which the eye reads as a flash. With
+    // the fade only on B's incoming side, A plays to its last frame at
+    // full alpha and B cleanly fades in on top of it for 6 frames.
   }
   fadeAlpha = Math.max(0, Math.min(1, fadeAlpha));
 
@@ -405,10 +451,15 @@ const applyTransition = (
 
   switch (type) {
     case 'dissolve': {
-      // Cross-blend: leaving fades 1→0, entering fades 0→1.
-      const leavingAlpha = 1 - t;
+      // Cross-blend correto: o canvas2d com source-over já produz a fórmula
+      // ideal `final = entering*t + leaving*(1-t)` quando o leaving é
+      // desenhado em alpha=1 e o entering em cima com alpha=t. O código
+      // antigo aplicava (1-t) também no leaving, o que com source-over vira
+      // `entering*t + leaving*(1-t)²` — midpoint do fade ficava com 25% de
+      // dimming, lido pelo olho humano como uma "piscada escura" entre os
+      // blocos. Leaving fica em alpha cheio; só o entering varia.
       const enteringAlpha = t;
-      prependFrom(l => ({ ...l, alpha: (l.alpha ?? 1) * leavingAlpha }));
+      prependFrom(l => ({ ...l, alpha: l.alpha ?? 1 }));
       appendTo(l => ({ ...l, alpha: (l.alpha ?? 1) * enteringAlpha }));
       return;
     }

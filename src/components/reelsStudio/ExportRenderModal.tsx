@@ -34,6 +34,10 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [muxedOutputPath, setMuxedOutputPath] = useState<string | null>(null);
+  // Path where the user's MP4 ended up after a successful "Baixar MP4" click.
+  // Surfaced as a chip ("Salvo em Downloads") so the user knows it worked
+  // even though we skip the native save dialog.
+  const [savedPath, setSavedPath] = useState<string | null>(null);
   const [caption, setCaption] = useState<string | null>(null);
   const [captionLoading, setCaptionLoading] = useState(false);
   const [captionCopied, setCaptionCopied] = useState(false);
@@ -460,22 +464,22 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   const downloadResult = async () => {
     if (!resultBlob && !muxedOutputPath) return;
     const suggestedName = `${state.projectName.replace(/[^\w-]+/g, '_')}-${new Date().toISOString().slice(0, 10)}.mp4`;
+    // Save directly to ~/Downloads instead of opening the native save dialog.
+    // The rfd::AsyncFileDialog on macOS occasionally opens behind the main
+    // Tauri window or hangs without surfacing, leaving the user with a
+    // non-responsive "Baixar MP4" button. Skipping the dialog removes the
+    // failure mode entirely; the user can always move the file from Downloads
+    // to wherever they actually want it.
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const result = await invoke<{ path: string | null }>('pick_save_path', {
-        suggestedName,
-        extension: 'mp4',
-      });
-      if (!result.path) return;
-      const targetPath = result.path;
+      const { downloadDir, join } = await import('@tauri-apps/api/path');
+      const dlDir = await downloadDir();
+      const targetPath = await join(dlDir, suggestedName);
+      console.log('[export] auto-saving to', targetPath);
 
       if (muxedOutputPath) {
-        // ffmpeg already wrote the final file to a temp path — just copy it.
-        console.log('[export] copying muxed file from', muxedOutputPath, 'to', targetPath);
         await invoke('copy_file', { srcPath: muxedOutputPath, dstPath: targetPath });
       } else if (resultBlob) {
-        // Fallback: stream the blob (legacy path).
-        console.log('[export] saving to', targetPath, 'size=', resultBlob.size);
         await invoke('truncate_file', { targetPath });
         const CHUNK = 1024 * 1024;
         const buffer = await resultBlob.arrayBuffer();
@@ -486,12 +490,15 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
         }
       }
       console.log('[export] saved to', targetPath);
+      setSavedPath(targetPath);
 
       try {
         await invoke('reveal_file_in_finder', { path: targetPath });
-      } catch { /* noop */ }
+      } catch { /* noop — reveal is best-effort */ }
     } catch (err) {
-      console.warn('[export] native save failed:', err);
+      console.warn('[export] auto-save failed:', err);
+      // Last-resort fallback: HTML anchor download to the browser's default
+      // location (still Downloads on macOS Tauri).
       if (resultUrl) {
         const a = document.createElement('a');
         a.href = resultUrl;
@@ -789,6 +796,22 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
               Baixar MP4
             </button>
           </div>
+          {savedPath && (
+            <div className="px-6 py-2 bg-emerald-500/10 border-t border-emerald-500/20 flex items-center justify-between gap-2">
+              <div className="text-[10.5px] text-emerald-200 truncate">
+                ✓ Salvo em <span className="font-mono">{savedPath.replace(/^.*\/Downloads\//, '~/Downloads/')}</span>
+              </div>
+              <button
+                onClick={async () => {
+                  const { invoke } = await import('@tauri-apps/api/core');
+                  try { await invoke('reveal_file_in_finder', { path: savedPath }); } catch { /* noop */ }
+                }}
+                className="shrink-0 text-[10.5px] font-semibold text-emerald-300 hover:text-emerald-200"
+              >
+                Abrir no Finder
+              </button>
+            </div>
+          )}
           <button onClick={onClose} className="w-full py-2.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors border-t border-white/5">Fechar</button>
         </div>
         <style>{`

@@ -14,6 +14,13 @@ interface Props {
   projectName: string;
   /** Ordered list of assets currently attached to the block (carousel order). */
   currentAssets: AttachedAsset[];
+  /** True when the asset gate is currently locking this block (project has
+   *  files in Assets/ but this block has none attached). Surfaces the
+   *  "Continuar sem asset" bypass button at the bottom. */
+  gateActive?: boolean;
+  /** Toggle the per-block opt-out from the gate. Called when the user clicks
+   *  "Continuar sem asset" — flips block.skipAssetGate to true and closes. */
+  onSkipGate?: () => void;
   onClose: () => void;
   /** Append an asset to the carousel. The reducer dedupes by path. */
   onAdd: (asset: AttachedAsset) => void;
@@ -45,7 +52,7 @@ const arrayBufferToBase64 = (buf: ArrayBuffer): string => {
   return btoa(binary);
 };
 
-export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, onClose, onAdd, onRemove, onReorder }) => {
+export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, gateActive = false, onSkipGate, onClose, onAdd, onRemove, onReorder }) => {
   const [assets, setAssets] = useState<ProjectAsset[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -386,12 +393,23 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
                 : `${currentAssets.length} slides em sequência`}
             {atCap && <span className="ml-2 text-amber-300/80">· limite atingido ({MAX_CAROUSEL_SIZE})</span>}
           </div>
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-[11px] rounded-md bg-violet-500 hover:bg-violet-400 text-white font-semibold transition-colors"
-          >
-            Concluído
-          </button>
+          <div className="flex items-center gap-2">
+            {gateActive && onSkipGate && currentAssets.length === 0 && (
+              <button
+                onClick={onSkipGate}
+                className="px-3 py-1.5 text-[11px] rounded-md bg-white/5 hover:bg-white/10 text-zinc-300 font-semibold transition-colors border border-white/10"
+                title="Este bloco será gerado sem nenhum asset anexado, mesmo com a pasta do projeto cheia."
+              >
+                Continuar sem asset
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 text-[11px] rounded-md bg-violet-500 hover:bg-violet-400 text-white font-semibold transition-colors"
+            >
+              Concluído
+            </button>
+          </div>
         </div>
       </div>
     </div>
