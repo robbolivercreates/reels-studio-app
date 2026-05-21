@@ -78,8 +78,12 @@ const readSelectedMotionModel = (): MotionModelId => {
   return DEFAULT_MOTION_MODEL;
 };
 
-const getModelCandidates = (): readonly MotionModelId[] => {
-  const selected = readSelectedMotionModel();
+const getModelCandidates = (preferred?: string): readonly MotionModelId[] => {
+  // Per-block override (preferred) wins; else the global localStorage choice.
+  const valid = preferred && (SUPPORTED_MOTION_MODELS as readonly string[]).includes(preferred)
+    ? (preferred as MotionModelId)
+    : undefined;
+  const selected = valid ?? readSelectedMotionModel();
   const rest = SUPPORTED_MOTION_MODELS.filter(m => m !== selected);
   return [selected, ...rest];
 };
@@ -88,6 +92,18 @@ export const getActiveMotionModel = (): { id: MotionModelId; label: string } => 
   const id = readSelectedMotionModel();
   return { id, label: MOTION_MODEL_LABELS[id] };
 };
+
+/** Persist the user's chosen motion model (used by generation as the first
+ *  candidate in the fallback chain). Surfaced inline in the Motion inspector
+ *  so the model can be picked right where you generate/regenerate, not only
+ *  buried in Settings. */
+export const setSelectedMotionModel = (id: MotionModelId): void => {
+  try { localStorage.setItem(MOTION_MODEL_STORAGE_KEY, id); } catch { /* non-fatal */ }
+};
+
+/** All models with their short labels — for building an inline model picker. */
+export const MOTION_MODEL_OPTIONS: { id: MotionModelId; label: string }[] =
+  SUPPORTED_MOTION_MODELS.map(id => ({ id, label: MOTION_MODEL_LABELS[id] }));
 
 /**
  * Resolves a `modelUsed` string (saved on `MotionConfig.modelUsed`) into a
@@ -847,6 +863,10 @@ export interface GenerateMotionInput {
   durationSec: number;
   /** Composition id (will be substituted into the {COMPOSITION_ID} placeholder). */
   compositionId: string;
+  /** Per-block model override. When set (and valid), it's used as the first
+   *  candidate in the fallback chain instead of the global localStorage choice.
+   *  Lets each block be (re)generated with its own Gemini model. */
+  preferredModel?: string;
   /** Project screenshots/images the user dropped in the Assets folder. */
   projectAssets?: ProjectAsset[];
   /**
@@ -2172,7 +2192,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '· appMention=', appMention?.app ?? 'none',
     '· hyperframesCatalogInjected=true');
   let lastError: unknown;
-  for (const model of getModelCandidates()) {
+  for (const model of getModelCandidates(input.preferredModel)) {
     try {
       const response = await ai.models.generateContent({
         model,

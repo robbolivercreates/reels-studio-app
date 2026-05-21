@@ -19,6 +19,9 @@ import type { PersistedAnalysis } from './reelsStudio/types';
 import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
 import { ClipRescueModal } from './reelsStudio/ClipRescueModal';
 import { InspectorPanel } from './reelsStudio/InspectorPanel';
+import { LandingScreen } from './reelsStudio/LandingScreen';
+import { GuidedWizard, type GuidedExtras } from './reelsStudio/GuidedWizard';
+import { MontarBar } from './reelsStudio/MontarBar';
 import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
 import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
@@ -221,6 +224,24 @@ export const ReelsStudio: React.FC = () => {
   const [wizardOpen, setWizardOpen] = useState(false);
   const [wizardInitialFormat, setWizardInitialFormat] = useState<'reel' | 'carousel' | undefined>(undefined);
   const [carouselPreviewId, setCarouselPreviewId] = useState<string | null>(null);
+  // Onboarding routing: show the landing screen on a genuine cold start (no
+  // previously-active project in localStorage); returning users skip straight
+  // to the editor. The landing renders as an overlay (z-[90]) over the editor,
+  // below the app modals (z-[100]).
+  const [appView, setAppView] = useState<'landing' | 'editor'>(() => {
+    try { return window.localStorage.getItem('reels.activeProjectId') ? 'editor' : 'landing'; }
+    catch { return 'landing'; }
+  });
+  // The light 3-step guided creation modal (opened from the landing "Novo").
+  const [guidedOpen, setGuidedOpen] = useState(false);
+  // Populate the saved-project count so the landing "Abrir" card can show it
+  // (without opening the full projects modal). Runs once on mount.
+  useEffect(() => {
+    if (appView === 'landing') {
+      listNamedProjects().then(setSavedProjects).catch(() => { /* non-fatal */ });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Drag-to-reorder timeline blocks (by id). dragOverIndex = where to drop in
   // the avatar+broll combined sequence. Both null when not dragging.
@@ -480,6 +501,7 @@ export const ReelsStudio: React.FC = () => {
       try { window.localStorage.setItem('reels.activeProjectId', id); } catch { /* ignore */ }
       dispatch({ type: 'hydrate', state: restoredState });
       setProjectsOpen(false);
+      setAppView('editor');
     } catch (err) {
       console.error('[reels/load-named]', err);
       alert('Erro ao abrir projeto: ' + (err instanceof Error ? err.message : String(err)));
@@ -1159,6 +1181,7 @@ export const ReelsStudio: React.FC = () => {
         blockText: block.text,
         durationSec: seed.durationSec,
         compositionId: seed.id,
+        preferredModel: block.motionModelOverride,
         motionLayer: effectiveLayer,
         canvasAspect,
         projectAssets: hasPinnedAssets ? undefined : universalAssetsToSend,
@@ -2374,6 +2397,20 @@ export const ReelsStudio: React.FC = () => {
         fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
       }}
     >
+      {/* ─── LANDING (cold-start overlay) ───────────────────────────────────
+           Sits above the editor (z-[90]) but below the app modals (z-[100]),
+           so "Abrir" pops the projects modal on top and "Novo" opens the
+           creation wizard on top — editor stays mounted underneath. */}
+      {appView === 'landing' && (
+        <LandingScreen
+          tokens={tokens}
+          isLight={isLight}
+          projectCount={savedProjects.length}
+          onOpenProject={handleOpenProjects}
+          onNewProject={async () => { await handleNewProject(); setGuidedOpen(true); }}
+        />
+      )}
+
       {/* Main editor column — shrinks when the agent panel opens. */}
       <div className="flex flex-col min-w-0 flex-1 h-full">
       {/* ─── TOP BAR ─────────────────────────────────────────────────────── */}
@@ -3805,6 +3842,8 @@ export const ReelsStudio: React.FC = () => {
             onSetLayout={selBlock ? (l) => dispatch({ type: 'set-block-layout', id: selBlock.id, layout: l }) : undefined}
             onSetAvatarPhoto={selBlock ? (id) => dispatch({ type: 'set-block-avatar-photo', id: selBlock.id, photoId: id }) : undefined}
             onSetStylePreset={selBlock ? (preset) => dispatch({ type: 'set-block-style-preset', id: selBlock.id, preset }) : undefined}
+            motionModelOverride={selBlock?.motionModelOverride}
+            onSetMotionModel={selBlock ? (model) => dispatch({ type: 'set-block-motion-model', id: selBlock.id, model }) : undefined}
             onOpenMotion={selBlock ? () => setMotionPickerBlockId(selBlock.id) : undefined}
             onGenerateMotion={selBlock ? () => handleAutoMotion(selBlock.id) : undefined}
             motionBusy={selBlock ? (motionBusyByBlock[selBlock.id] ?? null) : null}
@@ -3818,6 +3857,30 @@ export const ReelsStudio: React.FC = () => {
             brandHasIdentity={brandHasIdentity}
             audioWordCount={selAudioWordCount}
             requiresAsset={selBlock ? requiresAssetAttachment(selBlock, projectAssetsCount) : false}
+          />
+        );
+      })()}
+
+      {/* ─── MONTAR (guided staged production) — own strip above the timeline,
+           so it never eats into the timeline's fixed height / clips tracks. ── */}
+      {aspect !== 'carousel' && blocks.length > 0 && (() => {
+        const avatarReady = avatarBlocks.filter(b => state.avatarClips[b.id]?.status === 'ready').length;
+        const motionCandidates = blocks.filter(b => !b.motion?.html && !requiresAssetAttachment(b, projectAssetsCount));
+        const motionDone = blocks.filter(b => !!b.motion?.videoPath).length;
+        return (
+          <MontarBar
+            tokens={tokens}
+            audioStatus={audio.status}
+            avatarTotal={avatarBlocks.length}
+            avatarReady={avatarReady}
+            generatingClips={generatingClips}
+            motionCandidates={motionCandidates.length}
+            motionDone={motionDone}
+            motionTotal={blocks.length}
+            batch={batchMotionProgress}
+            onAudio={() => setConfirmOpen(true)}
+            onAvatars={() => setAvatarsModalOpen(true)}
+            onMotions={() => { const ids = motionCandidates.map(b => b.id); if (ids.length) void handleAutoMotionMany(ids); }}
           />
         );
       })()}
@@ -4765,6 +4828,31 @@ export const ReelsStudio: React.FC = () => {
           }}
         />
       )}
+
+      {/* ─── GUIDED WIZARD (light 3-step creation, from landing "Novo") ─────── */}
+      <GuidedWizard
+        open={guidedOpen}
+        tokens={tokens}
+        isLight={isLight}
+        initialVoiceId={state.selectedVoiceId}
+        onClose={() => setGuidedOpen(false)}
+        onUseVideoFlow={() => { setGuidedOpen(false); setAppView('editor'); setWizardOpen(true); }}
+        onConfirm={(newBlocks, extras: GuidedExtras) => {
+          flushSync(() => {
+            dispatch({ type: 'replace-blocks', blocks: newBlocks });
+            dispatch({ type: 'set-aspect', aspect: '9:16' });
+            dispatch({ type: 'set-voice', voiceId: extras.voiceId });
+            dispatch({ type: 'set-emotion', emotion: extras.emotion });
+            dispatch({ type: 'set-voice-speed', speed: extras.speed });
+            if (extras.photoId) dispatch({ type: 'set-photo', photoId: extras.photoId });
+            setPlayhead(0);
+            setPlaying(false);
+            setScriptOpen(true);
+          });
+          setGuidedOpen(false);
+          setAppView('editor');
+        }}
+      />
 
       {wizardOpen && (
         <CreationWizard

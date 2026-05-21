@@ -123,6 +123,14 @@ export interface ScriptBlock {
    */
   stylePresetOverride?: StylePresetId;
   /**
+   * Optional per-block Gemini model override for motion generation. Holds a
+   * MotionModelId value (e.g. 'gemini-3.1-pro-preview'). When set, that model
+   * is the first candidate for THIS block's motion (re)generation, instead of
+   * the global localStorage choice — so each block can use its own model.
+   * Undefined = follow the global default.
+   */
+  motionModelOverride?: string;
+  /**
    * Optional ordered list of user-attached assets (images/videos) from the
    * project's universal Assets folder. When the list has at least one item,
    * the block auto-uses a media layout (split for avatar, full for broll) and
@@ -387,6 +395,7 @@ export type ReelsAction =
   | { type: 'reorder-block-assets'; id: string; fromIndex: number; toIndex: number }
   | { type: 'set-block-skip-asset-gate'; id: string; skip: boolean }
   | { type: 'set-block-style-preset'; id: string; preset: StylePresetId | undefined }
+  | { type: 'set-block-motion-model'; id: string; model: string | undefined }
   | { type: 'set-block-style-preset-cascade'; id: string; preset: StylePresetId | undefined }
   | { type: 'split-block'; id: string; atSec: number }
   | { type: 'set-voice'; voiceId: string }

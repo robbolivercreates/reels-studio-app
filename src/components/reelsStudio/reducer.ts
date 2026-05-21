@@ -313,6 +313,20 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       };
     }
 
+    case 'set-block-motion-model': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          if (action.model === undefined) {
+            const { motionModelOverride: _m, ...rest } = b;
+            return rest;
+          }
+          return { ...b, motionModelOverride: action.model };
+        }),
+      };
+    }
+
     case 'set-block-style-preset-cascade': {
       // Apply preset to the target block AND all blocks without generated motion HTML.
       // Other blocks that already have motion.html are never touched — user already approved their style.

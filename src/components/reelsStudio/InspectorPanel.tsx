@@ -25,7 +25,7 @@ import { loadAvatarPhotos } from './avatarPhotosStore';
 import { STYLE_PRESETS, findStylePreset, type StylePresetId, type StylePreset } from './motionStylePresets';
 import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS, isHidden } from './presetCategory';
 import { detectEffect } from './effectDetector';
-import { getActiveMotionModel, getMotionModelLabel } from '../../services/motionService';
+import { getActiveMotionModel, getMotionModelLabel, MOTION_MODEL_OPTIONS } from '../../services/motionService';
 
 // Local mm:ss.cc formatter — formatTime in ReelsStudio.tsx isn't exported.
 const formatTime = (sec: number): string => {
@@ -50,6 +50,10 @@ interface Props {
   onSetLayout?: (layout: BlockLayout) => void;
   onSetAvatarPhoto?: (photoId: string | undefined) => void;
   onSetStylePreset?: (preset: StylePresetId | undefined) => void;
+  /** Per-block motion model override (a MotionModelId, or undefined = global default). */
+  motionModelOverride?: string;
+  /** Setter for the per-block model override. undefined → revert to global default. */
+  onSetMotionModel?: (model: string | undefined) => void;
   onOpenMotion?: () => void;
   /** Fires the same auto-generation pipeline used by the timeline button. No modal. */
   onGenerateMotion?: () => void;
@@ -285,6 +289,8 @@ export const InspectorPanel: React.FC<Props> = ({
   onSetLayout,
   onSetAvatarPhoto,
   onSetStylePreset,
+  motionModelOverride,
+  onSetMotionModel,
   onOpenMotion,
   onGenerateMotion,
   motionBusy,
@@ -328,6 +334,10 @@ export const InspectorPanel: React.FC<Props> = ({
     } catch { /* ignore */ }
     return 'style';
   });
+  // Inline per-block motion-model picker. The effective model is the block's
+  // override when set, else the global default — and picking one writes the
+  // per-block override (via onSetMotionModel), so each block can use its own.
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
 
   useEffect(() => {
     try { sessionStorage.setItem(STORAGE_KEY_TAB, activeTab); } catch { /* ignore */ }
@@ -485,7 +495,7 @@ export const InspectorPanel: React.FC<Props> = ({
                   <span
                     className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
                     style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.35)' }}
-                    title={`Este motion foi gerado com ${getMotionModelLabel(block.motion.modelUsed)}. Mude o modelo padrão em Configurações.`}
+                    title={`Este motion foi gerado com ${getMotionModelLabel(block.motion.modelUsed)}. Escolha outro modelo no botão 🤖 e clique em Regerar.`}
                   >
                     {getMotionModelLabel(block.motion.modelUsed)}
                   </span>
@@ -493,9 +503,11 @@ export const InspectorPanel: React.FC<Props> = ({
                   <span
                     className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
                     style={{ backgroundColor: 'rgba(124, 58, 237, 0.15)', color: 'rgb(196, 181, 253)', border: '1px solid rgba(124, 58, 237, 0.35)' }}
-                    title="Modelo que será usado ao gerar. Mude em Configurações."
+                    title="Modelo que será usado ao gerar este bloco. Troque no botão 🤖 abaixo."
                   >
-                    {getActiveMotionModel().label}
+                    {motionModelOverride
+                      ? (MOTION_MODEL_OPTIONS.find(o => o.id === motionModelOverride)?.label ?? getActiveMotionModel().label)
+                      : getActiveMotionModel().label}
                   </span>
                 )}
               </div>
@@ -742,6 +754,70 @@ export const InspectorPanel: React.FC<Props> = ({
           >
             Edição avançada…
           </button>
+
+          {/* Inline PER-BLOCK model picker — choose the Gemini model for THIS
+              block, right where you generate/regenerate. The override is saved
+              on the block, so each one can use its own model. "Padrão (global)"
+              reverts to the global default. */}
+          {onSetMotionModel && (() => {
+            const globalLabel = getActiveMotionModel().label;
+            const overridden = !!motionModelOverride;
+            const effectiveLabel = overridden
+              ? (MOTION_MODEL_OPTIONS.find(o => o.id === motionModelOverride)?.label ?? motionModelOverride)
+              : globalLabel;
+            return (
+              <div className="relative ml-auto">
+                <button
+                  onClick={() => setModelMenuOpen(o => !o)}
+                  disabled={isBusy}
+                  className="px-2.5 py-1.5 rounded-md text-[11px] font-medium flex items-center gap-1.5"
+                  style={{
+                    backgroundColor: 'transparent',
+                    color: overridden ? '#A78BFA' : tokens.text.secondary,
+                    border: `1px solid ${overridden ? '#A78BFA66' : tokens.border.subtle}`,
+                    cursor: isBusy ? 'not-allowed' : 'pointer',
+                    opacity: isBusy ? 0.5 : 1,
+                  }}
+                  title="Modelo de IA deste bloco. Cada bloco pode ter o seu — o próximo Gerar/Regerar usa ele."
+                >
+                  🤖 {effectiveLabel}{!overridden && ' (global)'} ▾
+                </button>
+                {modelMenuOpen && (
+                  <>
+                    <div className="fixed inset-0 z-[40]" onClick={() => setModelMenuOpen(false)} />
+                    <div
+                      className="absolute right-0 bottom-full mb-1 z-50 min-w-[170px] rounded-lg py-1 shadow-xl"
+                      style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}` }}
+                    >
+                      <div className="px-3 py-1 text-[9px] uppercase tracking-wider" style={{ color: tokens.text.tertiary }}>Modelo deste bloco</div>
+                      <button
+                        onClick={() => { onSetMotionModel(undefined); setModelMenuOpen(false); }}
+                        className="w-full text-left px-3 py-1.5 text-[11px] flex items-center justify-between transition-colors"
+                        style={{ color: !overridden ? '#A78BFA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
+                      >
+                        <span>Padrão (global · {globalLabel})</span>
+                        {!overridden && <span>✓</span>}
+                      </button>
+                      {MOTION_MODEL_OPTIONS.map(opt => {
+                        const active = opt.id === motionModelOverride;
+                        return (
+                          <button
+                            key={opt.id}
+                            onClick={() => { onSetMotionModel(opt.id); setModelMenuOpen(false); }}
+                            className="w-full text-left px-3 py-1.5 text-[11px] flex items-center justify-between transition-colors"
+                            style={{ color: active ? '#A78BFA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
+                          >
+                            <span>{opt.label}</span>
+                            {active && <span>✓</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
