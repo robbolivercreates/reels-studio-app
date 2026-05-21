@@ -2207,6 +2207,11 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           // SVG (width="500</div>) and a cut-off registration script that fails the
           // HyperFrames lint with [missing_timeline_registry]. Give it ample room.
           maxOutputTokens: 32768,
+          // gemini-3-flash / 3.5-flash are THINKING models: reasoning tokens are
+          // billed against the SAME output budget. Left unbounded, thinking ate
+          // most of the budget and the HTML came out truncated at ~6KB (no
+          // timeline registration). Cap thinking so the HTML always has room.
+          thinkingConfig: { thinkingBudget: 4096 },
         },
       });
       // If the model ran out of output budget, the JSON/HTML is truncated and
@@ -2225,7 +2230,23 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       catch {
         const match = raw.match(/\{[\s\S]*\}/);
         if (!match) continue;
-        parsed = JSON.parse(match[0]);
+        try { parsed = JSON.parse(match[0]); }
+        catch {
+          console.warn('[motion] model', model, 'returned unparseable/truncated JSON — trying next candidate');
+          lastError = new Error('Resposta truncada (JSON inválido).');
+          continue;
+        }
+      }
+      // Completeness guard: every GSAP motion MUST register its timeline on
+      // window.__timelines[compositionId] at the end of the HTML. If that's
+      // missing, the HTML was truncated mid-generation (thinking ate the budget,
+      // model stopped early, etc.) — feeding it to the renderer just fails the
+      // HyperFrames lint with [missing_timeline_registry] and writes broken HTML
+      // to disk. Skip to the next model instead.
+      if (parsed.htmlBody && !parsed.htmlBody.includes('__timelines')) {
+        console.warn('[motion] model', model, 'produced HTML without window.__timelines (incomplete/truncated) — trying next candidate · len=', parsed.htmlBody.length);
+        lastError = new Error('HTML incompleto — geração truncada (sem registro de timeline).');
+        continue;
       }
       if (parsed.htmlBody && parsed.htmlBody.length > 100) {
         // Sanitize self-closing media tags before HyperFrames lints the HTML.
