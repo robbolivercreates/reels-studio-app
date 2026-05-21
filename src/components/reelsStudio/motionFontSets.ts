@@ -99,6 +99,20 @@ export const FONT_SETS: Record<FontSet, FontSetDefinition> = {
     `.trim(),
     vibe: 'Neutral safe fallback. Inter em todos os papéis. Quando o estilo não pede assinatura forte.',
   },
+
+  cozy: {
+    // Anton (heavy condensed display) + Nunito (rounded friendly sans). The
+    // signature pairing for the Animado · Notion illustrated style — título
+    // bold/condensado que cabe sempre na tela + corpo arredondado acolhedor.
+    googleFontsUrl:
+      'https://fonts.googleapis.com/css2?family=Anton&family=Nunito:wght@400;500;600;700;800&display=block',
+    css: `
+      .font-display { font-family: "Anton", system-ui, sans-serif; font-weight: 400; letter-spacing: 0.005em; text-transform: uppercase; }
+      .font-tech    { font-family: "Nunito", system-ui, sans-serif; font-weight: 700; letter-spacing: -0.005em; }
+      .font-body    { font-family: "Nunito", system-ui, sans-serif; font-weight: 500; }
+    `.trim(),
+    vibe: 'Aconchego/illustrated. Anton condensada e bold pra headlines (UPPERCASE, cabe sempre), Nunito arredondada pro corpo. Notion-style warm com título impactante.',
+  },
 };
 
 /** Build the <link> tags + <style> block for the given font set. */
@@ -119,6 +133,7 @@ TYPOGRAPHY SET (you must pick ONE per composition and stick with it):
 - editorial:  Libre Baskerville + Libre Franklin. NYT-style charts, quotes, data, editorial pieces.
 - tech:       Space Grotesk + Inter. Flowcharts, code, system diagrams, technical content.
 - display:    Inter only. Safe neutral fallback when no signature is needed.
+- cozy:       Anton (heavy condensed display, UPPERCASE) + Nunito (rounded sans). Illustrated/Notion warm style — título impactante que sempre cabe na tela, corpo arredondado acolhedor.
 
 DO NOT mix typography across sets. The set is FIXED by the preset's defaultFontSet — use the .font-display / .font-tech / .font-body classes that come pre-defined in <style>. Never inject extra <link> tags for additional Google Fonts.
 `.trim();

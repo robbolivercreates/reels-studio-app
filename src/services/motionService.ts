@@ -1973,6 +1973,28 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     : forceDark
       ? Math.max(atm.vignetteIntensity, 0.5)
       : atm.vignetteIntensity;
+  // Optional Notion-style "infinite canvas" dot grid. Only present on presets
+  // that declare atmosphere.dotGrid (today: animado-notion). Suppressed when a
+  // mode override is forcing a different canvas tone.
+  const dot = (!forceLight && !forceDark) ? atm.dotGrid : undefined;
+  // Build the track-0 background. Glow gradients always; dot-grid tile prepended
+  // (top-most, very faint) with matching background-size when declared.
+  const atmosBgStyle = dot
+    ? [
+        `       style="position:absolute; inset:0; background:${atmBg};`,
+        `              background-image:`,
+        `                radial-gradient(circle at center, ${dot.color} ${dot.dotRadius}px, transparent ${dot.dotRadius}px),`,
+        `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atmWarmAlpha)} 0%, transparent 60%),`,
+        `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atmCoolAlpha)} 0%, transparent 65%);`,
+        `              background-size: ${dot.tile}px ${dot.tile}px, auto, auto;`,
+        `              background-position: 0 0, 0 0, 0 0;"></div>`,
+      ].join('\n')
+    : [
+        `       style="position:absolute; inset:0; background:${atmBg};`,
+        `              background-image:`,
+        `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atmWarmAlpha)} 0%, transparent 60%),`,
+        `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atmCoolAlpha)} 0%, transparent 65%);"></div>`,
+      ].join('\n');
   const atmosphereSection = [
     `╔══════════════════════════════════════════════════════╗`,
     `  🎨 ATMOSPHERE — copy this snippet for track 0`,
@@ -1985,10 +2007,8 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ``,
     `Track 0 — atmosphere base:`,
     `  <div id="atmos-bg" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="0"`,
-    `       style="position:absolute; inset:0; background:${atmBg};`,
-    `              background-image:`,
-    `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atmWarmAlpha)} 0%, transparent 60%),`,
-    `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atmCoolAlpha)} 0%, transparent 65%);"></div>`,
+    atmosBgStyle,
+    dot ? `(The dot-grid tile is the Notion "infinite canvas" texture — keep it AS-IS, very subtle, never bump its opacity.)` : '',
     ``,
     atmVignette > 0
       ? [

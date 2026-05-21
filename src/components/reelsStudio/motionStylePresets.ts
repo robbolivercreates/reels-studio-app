@@ -57,6 +57,21 @@ export interface AtmospherePalette {
   coolGlow: { color: string; alpha: number; pos: string };
   /** Vignette opacity 0–1 (multiplier on the host CSS box-shadow). */
   vignetteIntensity: number;
+  /**
+   * Optional Notion-style "infinite canvas" dot grid layered over the base bg.
+   * When present, a `radial-gradient(circle, color Npx, transparent Npx) 0 0 / SIZE SIZE`
+   * tile is appended to the track-0 background-image. Keep `color` low-alpha
+   * (rgba) so it stays subtle and never competes with the illustration.
+   * Only `animado-notion` uses this today.
+   */
+  dotGrid?: {
+    /** Dot colour as an rgba() string (already alpha'd). */
+    color: string;
+    /** Dot radius in px. */
+    dotRadius: number;
+    /** Tile size in px (spacing between dots). */
+    tile: number;
+  };
 }
 
 /**
@@ -853,7 +868,7 @@ NEVER:
     id: 'animado-notion',
     role: 'concept',
     roleLabel: 'Animado · Notion',
-    defaultFontSet: 'editorial',
+    defaultFontSet: 'cozy',
     label: 'Animado · Notion',
     description: 'Ilustração estilo Notion — line art quente, formas surreais, contemplativo. Subestilo do Animado.',
     emoji: '🪴',
@@ -864,6 +879,9 @@ NEVER:
       warmGlow: { color: '#d4a373', alpha: 0.10, pos: '25% 20%' },
       coolGlow: { color: '#a3b18a', alpha: 0.08, pos: '78% 80%' },
       vignetteIntensity: 0.16,
+      // Notion "infinite canvas" dot grid — smaller, denser dots (zoomed-out
+      // feel) so the texture reads as a fine canvas, not big spots.
+      dotGrid: { color: 'rgba(58,52,45,0.08)', dotRadius: 1.4, tile: 30 },
     },
     geminiBrief: `
 THIS IS THE "ANIMADO · NOTION" STYLE — a sub-style of Animado. All the
@@ -895,6 +913,9 @@ PALETTE (warm, paper, never neon):
   bg: '#fdf6e3' (warm cream) OR brandBackgroundColor if it's a warm light
       tone. Other OK backdrops: '#faf7f0' (off-white), '#fef3e2' (peach
       cream), '#f5f1e8' (aged paper). NEVER stark white, NEVER saturated.
+      The track-0 atmosphere already paints a subtle Notion "infinite canvas"
+      DOT GRID over the paper — keep it visible. Do NOT cover it with an
+      opaque background rectangle; let the illustration float over the dots.
   line: '#3a342d' (taupe-black) for all outlines.
   selective fills (pick 2-3 per scene, muted/dusty only):
     dusty rose '#e8b4b8', sage green '#a3b18a', ochre '#d4a373',
@@ -954,10 +975,34 @@ MOTION — slow, floating, alive:
     Eyes blink occasionally (every 3.5s, slower than default)
   EXITS: soft fade + drift up, 0.7s ease power1.in
 
-FONT: this style uses the "editorial" set — Libre Baskerville / Libre
-Franklin feel (class="font-display" for the rare 1-3 word label, class=
-"font-body" for any in-illustration text). Serif-ish display reinforces the
-thoughtful, book-like Notion mood.
+FONT: this style uses the "cozy" set — Anton (heavy condensed display,
+ALWAYS UPPERCASE) for headlines + Nunito (rounded friendly sans) for body.
+Use class="font-display" for the rare 1-3 word label, class="font-body" for
+any in-illustration text, class="font-tech" for small bold labels. Anton is
+condensed and bold — it stays impactful while fitting easily on screen, and
+its weight keeps the warm "aconchego" Notion mood encorpada, never thin.
+
+ACCENT / DESTAQUE COLOR — deep slate blue '#3d5a80':
+  Pick ONE highlight per scene and paint it in deep slate blue '#3d5a80'.
+  This is the single "destaque" color — use it for: a hand-drawn underline
+  swoosh under the key word, an X or check mark, a key highlight stroke, or
+  the few sparkles. Use it sparingly — one accent moment per scene. The amber
+  glow '#f4a261' is still reserved ONLY for literal "idea/light" moments
+  (lamp, sun, spark). Everything else stays line art in taupe '#3a342d' over
+  warm paper. NEVER use baby/sky blue or pastel cyan — the accent is the
+  deeper, grounded slate blue.
+
+TEXT MUST FIT THE CANVAS:
+  • Any free-standing display text MUST stay inside horizontal safe margins:
+    give the text container max-width: 86%; with margin-inline: auto; and
+    text-align: center; so it never bleeds off either edge.
+  • Set the display text to white-space: normal and let it wrap to a 2nd line
+    instead of overflowing. NEVER use white-space: nowrap on display text.
+  • Anton is condensed so it usually fits, but still size it so the LONGEST
+    word fits on one line within 86% width. When unsure, use clamp() (e.g.
+    font-size: clamp(48px, 12vw, 104px)) so it self-limits.
+  • Keep at least ~7% padding on the left and right of the whole composition;
+    nothing (text OR illustration) should touch the frame edge.
 
 NEVER (Notion-specific):
   • fill everything — line art is the identity; over-filling kills it

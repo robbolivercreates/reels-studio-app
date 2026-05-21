@@ -25,8 +25,9 @@ import { detectEffect } from './effectDetector';
  * - editorial: Libre Baskerville + Libre Franklin (NYT-style charts, quotes, data)
  * - tech: Space Grotesk + Inter (flowcharts, code, diagrams)
  * - display: Inter only (safe neutral fallback)
+ * - cozy: Fraunces + Nunito (warm chunky serif + rounded sans — Notion/illustrated)
  */
-export type FontSet = 'brand' | 'social' | 'apple' | 'editorial' | 'tech' | 'display';
+export type FontSet = 'brand' | 'social' | 'apple' | 'editorial' | 'tech' | 'display' | 'cozy';
 
 /** Optional cinematic overlays applied at render time. */
 export interface MotionOverlays {
