@@ -2201,8 +2201,23 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           responseMimeType: 'application/json',
           responseSchema: RESPONSE_SCHEMA as unknown as Record<string, unknown>,
           temperature: 0.65,
+          // Heavy compositions (line-art SVG presets like animado-notion) plus the
+          // mandatory window.__timelines registration script can exceed the model's
+          // default output cap, which truncates the HTML mid-tag — producing broken
+          // SVG (width="500</div>) and a cut-off registration script that fails the
+          // HyperFrames lint with [missing_timeline_registry]. Give it ample room.
+          maxOutputTokens: 32768,
         },
       });
+      // If the model ran out of output budget, the JSON/HTML is truncated and
+      // unusable — skip to the next candidate instead of feeding broken HTML to
+      // the renderer (which then fails the lint or throws SVG attribute errors).
+      const finishReason = response.candidates?.[0]?.finishReason;
+      if (finishReason === 'MAX_TOKENS') {
+        console.warn('[motion] model', model, 'hit MAX_TOKENS — output truncated, trying next candidate');
+        lastError = new Error('Output truncado (MAX_TOKENS) — composição muito grande pra este modelo.');
+        continue;
+      }
       const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
       if (!raw) continue;
       let parsed: GenerationOutput;
