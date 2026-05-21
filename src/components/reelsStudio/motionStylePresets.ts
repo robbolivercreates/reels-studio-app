@@ -19,6 +19,7 @@ export type StylePresetId =
   | 'apple-system'
   | 'warm-editorial'
   | 'illustrated-explainer'
+  | 'animado-notion'
   | 'social-cta-follow'
   | 'counter-reveal'
   | 'notification-pop'
@@ -492,114 +493,481 @@ VOICE:
   {
     id: 'illustrated-explainer',
     role: 'concept',
-    roleLabel: 'Explicador ilustrado',
+    roleLabel: 'Animado',
     defaultFontSet: 'apple',
-    label: 'Explicador ilustrado',
-    description: 'Ícones SVG + diagramas + setas. Pra explicar conceito, processo, tutorial.',
-    emoji: '✏️',
-    bestFor: 'Conteúdo didático: tutoriais, "como funciona", "o que é X", explicações de processo passo-a-passo.',
+    label: 'Animado',
+    description: 'Personagens vetoriais + emoções + metáforas visuais. Estilo Kurzgesagt / In a Nutshell.',
+    emoji: '🎨',
+    bestFor: 'Explicar com personagens, emoções, narrativa visual: "a IA tentou e errou", "imagina que…", "ele descobriu que…", processos antropomorfizados, conceitos abstratos virando criaturas.',
     bgType: 'light',
     atmosphere: {
       baseBg: '#fafbfc',
-      warmGlow: { color: '#0ea5e9', alpha: 0.06, pos: '20% 25%' },
-      coolGlow: { color: '#10b981', alpha: 0.05, pos: '80% 75%' },
+      warmGlow: { color: '#fbbf24', alpha: 0.08, pos: '20% 25%' },
+      coolGlow: { color: '#a78bfa', alpha: 0.07, pos: '80% 75%' },
       vignetteIntensity: 0.18,
     },
     geminiBrief: `
-PALETTE: Educational notebook / explainer-video aesthetic. Light, clean, learnable.
-  bg: brandBackgroundColor if it is light (luminance > 80%) OR force '#fafbfc' (warm off-white)
-  text: brandTextColor (must contrast 7:1 on light bg).
-      Fallback if unset OR < 7:1: '#1a1a1a' (near-black, NEVER pure #000)
-  accent: brandPrimaryColor.
-      Fallback if unset OR in banned 250-345 hue: '#0ea5e9' (tech cyan)
-  secondary-accent: brandAccentColor OR '#10b981' (emerald — used for "correct/positive" elements)
-  caution-accent: '#f59e0b' (amber — used for "warning/contrast" elements only when topic calls for it)
-  muted: rgba(0, 0, 0, 0.55) — for secondary labels
-  hairline: rgba(0, 0, 0, 0.12) — for connector lines, dividers, light strokes
-  shadow: 0 4px 16px rgba(0, 0, 0, 0.06) — very soft, never heavy
+PALETTE: Playful explainer animation — Kurzgesagt / In a Nutshell / Vox feel.
+Bright but harmonious. Color carries personality.
+  bg: brandBackgroundColor if light (luminance > 80%) OR force '#fafbfc'.
+      Soft sky/cream/pastel backdrops also work — '#fef3c7' (warm cream),
+      '#e0f2fe' (sky pastel), '#fce7f3' (rose pastel). NEVER stark white.
+  text: brandTextColor (contrast 7:1 on light bg).
+      Fallback: '#1a1a1a' (never pure #000).
+  primary: brandPrimaryColor OR '#f59e0b' (warm amber — friendly highlight).
+  secondary: brandAccentColor OR '#a78bfa' (lavender — playful contrast).
+  joy: '#10b981' (emerald — "got it!", success, eureka).
+  trouble: '#f97316' (orange — "uh oh", confused, struggling).
+  hairline: rgba(0, 0, 0, 0.10) — for sketched outlines, connectors.
+
+  COLORS HAVE EMOTIONAL MEANING:
+    amber/yellow = idea, attention, energy
+    emerald = success, "yes", growth
+    orange/red = struggle, confusion, "no" (sparingly, never aggressive)
+    purple/lavender = curiosity, mystery, "the unknown"
+    sky blue = calm, "in progress", neutral
+  Choose 2-3 of these per scene — never the whole rainbow at once.
 
 TYPOGRAPHY:
-  primary: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif (class="font-tech")
-  weights: 500 (body), 600 (labels), 700 (display)
-  display sizes: 64-100px (smaller than other presets — illustration shares the stage)
-  body sizes: 28-44px
-  letter-spacing: -0.02em on display, -0.005em on body
+  primary: "Inter", "Space Grotesk", system-ui (class="font-tech" or "font-body")
+  weights: 500 (body), 700 (display), 800 (punchline)
+  display sizes: 56-88px — text supports the scene, never dominates
+  body sizes: 26-40px
+  letter-spacing: -0.02em on display
   line-height: 1.15 on display, 1.5 on body
-  numerals: tabular-nums on numbered lists / step indicators
 
 LAYOUT:
-  ILLUSTRATION IS PRIMARY — text supports the visual, not vice versa.
-  Compositions follow one of these archetypes (pick the one that fits the block):
+  CHARACTER OR METAPHOR IS PRIMARY — every scene has a "thing" that has a
+  personality. The thing might be a literal character (humanoid blob, robot,
+  animal) or an anthropomorphized concept (a brain with eyes, a cloud with
+  face, a network of nodes that "look at each other"). Text labels REACT to
+  the scene — not the other way around.
 
-  Archetype A — Single-icon-with-label:
-    centered SVG icon (120-160px, stroke 3-4px, brandPrimaryColor) at y:30%-40%
-    label below at y:55%-65%, .font-tech 56-80px weight 700
-    optional subtext at y:70%-78%, body weight 500, muted color
-    use when: one concept being defined ("o que é X")
+  ═══════════════════════════════════════════════════════════
+   TEXT BUDGET (the most important rule of this preset)
+  ═══════════════════════════════════════════════════════════
+  Animado is VISUAL-FIRST. Default to ZERO text on screen — let the
+  character + expression + props carry the whole meaning. Add text ONLY
+  when the visual genuinely cannot communicate alone.
 
-  Archetype B — Process diagram (2-4 steps):
-    horizontal row of nodes (each 100-140px circle/rounded-rect with icon inside)
-    nodes connected by 2-3px hairline arrows with small triangle heads
-    each node labeled below (max 2 words, body weight 600)
-    use when: process explanation, "primeiro...depois...por fim"
+  What COUNTS as "text" for this budget:
+    Free-standing text overlays — hero text, captions, subtitles, floating
+    labels, thought bubble content, name labels under characters, and any
+    typographic element that exists ONLY to convey words to the viewer.
 
-  Archetype C — Comparison (2 columns):
-    left half: icon + label + muted bg tint (slightly cooler/grayer)
-    right half: icon + label + accent bg tint (warmer/brighter)
-    thin 2px vertical divider between halves in hairline color
-    use when: "vs", "antes/depois", contrast of two ideas
+  What DOES NOT count (text inside the illustration is fine):
+    • Text painted ON a UI mockup the character is interacting with
+      (e.g. an "ENVIAR" button on a fake app screen, "Inbox" tab label,
+      "Settings" menu item, fake email subject lines). This is part of
+      drawing the world.
+    • Text on a SIGN, BANNER, or BOOK held by a character ("STOP", "?",
+      "ERRO 404") — it's a prop.
+    • Text on a SCREEN the character is looking at — part of the scene.
+    • Tiny URL bars, terminal command lines, code snippets inside a
+      fake editor — part of the artwork.
+    • Numbers in counters/dashboards INSIDE a mockup ("47", "1.2K", "$99").
+    The rule of thumb: if the text is INSIDE another illustrated object
+    (button, screen, sign, book, dashboard), it's part of the drawing
+    and is fine — even multi-word. It just shouldn't be the dominant
+    visible text element OR overflow the prop.
 
-  Archetype D — Numbered list (3-5 items):
-    vertical stack, each row: numbered badge (32px circle, accent fill, white number)
-      + label (.font-tech 38-44px weight 600) + optional 1-line description below
-    items appear stagger 0.25s apart with translateY(12 → 0) ease power3.out
-    use when: "são 3 motivos", "top 5", numbered list
+  Hard cap PER BLOCK (counts only free-standing text per above):
+    • Maximum ONE free-standing text element on screen at any moment.
+    • That element is at most 3 words. Hard ceiling — never 4+.
+    • Default IS still no free-standing text — let the visual speak first.
+      Add it only when it clarifies the scene's intent (a name label, a
+      1-2 word punchline, a thought bubble keyword).
+    • Re-read the narration: the voice-over is already saying the words.
+      The canvas does NOT need to repeat them.
+    • NO hero text bands, NO captions, NO subtitles, NO labels under
+      every character, NO descriptions in panels.
+
+  When text IS allowed:
+    • A thought bubble with up to 3 words showing what the character is
+      thinking ("?", "ERRO!", "IA TENTA", "VAI DAR CERTO") — pick ONE
+      per scene.
+    • A character's name label up to 3 words when the character represents
+      a specific named concept (e.g. "GEMINI", "REDE NEURAL", "OS DADOS")
+      and the viewer needs the word as anchor.
+    • Comparison archetype (D): a single 1-3 word label per side
+      ("antes" / "agora", "ERRADO" / "CERTO", "VERSÃO ANTIGA" / "VERSÃO
+      NOVA"). Skip these if the visual difference is already clear
+      (struggling pose vs thriving pose).
+
+  Override priority: this TEXT BUDGET supersedes the global PRINCIPLE 2
+  hero-text guidance for Animado specifically. PRINCIPLE 2 allows up to
+  5 words; Animado caps at 3, with 0 as the default. When in doubt,
+  REMOVE TEXT.
+
+  ═══════════════════════════════════════════════════════════
+   CANVAS USAGE — fill the screen
+  ═══════════════════════════════════════════════════════════
+  When Animado renders WITHOUT a competing avatar (which is the typical
+  case for B-roll blocks or avatar-less projects), the motion takes the
+  ENTIRE 1080×1920 canvas. Use it.
+
+  Vertical anchoring:
+    • Compose around TRUE CENTER, not upper-third. The visual weight
+      should sit near y:50% (= 960px), with the bounding box of the main
+      content NEVER drifting above y:40% (= top of upper-third) or below
+      y:60%. Decoration and secondary props can extend higher/lower —
+      this rule is about WHERE THE EYE FALLS FIRST.
+    • Size: take real estate. Make characters big enough that the viewer
+      sees the eyes from across the room. Exact pixel sizes are YOUR
+      choice — pick whatever serves the composition.
+
+  Horizontal positioning:
+    • Compose to fill the canvas width. Comparison/sequence archetypes
+      use the left and right halves equally.
+
+  Multi-character compositions are encouraged when the narrative calls
+  for it (two characters arguing, a group reacting to one event, a crowd
+  scene, characters at different scales like one small + one giant). The
+  archetypes below are STARTING POINTS, not rigid templates — you can
+  layer them, hybridize them, add secondary characters, build environments.
+
+  Surrounding canvas:
+    • Decorative elements (sparkles, motion lines, sweat drops, floating
+      props, ambient creatures) should spread INTO the corners and edges,
+      not cluster around the main character.
+    • Background props, environment objects, atmospheric details at low
+      opacity (0.15-0.25) in the corners — small clouds, stars, geometric
+      shapes, distant tiny characters — to make the scene feel lived-in.
+    • Background gradient or atmospheric tint covers the full canvas.
+
+  Archetypes (use as inspiration — combine, hybridize, extend freely):
+
+  Archetype A — Character + emotion + thought bubble:
+    one or more characters anchored around the vertical center, sized to
+    fill the canvas comfortably
+    facial expression(s) match the block's emotional beat:
+      • confused: small eyes shifted off-center, mouth = squiggle, 1-2 sweat drops
+      • frustrated: angled eyebrows down, mouth = flat line, "puff" puff above head
+      • eureka: wide round eyes, mouth = small "o", lightbulb above head
+      • surprised: eyes = large ovals, eyebrows raised, mouth = small "o"
+      • excited: eyes = curves up (^_^), mouth = smile, motion lines around head
+      • tired: drooping eyes, mouth = small "~", small "z" floating up
+    thought bubble (or speech bubble) connected via small dots, contains a
+    keyword or tiny icon (NOT the whole sentence — just the essence)
+    use when: text describes an emotion, reaction, attempt, realization
+
+  Archetype B — Anthropomorphized concept:
+    abstract concept rendered as a creature (e.g. "the AI" = a small robot
+    with screen for face; "data" = stacked rectangles with eyes; "the brain"
+    = pink organic shape with face; "the internet" = sphere with wandering
+    eye lines).
+    creature reacts visibly to what's described (looking around, stretching,
+    morphing, glowing).
+    NO label by default. Add a 1-3 word name label below ONLY when the block
+    introduces this concept for the first time and the viewer needs the
+    word as anchor — otherwise let the visual speak.
+    use when: text personifies a system, technology, or abstract idea.
+
+  Archetype C — Story sequence (2-3 panels):
+    horizontal strip of 2-3 mini-scenes, each showing the same character
+    in different states. The character TRANSITIONS through these states:
+      Panel 1: starting state (e.g. confused robot with question marks)
+      Panel 2: trying state (robot mid-action, motion lines)
+      Panel 3: result state (robot smiling with lightbulb, OR robot defeated
+        with X eyes, depending on outcome)
+    panels separated by 2-3px hairline + small arrow ► between them.
+    NO text labels inside panels. The visual arc tells the story; the
+    voice-over names what's happening. If the arc itself needs grounding,
+    add a SINGLE 1-3 word label above the whole strip (not per panel).
+    use when: text describes a process with emotional arc — "tried…failed…
+    learned" or "first… then… eureka"
+
+  Archetype D — Comparison with characters:
+    left character: struggling/old/wrong state (slightly grey-tinted)
+    right character: thriving/new/correct state (vibrant + small sparkles)
+    OPTIONAL: a single 1-3 word label per side ("antes" / "agora",
+    "ERRADO" / "CERTO", or "❌" / "✅" icons). Skip labels entirely when
+    the visual contrast already speaks (grey + slumped pose vs vibrant +
+    arms-up pose). When in doubt, skip.
+    optional: vs / → connector between them in hairline color
+    use when: text contrasts two approaches, "before vs after", "antes era…
+    agora é…"
 
   COMMON to all archetypes:
-    generous breathing room — minimum 56px gutters
-    rounded corners: 12-16px on cards, 999px on numbered badges, 4px on arrow heads
-    icon stroke weight scales with typography weight (500-600 type → 2-3px stroke,
-      700 type → 3-4px stroke)
-    NO heavy decoration: no blobs, no particles, no atmospheric glow (this preset
-      stays graphically clean — Khan Academy / Notion-doc / Tella feel)
+    SVG shapes are SIMPLE AND ORGANIC — rounded curves, slightly imperfect
+    (use stroke-linejoin:round, stroke-linecap:round). NO sharp angular
+    geometric shapes.
+    Outlines: 3-4px stroke in brandText (with slight color = warmer than pure
+    black, like rgba(35, 25, 30, 0.92)).
+    Character bodies: filled shapes (light pastel of the brand primary,
+    lower saturation than accent).
+    Faces: 2 eyes (filled circles 6-10px) + 1 mouth (single curved path or
+    flat line). Eyebrows optional but powerful for emotion. Add eyebrows
+    when emotion is intense (frustrated, surprised, suspicious).
+    Decorative micro-elements OK and encouraged: sparkles ✨ (3-5 around an
+    eureka moment), motion lines (3 short curves trailing a moving char),
+    sweat drop (a single teardrop offset from temple for stress/effort),
+    z floating up (for sleep/tired), lightbulb (for ideas), question mark
+    above head (for confusion), exclamation (for surprise).
 
 MOTION:
-  ease: power3.out, power2.out, expo.out (entries — snappy but smooth)
-  ease for exits: power3.in
-  durations: 0.4-0.8s for icons/labels, 0.6-1.0s for diagrams (slower so the
-    viewer can read the structure)
+  ease: elastic.out, back.out(1.6), back.out(2) — BOUNCY entrances
+  ease for exits: power3.in (clean exits)
+  ease for ambient: sine.inOut (gentle living-creature breath)
+  squash & stretch encouraged on character bodies during emphasis
+    (scaleY 1.08 + scaleX 0.95 → back to 1 — gives "alive" feel)
   ENTRIES:
-    Icons: scale 0.85 → 1.0 + opacity 0 → 1, ease back.out(1.3), 0.5s
-    Labels: opacity 0 → 1 + translateY(8 → 0), ease power3.out, 0.4s, 0.1s after icon
-    Arrows: stroke-dashoffset animation drawing from start to end, 0.5s ease power2.out
-    Nodes in a diagram: stagger 0.18s, each does scale 0.92 → 1 + opacity 0 → 1
-    Numbered badges: stagger 0.22s, scale 0 → 1 ease back.out(1.6)
-  AMBIENT:
-    No background motion (no blobs, no particles, no slow zoom) — the preset stays
-    visually quiet so the illustration carries the attention
-    OK: a very subtle pulse on the active step indicator (scale 1 ↔ 1.05 yoyo 1.5s)
+    Character body: scale 0.6 → 1.0 + slight bounce, ease elastic.out(1, 0.7),
+      0.7s
+    Face features (eyes/mouth/eyebrows): appear 0.15s AFTER body lands,
+      stagger 0.05s each (eye L → eye R → mouth → eyebrows)
+    Thought bubble: scale 0 → 1 from bottom-left anchor, ease back.out(1.8),
+      0.4s, 0.3s after character finishes
+    Sparkles / motion lines / sweat drops: stagger 0.08s, each scale 0 → 1
+      + opacity, ease back.out(2), 0.25s
+    Panels in a story: slide in left-to-right, stagger 0.4s, ease power3.out,
+      0.6s per panel
+  AMBIENT (CRITICAL — characters are NEVER fully static):
+    Character body: gentle breath via scaleY 1.0 ↔ 1.03 yoyo 1.8s ease
+      sine.inOut (loop count = finite, based on block duration)
+    Eyes: blink every 2.5s — scaleY 1 → 0.1 → 1 over 0.18s, ease power2.inOut
+    Decorative elements: subtle bob ±4px y, period 2-3s
+  EMOTION TRANSITIONS (when block emotion changes mid-scene):
+    Old expression fades opacity 0 over 0.2s, new expression scales in over
+    0.25s ease back.out — character "morphs feeling"
   EXITS:
-    Whole composition fades + slight scale 1 → 0.97 over 0.5s ease power3.in
-    NEVER per-element snappy exits (the structure stays coherent until end)
+    Character wavy wave 1 frame OR slight scale + opacity to 0 over 0.5s
+    Whole composition can shrink to 0.95 + fade
 
 VOICE:
-  Tella / Notion / Khan Academy / Sketchbook explainer. The audience is learning,
-  not consuming. Visual hierarchy = pedagogical hierarchy. Each illustration is
-  earned — it shows something words alone can't. If you can remove an icon
-  without losing meaning, REMOVE.
+  Kurzgesagt / In a Nutshell / Vox / The Oversimplified. Educational but FUN.
+  Every scene should make you want to smile slightly. The character is the
+  hero of the explanation. Conceitos abstratos viram criaturas vivas com
+  vontade própria. Errar é cute, não dramático. Acertar é eureka, não vitória.
+
+VISUAL DEPTH (the antidote to lazy minimalism):
+  Simple LANGUAGE ≠ simple VISUALS. The TEXT budget is strict, but the
+  ILLUSTRATION budget is generous. A good Animado scene has LAYERS:
+    • A main character (or several characters interacting)
+    • Their expression, body language, and pose telling the emotional beat
+    • Secondary characters / creatures reacting OR an environment around them
+    • Props in the character's hands or floating near them
+    • Decorative micro-elements telegraphing the mood (sparkles, motion
+      lines, sweat drops, lightbulbs, question marks, hearts, stars)
+    • Background atmosphere — gradients, distant tiny shapes, ambient
+      details that make the world feel populated
+  If the scene reads as "single icon centered on plain bg", you've under-
+  delivered. Push for SCENE, not symbol. Think children's-book spread
+  density — every corner of the page has something happening, but one
+  thing CLEARLY pulls the eye first.
+
+ILLUSTRATE THE SITUATION, NOT A SYMBOL (this is the difference between
+a good Animado and a great one):
+  Read the block's narration as if it were a story prompt for a
+  children's-book illustrator. The illustrator's job is to DRAW THE
+  WHOLE SCENE the words describe — the setting, the action, the
+  consequences, the relationships between objects — not to make ONE
+  symbol that "represents" the idea.
+
+  PARSE the block text for:
+    • OBJECTS named or implied (documents, computers, money, books,
+      people, cities, animals, machines)
+    • ACTIONS happening (trying, failing, lifting, breaking, building,
+      growing, shrinking, talking, comparing)
+    • SCALE relationships (1 small vs 1 giant, few vs many, before
+      vs after, here vs there)
+    • EMOTIONAL TONE (overwhelmed, excited, surprised, defeated,
+      hopeful)
+  Then RENDER those literally in the scene. If the text says "100
+  documents", DRAW STACKS of paper (you don't need to count to 100 —
+  just show "a lot"). If the text says "the AI works like a brain",
+  DRAW A BRAIN with circuits, neurons, little spark animations BETWEEN
+  the neurons. If the text mentions "a city", draw a skyline of
+  buildings, even tiny ones in the background.
+
+  EXAMPLES (under-delivered → properly illustrated):
+
+  Block: "A IA tentou ler 100 documentos e ficou perdida"
+    ❌ Symbol:   confused robot, single thought bubble "?"
+    ✅ Scene:    tiny robot in center, surrounded by towering STACKS of
+                 paper that almost reach the canvas edges, a few sheets
+                 falling around it, sweat drops, eyes spinning, question
+                 marks rising up like steam. Distant tiny papers fly in
+                 from corners.
+
+  Block: "Cada conexão entre os neurônios é uma ideia formando"
+    ❌ Symbol:   single brain icon with face
+    ✅ Scene:    a brain shape that fills the middle, with 8-12 visible
+                 neuron-nodes inside it, glowing LINES connecting them
+                 in different patterns, sparkles where lines meet,
+                 tiny lightbulbs popping in at intersection points.
+                 The whole brain pulses gently.
+
+  Block: "Antes você gastava horas, agora resolve em segundos"
+    ❌ Symbol:   clock vs lightning, side by side
+    ✅ Scene:    LEFT half: tired character at a tiny desk piled with
+                 paperwork, droopy eyes, clock showing late hours,
+                 cup of cold coffee, sun setting outside a window.
+                 RIGHT half: same character but now standing tall,
+                 confident smile, lightning bolts above head, the
+                 same desk now empty/clean, sun bright through window,
+                 small "done!" celebration sparkles around them.
+
+  Block: "Imagina o ChatGPT como um amigo que lê tudo da internet"
+    ❌ Symbol:   chat bubble with face
+    ✅ Scene:    a friendly cartoon character (the "friend") in the
+                 middle reading a giant book, surrounded by floating
+                 tiny webpages/screens/icons (Wikipedia, news, social
+                 media glyphs) feeding INTO the book via little arrows
+                 or motion lines, a globe icon spinning behind them
+                 representing "the internet". Friend's eyes are wide
+                 with curiosity.
+
+  RULE OF THUMB: if you removed every element except one and the scene
+  still made sense, you've made a SYMBOL. A good Animado scene LOSES
+  meaning when you remove pieces — every element contributes to the
+  story of what's happening.
+
+  Density target: 5-12 distinct illustrated elements per scene
+  (counting the main character/characters, props, environment pieces,
+  and atmospheric details — but NOT counting tiny repetition like
+  "the 10 documents" which counts as one "stack of documents"
+  element). Below 5 = too sparse. Above 12 = visual chaos, harder to
+  read.
 
 NEVER:
   • use external image URLs — only inline SVG
-  • use clip-art / cartoon / 3D-style illustrations — geometric simple only
-  • render this preset without at least 1 SVG illustration element (the preset's identity)
-  • dark backgrounds — this preset is light by design
-  • text-shadow / glow on text — learning material is flat-typographic, not "designed"
-  • more than 1 main archetype in a single block (pick one — clarity over richness)
-  • saturação > 80% on accents — explainer needs to feel calm, not loud
-  • rotation in icons or text
+  • render this preset WITHOUT at least 1 character/creature element
+  • use stiff geometric icons as the main subject (use them only as supporting
+    props — sparkles, arrows, thought bubbles)
+  • use dark backgrounds — this preset is bright and warm by design
+  • palavras demais — máximo 3 palavras por elemento de texto, e só 1
+    elemento de texto por scene. NUNCA frase inteira.
+  • realismo — todos os personagens são vetores estilizados, NUNCA fotos ou
+    3D rendered
+  • caras tristes ou aggressivas — frustração e confusão são CUTE, não
+    pesadas. Mesmo "erro" tem tom amigável (sweat drop + sorriso constrangido,
+    nunca raiva)
+  • rotações > 8° em personagens — eles são ESTÁVEIS no espaço, expressões
+    e props que variam
   • elastic.out / back.out > 1.8 — bouncy motion breaks the "studious" feel
   • pure #000 text or pure #ffffff bg — always off-tints for paper feel
   • bright primary colors when brand is muted — respect brand mood`.trim(),
+  },
+  {
+    id: 'animado-notion',
+    role: 'concept',
+    roleLabel: 'Animado · Notion',
+    defaultFontSet: 'editorial',
+    label: 'Animado · Notion',
+    description: 'Ilustração estilo Notion — line art quente, formas surreais, contemplativo. Subestilo do Animado.',
+    emoji: '🪴',
+    bestFor: 'Mesmo conteúdo do Animado, mas com a estética calma e sofisticada das ilustrações do Notion: contorno orgânico, paleta papel/pastel, composições oníricas. Bom pra tutorial, reflexão, storytelling.',
+    bgType: 'warm',
+    atmosphere: {
+      baseBg: '#fdf6e3',
+      warmGlow: { color: '#d4a373', alpha: 0.10, pos: '25% 20%' },
+      coolGlow: { color: '#a3b18a', alpha: 0.08, pos: '78% 80%' },
+      vignetteIntensity: 0.16,
+    },
+    geminiBrief: `
+THIS IS THE "ANIMADO · NOTION" STYLE — a sub-style of Animado. All the
+Animado principles apply (illustrate the WHOLE situation not a symbol;
+multi-element scenes; text budget of max 3 words / 1 free-standing element;
+characters/creatures with personality; compose around true vertical center;
+fill the canvas). What changes is the VISUAL IDENTITY: render everything in
+the calm, sophisticated, hand-illustrated language of Notion's marketing art.
+
+═══════════════════════════════════════════════════════════
+ NOTION VISUAL IDENTITY (this is what makes it "Notion")
+═══════════════════════════════════════════════════════════
+
+LINE OVER FILL:
+  Most elements are OUTLINE ONLY — organic strokes that look hand-drawn with
+  a pressure pen. Use stroke, not fill, as the primary visual language.
+  Fill appears on only 1-3 KEY elements per scene, in muted warm pastels.
+  Everything else is line art on the warm paper background.
+
+STROKE SPEC:
+  • stroke color: warm dark taupe '#3a342d' (NEVER pure black)
+  • stroke width: 3-4px, CONSISTENT across all elements in the scene
+  • stroke-linejoin: round; stroke-linecap: round (always)
+  • slightly imperfect curves — paths should feel drawn, not geometric.
+    Add gentle variance to control points; avoid perfectly straight lines
+    and perfect circles. A hand-drawn wobble is the soul of this style.
+
+PALETTE (warm, paper, never neon):
+  bg: '#fdf6e3' (warm cream) OR brandBackgroundColor if it's a warm light
+      tone. Other OK backdrops: '#faf7f0' (off-white), '#fef3e2' (peach
+      cream), '#f5f1e8' (aged paper). NEVER stark white, NEVER saturated.
+  line: '#3a342d' (taupe-black) for all outlines.
+  selective fills (pick 2-3 per scene, muted/dusty only):
+    dusty rose '#e8b4b8', sage green '#a3b18a', ochre '#d4a373',
+    slate blue '#8da9c4', terracotta '#cb997e', soft mustard '#e9c46a'
+  accent glow: a single warm amber '#f4a261' for "idea/light" moments
+      (used sparingly — a lamp glow, a sun, a spark).
+  Saturation ceiling: ~50%. If a fill looks vivid, mute it.
+
+PROPORTIONS — pleasantly surreal:
+  • Characters have OVERSIZED features: huge hands, long stretchy arms,
+    big rounded heads. Bodies can be abstract — sometimes legless, floating.
+  • Everyday objects at impossible scale: a giant hand emerging from below
+    holding a normal-size notebook; a person smaller than the book they read.
+  • Plants/leaves growing from unexpected places (out of a laptop, a book,
+    a character's head) — Notion loves botanical touches.
+  • Floating is normal — elements drift in space, not grounded by gravity.
+
+COMPOSITION — dreamy and contemplative:
+  • Surreal but never confusing — impossible perspective that still reads
+    clearly.
+  • Distant tiny background elements: small mountains on the horizon, a few
+    stars, a soft cloud, a tiny faraway character — they give depth and the
+    "etéreo" Notion feel.
+  • Negative space is OK and beautiful here — the warm paper breathing
+    around the art is part of the aesthetic (this is the ONE Animado
+    sub-style where some emptiness is good — but still hit 5+ illustrated
+    elements per the situation rule).
+  • Botanical / celestial framing: a leaf curling in from a corner, a star
+    cluster in the opposite corner.
+
+EMOTION — gentle, hopeful, "it's okay":
+  Even when illustrating a problem, the tone stays warm and reassuring.
+  • confused: head tilt, small dot eyes, a single floating "?" — never
+    distressed
+  • overwhelmed: surrounded by gently floating papers, soft droop, but
+    a calm expression
+  • eureka: a soft amber lamp glow above head, eyes lighting up, NOT an
+    explosion
+  • content: tiny smile, relaxed posture, maybe a small plant nearby
+  NO aggressive expressions, NO comic-book POW/BAM, NO action-line chaos.
+  This style whispers, it doesn't shout.
+
+MOTION — slow, floating, alive:
+  ease: power2.out, sine.inOut, power1.inOut (gentle, never punchy)
+  durations: 0.6-1.1s entries (slower than default Animado — contemplative)
+  ENTRIES:
+    Elements drift in with translateY(20 → 0) + opacity, ease power2.out,
+    0.8s, stagger 0.2s. NO bounce, NO elastic.
+    Stroke-based elements: stroke-dashoffset draw-on (the line draws itself),
+    0.8-1.2s ease power1.inOut — this "drawing" feel is very Notion.
+    Plants/leaves: gentle unfurl via scaleY 0 → 1 from base anchor + slight
+    rotation, ease power2.out, 0.7s.
+  AMBIENT (everything breathes softly):
+    Characters: gentle float ±8px y, period 3-4s, ease sine.inOut
+    Floating props: drift in slow circles or figure-8s, period 4-5s
+    Amber glow elements: opacity pulse 0.6 ↔ 1.0, period 2.5s
+    Eyes blink occasionally (every 3.5s, slower than default)
+  EXITS: soft fade + drift up, 0.7s ease power1.in
+
+FONT: this style uses the "editorial" set — Libre Baskerville / Libre
+Franklin feel (class="font-display" for the rare 1-3 word label, class=
+"font-body" for any in-illustration text). Serif-ish display reinforces the
+thoughtful, book-like Notion mood.
+
+NEVER (Notion-specific):
+  • fill everything — line art is the identity; over-filling kills it
+  • saturated or neon colors — warm muted pastels only
+  • pure black strokes — always taupe '#3a342d'
+  • bouncy/elastic/punchy animation — this style is calm and floating
+  • comic-book decoration (POW, BAM, action bursts, sharp stars) — use
+    soft stars, gentle sparkles, botanical elements instead
+  • hard geometric perfect shapes — everything has a hand-drawn wobble
+  • cold/gray backgrounds — the paper is always warm`.trim(),
   },
 
   // ─── HyperFrames-inspired presets (Onda 11) ──────────────────────────

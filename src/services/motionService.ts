@@ -172,6 +172,76 @@ input field) per PRINCIPLE 9. Pure-typography compositions are reserved
 for hooks and pivot beats only.
 
 ═══════════════════════════════════════════════════════════
+ PRINCIPLE 2.5 — LINGUAGEM E VISUAL DE 9 ANOS
+═══════════════════════════════════════════════════════════
+Every visible word, label, and visual metaphor must be understandable by a
+9-year-old. The viewer is scrolling on a phone, not studying — they have
+~1 second per scene to "get it" before swiping. Complexity = drop-off.
+
+TEXT RULES:
+- Use everyday words. NEVER jargon, NEVER corporate-speak, NEVER abstract
+  nouns that need a definition.
+- 1-3 syllables per word when possible. "Usa" beats "utiliza". "Junta"
+  beats "consolida". "Faz" beats "executa". "Mostra" beats "apresenta".
+- Concrete over abstract: "robô" not "modelo de linguagem"; "cérebro" not
+  "rede neural"; "foto" not "imagem digital"; "lembrar" not "armazenar
+  contexto".
+- Verbs over nouns: "PENSA" not "PENSAMENTO"; "ERRA" not "ERRO"; "APRENDE"
+  not "APRENDIZADO".
+- Banned vocab (replace with simpler):
+    "otimizar" → "melhorar"
+    "implementar" → "fazer" / "criar"
+    "configurar" → "ajustar"
+    "processar" → "pensar" / "ler"
+    "analisar" → "olhar" / "estudar"
+    "automatizar" → "fazer sozinho"
+    "inteligência artificial" → "a IA" (sigla é OK, expansão soa técnica)
+    "algoritmo" → "receita" ou "regra"
+    "interface" → "tela"
+    "deploy" → "publicar"
+    "feedback" → "resposta" / "opinião"
+    "stakeholder" → "pessoa que decide"
+- If a technical word is mandatory (brand name, app name), keep it but
+  pair with a CONCRETE icon or character so context fills the gap.
+- Numbers e dados: arredonde. "Quase 1 milhão" beats "893.452". "Em
+  segundos" beats "em 4.2s".
+
+EXAMPLES (BAD → GOOD):
+  ❌ "Otimização do fluxo de trabalho"
+  ✅ "Trabalho mais rápido"
+
+  ❌ "Implementação automatizada"
+  ✅ "Fazer sozinho"
+
+  ❌ "Processamento neural"
+  ✅ "A IA pensa"
+
+  ❌ "Análise contextual avançada"
+  ✅ "Ela entende você"
+
+VISUAL METAPHORS (Animado preset especially, but applies broadly):
+- Pick imagery from a 9-year-old's world: brinquedos, animais, formas
+  básicas, rostos com expressões, mãos, lâmpadas, balões de pensamento,
+  estrelas, corações.
+- AVOID: gráficos de barras, fluxogramas de processo corporativo, ícones
+  de "engrenagem/configuração", terminais de código, símbolos abstratos
+  (∑, →→→, layers stacking).
+- When a concept is abstract (data, network, AI, brain, internet),
+  ANTHROPOMORPHIZE — give it eyes, mouth, personality. A "neural network"
+  é uma criatura redondinha com vários olhos olhando coisas; "the cloud"
+  é uma nuvem fofinha com sorriso; "data" são caixinhas coloridas com
+  carinha.
+- TEST: if my 9-year-old niece looked at this frame, would she be able to
+  point at the screen and say in her own words what's happening? If not,
+  simplify.
+
+WHY THIS MATTERS:
+The viewer is choosing between this Reel and 50 others in the next minute.
+Complexity loses; clarity wins. Even sophisticated audiences prefer
+"obvious instantly" over "clever after thinking". Strip the jargon, draw
+the cute character, win the second-watch.
+
+═══════════════════════════════════════════════════════════
  TYPOGRAPHY STACK — pick the font SET, then use the three roles
 ═══════════════════════════════════════════════════════════
 Every composition declares ONE active typography set in the host page. The set

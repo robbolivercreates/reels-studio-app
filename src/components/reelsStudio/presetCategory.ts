@@ -43,6 +43,7 @@ export const STYLE_PRESET_IDS = [
   'apple-system',
   'warm-editorial',
   'illustrated-explainer',
+  'animado-notion',
 ] as const satisfies readonly StylePresetId[];
 
 /** Style/effect ids that exist in the union (so historical motions keep
@@ -100,6 +101,7 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
     case 'apple-system':
     case 'warm-editorial':
     case 'illustrated-explainer':
+    case 'animado-notion':
       return 'style';
     case 'social-cta-follow':
     case 'counter-reveal':

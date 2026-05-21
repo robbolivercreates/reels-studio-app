@@ -66,6 +66,10 @@ const MOBILE_HINT = /(mobile|iphone|ios|android|phone|app[-_]?screen|portrait)/i
 // Didactic / explanatory text patterns. When combined with text length > 100,
 // suggests the illustrated-explainer style (icons + diagrams + arrows).
 const DIDACTIC_HINT = /\b(como\s+(funciona|fazer|usar)|primeiro|depois|por\s+(fim|último)|passo\s+\d|porque|porém|por\s+que|o\s+que\s+(é|significa)|na\s+prática|funciona\s+assim|imagine\s+(que|assim)|pense\s+(em|nisso)|por\s+um\s+lado|por\s+outro|em\s+(três|quatro|cinco)\s+(passos|etapas|partes))\b/i;
+// Stronger trigger for the new "Animado" (character-driven) style: text that
+// describes an emotional arc, an attempt, a failure, a realization, or
+// anthropomorphizes a system. Hits → Animado wins over generic DIDACTIC_HINT.
+const EMOTIONAL_HINT = /\b(errou|errar|tentou|tentar|não\s+consegu|não\s+sabe|confus|frustr|descobriu|descobr|entendeu|imagina\s+só|a\s+(ia|máquina|tecnologia)\s+(pensa|pensou|achou|tenta|tentou|errou)|robô|cérebro|mente|aprende|aprendeu|conexões|neurônios|brilha|brilhou|surpre|wow|nossa|eureca)\b/i;
 
 // Leading emoji (any Unicode emoji at the start of the trimmed text).
 // The /u flag + Extended_Pictographic property catches all emoji ranges.
@@ -145,12 +149,15 @@ export const detectEffect = (ctx: EffectDetectorCtx): EffectSuggestion => {
     return { recommendedEffect: 'map-zoom', reason: 'Localização detectada — zoom em mapa' };
   }
 
-  // 11. Didactic explanation — long text with process/comparison signal words
-  //     suggests illustrated-explainer (style, not effect). The detector
-  //     recommends across both categories; the Inspector paints the badge
-  //     on the correct section (Style row in this case).
+  // 11. Animado (character-driven explainer) — text with emotional arc,
+  //     attempt/failure narrative, or anthropomorphized concept ALWAYS wins.
+  //     For more neutral didactic content (process steps, comparison without
+  //     emotion), still suggest Animado when text is long enough.
+  if (EMOTIONAL_HINT.test(text)) {
+    return { recommendedEffect: 'illustrated-explainer', reason: 'Narrativa com emoção — animar com personagens e expressões' };
+  }
   if (text.length > 100 && DIDACTIC_HINT.test(text)) {
-    return { recommendedEffect: 'illustrated-explainer', reason: 'Conteúdo explicativo — ilustrar com ícones e diagrama' };
+    return { recommendedEffect: 'illustrated-explainer', reason: 'Conteúdo explicativo — animar com personagens e metáforas' };
   }
 
   // 12. Avatar fallback — glass-tech. Premium / tech-aspirational default
