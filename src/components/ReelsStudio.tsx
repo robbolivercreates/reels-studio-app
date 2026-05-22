@@ -2407,7 +2407,7 @@ export const ReelsStudio: React.FC = () => {
           isLight={isLight}
           projectCount={savedProjects.length}
           onOpenProject={handleOpenProjects}
-          onNewProject={async () => { await handleNewProject(); setGuidedOpen(true); }}
+          onNewProject={() => setGuidedOpen(true)}
         />
       )}
 
@@ -2561,7 +2561,7 @@ export const ReelsStudio: React.FC = () => {
                   <span>Meus projetos</span>
                 </button>
                 <button
-                  onClick={() => { setOverflowMenuOpen(false); handleNewProject(); }}
+                  onClick={() => { setOverflowMenuOpen(false); setGuidedOpen(true); }}
                   className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
                   style={{ color: tokens.text.primary }}
                   onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
@@ -4831,13 +4831,20 @@ export const ReelsStudio: React.FC = () => {
 
       {/* ─── GUIDED WIZARD (light 3-step creation, from landing "Novo") ─────── */}
       <GuidedWizard
+        key={guidedOpen ? 'guided-on' : 'guided-off'}
         open={guidedOpen}
         tokens={tokens}
         isLight={isLight}
         initialVoiceId={state.selectedVoiceId}
         onClose={() => setGuidedOpen(false)}
         onUseVideoFlow={() => { setGuidedOpen(false); setAppView('editor'); setWizardOpen(true); }}
-        onConfirm={(newBlocks, extras: GuidedExtras) => {
+        onConfirm={async (newBlocks, extras: GuidedExtras) => {
+          // Create the fresh project ONLY now (on confirm), not when the wizard
+          // opened — so cancelling "Novo projeto" never wipes the current work.
+          // handleNewProject resets name/activeProjectId + clears the previous
+          // project's audio carriers; the old project stays saved in IndexedDB
+          // and is reachable via "Abrir projeto".
+          await handleNewProject();
           flushSync(() => {
             dispatch({ type: 'replace-blocks', blocks: newBlocks });
             dispatch({ type: 'set-aspect', aspect: '9:16' });
@@ -5255,7 +5262,7 @@ export const ReelsStudio: React.FC = () => {
               </div>
               <div className="flex items-center gap-2">
                 <button
-                  onClick={async () => { await handleNewProject(); setProjectsOpen(false); }}
+                  onClick={() => { setProjectsOpen(false); setGuidedOpen(true); }}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
                   style={{ backgroundColor: tokens.accent.focus, color: 'white' }}
                   onMouseEnter={e => e.currentTarget.style.opacity = '0.9'}
