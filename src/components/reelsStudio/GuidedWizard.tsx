@@ -20,8 +20,15 @@ import { importScriptWithAI } from './scriptImporter';
 import { generateReelFromContent, fetchArticleFromUrl } from '../../services/scriptFromContentService';
 import { VOICE_OPTIONS } from './voices';
 import { loadAvatarPhotos, type AvatarPhoto } from './avatarPhotosStore';
+import { ensureProfiles, upsertProfile, LANGUAGE_OPTIONS, type OutputLanguage, type VoiceProfile } from './voiceProfile';
 
 const VIOLET = '#A78BFA';
+
+/** Read the active voice profile (the one that carries the default language). */
+const activeProfile = (): VoiceProfile => {
+  const { profiles, activeId } = ensureProfiles();
+  return profiles.find(p => p.id === activeId) ?? profiles[0];
+};
 
 export interface GuidedExtras {
   useAvatar: boolean;
@@ -78,7 +85,20 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, onClose, o
   const [emotion, setEmotion] = useState<ReelEmotion>('neutral');
   const [speed, setSpeed] = useState(1.0);
 
+  // Default output language — seeded from the active voice profile (the global
+  // default). Changing it here persists back to that profile, so it becomes the
+  // default for every future generation + the TTS step.
+  const [language, setLanguage] = useState<OutputLanguage>(() => activeProfile().outputLanguage);
+
   if (!open) return null;
+
+  // The profile to drive generation with — the active one, but forced to the
+  // language the user picked in this wizard.
+  const profileForGen = (): VoiceProfile => ({ ...activeProfile(), outputLanguage: language });
+  // Persist the chosen language as the new default on the active profile.
+  const persistLanguageDefault = (lang: OutputLanguage) => {
+    upsertProfile({ ...activeProfile(), outputLanguage: lang });
+  };
 
   const kind = detectKind(input);
   const canGenerate = input.trim().length > 4 && !generating;
@@ -86,6 +106,9 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, onClose, o
   const runGenerate = async (extraInstr?: string) => {
     setError(null);
     setGenerating(true);
+    // Save the picked language as the global default before generating.
+    persistLanguageDefault(language);
+    const profile = profileForGen();
     try {
       let result: ScriptBlock[];
       if (kind === 'artigo') {
@@ -101,13 +124,13 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, onClose, o
         }
         const gen = await generateReelFromContent(
           { text, sourceUrl, title },
-          { style: 'educational', framework: 'auto', durationSec: 30, extraInstructions: extraInstr || undefined },
+          { style: 'educational', framework: 'auto', durationSec: 30, extraInstructions: extraInstr || undefined, voiceProfile: profile },
         );
         result = gen.blocks;
       } else {
         // texto
         const raw = extraInstr ? `${input.trim()}\n\n(Instrução extra: ${extraInstr})` : input.trim();
-        result = await importScriptWithAI(raw);
+        result = await importScriptWithAI(raw, undefined, profile);
       }
       if (!result || result.length === 0) throw new Error('Nenhum bloco gerado. Tente um conteúdo mais específico.');
       setBlocks(result);
@@ -188,6 +211,22 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, onClose, o
                 {kind === 'texto' && ' → gerar roteiro em blocos'}
                 {kind === 'artigo' && ' → ler o artigo e virar roteiro'}
                 {kind === 'video' && ' → abrir a importação de vídeo'}
+              </div>
+
+              {/* Default language — seeded from the active voice profile; changing
+                  it here saves it as the global default for all future reels. */}
+              <div className="mt-4 flex items-center gap-2.5">
+                <span className="text-[11px] uppercase tracking-wider font-semibold" style={{ color: tokens.text.tertiary }}>Idioma</span>
+                <select
+                  value={language}
+                  onChange={e => { const v = e.target.value as OutputLanguage; setLanguage(v); persistLanguageDefault(v); }}
+                  className="rounded-lg px-2.5 py-1.5 text-[12px] outline-none"
+                  style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}`, color: tokens.text.primary }}
+                  title="Idioma do roteiro e do áudio. A escolha vira o padrão pros próximos reels."
+                >
+                  {LANGUAGE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                <span className="text-[10px]" style={{ color: tokens.text.tertiary }}>✓ salvo como padrão</span>
               </div>
             </>
           )}
