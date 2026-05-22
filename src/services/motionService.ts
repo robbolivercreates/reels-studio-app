@@ -2071,11 +2071,14 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     id.primaryPlatform ? `platform: ${id.primaryPlatform} (use its accent color in the follow button)` : ``,
     id.avatarDataUrl
       ? [
-        `avatarDataUrl: provided as a base64 data URL — embed via <img src="…" /> inside the profile circle.`,
-        `The exact value to put in the src attribute:`,
-        id.avatarDataUrl,
+        `avatar: the user HAS a profile photo. Put it in an <img> INSIDE the profile`,
+        `circle, with the src set EXACTLY to this placeholder token — the runtime swaps`,
+        `in the real photo AFTER generation. Do NOT paste a data URL. Do NOT invent a`,
+        `URL. Do NOT output any base64. Use the token literally:`,
+        `    <img src="__CREATOR_AVATAR__" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;" />`,
+        `(the literal token is: __CREATOR_AVATAR__ )`,
       ].join('\n')
-      : `avatarDataUrl: (none — use a CSS gradient placeholder for the avatar circle)`,
+      : `avatar: (none — use a CSS gradient placeholder for the avatar circle, no <img>)`,
     ``,
     `CRITICAL RULES:`,
     `• Copy the values above LITERALLY. Do not alter spelling, capitalisation, or add prefixes/suffixes.`,
@@ -2270,6 +2273,21 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         );
         if (parsed.htmlBody.length !== beforeLen) {
           console.log('[motion/sanitize] rewrote self-closing media tags · model=', model, '· delta=', parsed.htmlBody.length - beforeLen);
+        }
+
+        // Inject the creator avatar deterministically. The base64 data URL must
+        // NEVER pass through the model — asked to copy a long opaque string, it
+        // truncates/corrupts it, yielding a broken-image icon on the follow card.
+        // Instead the model emits a short __CREATOR_AVATAR__ token and we swap in
+        // the real photo here, in code.
+        if (input.userIdentity?.avatarDataUrl && parsed.htmlBody.includes('__CREATOR_AVATAR__')) {
+          parsed.htmlBody = parsed.htmlBody.split('__CREATOR_AVATAR__').join(input.userIdentity.avatarDataUrl);
+          console.log('[motion] injected creator avatar into __CREATOR_AVATAR__ placeholder');
+        } else if (parsed.htmlBody.includes('__CREATOR_AVATAR__')) {
+          // Model used the token but we have no photo — swap in a 1x1 transparent
+          // pixel so the <img> never renders as a broken-image icon.
+          const TRANSPARENT_PX = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+          parsed.htmlBody = parsed.htmlBody.split('__CREATOR_AVATAR__').join(TRANSPARENT_PX);
         }
 
         // Debug: see if Gemini honoured the light-mode override. We count
