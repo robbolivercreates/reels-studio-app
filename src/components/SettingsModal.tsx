@@ -151,6 +151,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
 
   // Motion HTML generation model — read on open, persisted on Salvar.
   const [motionModel, setMotionModel] = useState<MotionModelId>(DEFAULT_MOTION_MODEL);
+  const [allowProFallback, setAllowProFallback] = useState(false);
 
   const refreshClonedVoices = () => setClonedVoices(loadClonedVoices());
 
@@ -235,6 +236,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
         ? (storedModel as MotionModelId)
         : DEFAULT_MOTION_MODEL,
     );
+    setAllowProFallback(localStorage.getItem('ALLOW_PRO_FALLBACK') === 'true');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialTab]);
 
@@ -261,6 +263,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
     // Persist motion model preference. Default is also explicitly written so
     // a downgrade from a non-default + Salvar takes effect immediately.
     localStorage.setItem(MOTION_MODEL_STORAGE_KEY, motionModel);
+    localStorage.setItem('ALLOW_PRO_FALLBACK', allowProFallback ? 'true' : 'false');
     onSave();
   };
 
@@ -623,9 +626,23 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                 </option>
               ))}
             </select>
-            <div className="mt-1.5 text-[10px] text-zinc-600">
+             <div className="mt-1.5 text-[10px] text-zinc-600 mb-2">
               Aplica nos próximos motions gerados. Em caso de erro, o app cai automaticamente nos outros modelos.
             </div>
+            <label className="flex items-start gap-2.5 cursor-pointer py-1 mt-2.5">
+              <input
+                type="checkbox"
+                checked={allowProFallback}
+                onChange={e => setAllowProFallback(e.target.checked)}
+                className="mt-0.5 accent-violet-400 shrink-0"
+              />
+              <div className="flex-1">
+                <div className="text-[11px] font-semibold text-zinc-200">Permitir Fallback para Gemini Pro</div>
+                <div className="text-[10px] text-zinc-500 mt-0.5 leading-relaxed">
+                  Se desativado, o app usará apenas modelos Flash mais baratos, impedindo gastos altos acidentais.
+                </div>
+              </div>
+            </label>
           </div>
 
           {KEYS.map(k => {

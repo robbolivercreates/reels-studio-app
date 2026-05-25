@@ -113,6 +113,13 @@ export interface MotionConfig {
    * generated before this field was introduced — badge falls back to "—".
    */
   modelUsed?: string;
+  /** Actual cost in USD for generating this motion. */
+  actualCostUSD?: number;
+  /** Actual token count metadata. */
+  actualTokens?: {
+    prompt: number;
+    candidates: number;
+  };
 }
 
 export const newMotionId = (): string =>

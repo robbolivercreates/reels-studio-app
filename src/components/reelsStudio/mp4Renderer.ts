@@ -781,16 +781,69 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       fastStart: 'in-memory',
     });
 
+    // Capture the encoder's async error instead of throwing from inside the
+    // callback. A `throw` inside an async callback DOES NOT propagate to the
+    // surrounding try/catch — it becomes an unhandled exception, and the
+    // encoder silently transitions to 'closed'. The next `encode()` then
+    // surfaces a misleading "VideoEncoder is not configured" instead of the
+    // real codec/config error. Holding the error lets us re-throw it at a
+    // safe checkpoint where the catch can actually see it.
+    let videoEncoderError: Error | null = null;
     const videoEncoder = new VideoEncoder({
       output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
-      error: (e) => { throw e; },
+      error: (e) => {
+        const err = e instanceof Error ? e : new Error(String(e));
+        console.error('[render/video] encoder error:', err);
+        if (!videoEncoderError) videoEncoderError = err;
+      },
     });
-    videoEncoder.configure({
-      codec: 'avc1.640028',
+    // Try H.264 profiles from richest to most permissive. Some Tauri/WebKit
+    // builds support High in `isConfigSupported` but trip on configure or the
+    // first encode; Main and Baseline are much more universally available.
+    const videoConfigBase = {
       width, height,
       bitrate: bitrateFor(inputs.quality),
       framerate: FRAMERATE,
-    });
+    } as const;
+    const codecCandidates = [
+      'avc1.640028', // H.264 High @ L4.0
+      'avc1.4D4028', // H.264 Main @ L4.0
+      'avc1.42E028', // H.264 Constrained Baseline @ L4.0
+    ];
+    let configuredCodec: string | null = null;
+    let lastConfigureError: unknown = null;
+    for (const codec of codecCandidates) {
+      try {
+        const probe = await VideoEncoder.isConfigSupported({ codec, ...videoConfigBase });
+        if (!probe.supported) {
+          console.warn('[render/video] codec not supported by probe:', codec);
+          continue;
+        }
+        videoEncoder.configure({ codec, ...videoConfigBase });
+        // Give the encoder a tick to surface async configure errors via the
+        // error callback above before we commit to this codec.
+        await new Promise(r => setTimeout(r, 0));
+        if (videoEncoderError) {
+          console.warn('[render/video] async configure error on', codec, '·', videoEncoderError);
+          lastConfigureError = videoEncoderError;
+          videoEncoderError = null; // reset for next attempt
+          continue;
+        }
+        configuredCodec = codec;
+        break;
+      } catch (err) {
+        console.warn('[render/video] configure threw on', codec, '·', err);
+        lastConfigureError = err;
+        // Continue to next candidate.
+      }
+    }
+    if (!configuredCodec) {
+      const cause = lastConfigureError instanceof Error
+        ? lastConfigureError.message
+        : (lastConfigureError ? String(lastConfigureError) : 'codec H.264 indisponível');
+      throw new Error(`Renderizador de vídeo indisponível: ${cause}`);
+    }
+    console.log('[render/video] using codec:', configuredCodec);
 
     // Audio encoder only used in non-videoOnly mode.
     let audioChunksEncoded = 0;
@@ -1113,6 +1166,14 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       }
       videoEncoder.encode(videoFrame, { keyFrame: forceKeyframe });
       videoFrame.close();
+      // Surface any async encoder error captured by the error callback above.
+      // Without this, the loop keeps feeding frames into a closed encoder and
+      // we end up with a generic "VideoEncoder is not configured" later — the
+      // real cause (codec / memory / hardware) gets lost.
+      if (videoEncoderError) {
+        const cause = (videoEncoderError as Error).message || String(videoEncoderError);
+        throw new Error(`Encoder de vídeo falhou: ${cause}`);
+      }
 
       // Throttle thumbnail updates to ~5fps to avoid main-thread thrash.
       const now = performance.now();

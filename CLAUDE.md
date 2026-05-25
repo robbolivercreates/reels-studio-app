@@ -32,10 +32,15 @@ This repo was forked from the web-only `avatar-studio` project once the web wave
 
 ### Tauri shell (`src-tauri/`)
 
-- `src/lib.rs` registers the invoke handlers; `src/references.rs` owns all of them. Currently exposes: `references_dir`, `list_references`, `delete_reference`, `read_reference_bytes`, `save_imported_video`, `download_video`, `reveal_references_dir`.
-- Reference videos (downloads from IG/TikTok/YouTube/Facebook + manual uploads) live in a fixed user dir managed by Rust. The frontend calls these via `@tauri-apps/api/core invoke()`.
-- `tauri.conf.json` is the source of truth for window size (1400×900, min 1100×720), bundle identifier (`com.robboliver.reelsstudio`), and CSP (currently `null` — relaxed for dev).
-- yt-dlp is invoked from Rust as a subprocess for cross-platform IG/TikTok/YouTube/FB downloads. Avoid re-introducing CORS proxies on the frontend — the native command is the authoritative path.
+`src/lib.rs` registers every invoke handler. Modules:
+- `references.rs` — reference-video library (`references_dir`, `list_references`, `delete_reference`, `read_reference_bytes`, `save_imported_video`, `download_video`, `reveal_references_dir`). Lives in a fixed user dir managed by Rust; the frontend calls via `@tauri-apps/api/core invoke()`. yt-dlp is invoked as a subprocess for cross-platform IG/TikTok/YouTube/FB downloads — **do not re-introduce CORS proxies on the frontend**, the native command is the authoritative path.
+- `motions.rs` — motion-graphics storage and rendering (`save_motion_html`, `render_motion`, `read_motion_video_bytes`, `copy_asset_to_motion`). HTML motion templates render to MP4 server-side.
+- `assets.rs` — per-project asset directory (`ensure_assets_dir`, `list_project_assets`, `write_asset_bytes`, `append_asset_chunk`, `reveal_assets_dir`). Chunked writes for large files.
+- `capcut.rs` — native CapCut draft writer (`save_capcut_draft`, `capcut_draft_dir_for`, `open_capcut_app`, plus the legacy project/folder helpers). Writes directly into CapCut's drafts directory so the project opens natively, no FCPXML import step.
+- `save_dialog.rs` — native save dialogs, file IO, and **ffmpeg muxing** (`mux_video_audio_ffmpeg`). ffmpeg is expected on PATH for the final video+audio mux step in MP4 export.
+- `agent/` — Claude Code agent integration (see "Agent integration" below).
+
+`tauri.conf.json` is the source of truth for window size (1400×900, min 1100×720), bundle identifier (`com.robboliver.reelsstudio`), and CSP (currently `null` — relaxed for dev).
 
 ### Frontend pipeline (`src/components/reelsStudio/`)
 
@@ -74,8 +79,9 @@ HeyGen always renders at **1920×1080 (16:9)** for max info, regardless of proje
 
 ### Export paths
 
-1. **Native MP4** via WebCodecs (`mp4Renderer.ts`) + `mp4-muxer` — H.264/AAC bundled in-browser, no server.
-2. **CapCut Desktop** via `fcpxmlExporter.ts` — generates FCPXML 1.10 with avatar audio muted at -96dB (audio comes from the master TTS track), bundled with raw assets in a JSZip via `packageBuilder.ts`.
+1. **Native MP4** via WebCodecs (`mp4Renderer.ts`) + `mp4-muxer` — H.264/AAC bundled in-browser. Final video+audio mux uses **ffmpeg as a Rust subprocess** (`save_dialog::mux_video_audio_ffmpeg`), so ffmpeg must be on PATH for that step.
+2. **CapCut Desktop — native draft** via `capcutDraftBuilder.ts` + `src-tauri/src/capcut.rs`. Writes a real CapCut draft directly into CapCut's drafts directory (`capcut_draft_dir_for`) and can auto-launch the app (`open_capcut_app`). This is the preferred CapCut path.
+3. **CapCut Desktop — FCPXML fallback** via `fcpxmlExporter.ts` — generates FCPXML 1.10 with avatar audio muted at -96dB (audio comes from the master TTS track), bundled with raw assets in a JSZip via `packageBuilder.ts`. Kept for portability and when the native draft path isn't viable.
 
 ### Persistence (`persistence.ts` + `useReelsPersistence.ts`)
 
@@ -108,3 +114,26 @@ The `voice-docs/voz-rob-boliver.md` file is the spec for any AI-assisted script/
 ### Styling
 
 Tailwind via CDN (no PostCSS step). Custom shadows like `shadow-[0_30px_80px_rgba(0,0,0,0.8)]` inline. Dark theme is hard-coded; no theme toggle.
+
+### Services layer (`src/services/`)
+
+Each external integration lives in its own service module (`captionService`, `carouselScriptService`, `motionService`, `scriptFromContentService`, `videoAnalysisService`, `blockGeneratorService`, `thumbnailService`, …). They all read API keys from `localStorage` directly — there is no central API client. When adding a new Gemini call, register the model ID and per-1M-token rates in `costPredictor.ts` (`PRICING_RATES`) and call `logActualCost(...)` from the service so the cost banner in the UI stays accurate. Pricing in that file is dated and must be kept in sync with Google's published rates.
+
+The thumbnail flow (`thumbnailService.ts` + `thumbnailTemplates.ts` + `components/agent/ThumbnailCard.tsx`) is a two-step Gemini-research → fal.ai-image-gen pipeline: Gemini researches the visual concept and overlay text, fal.ai (`nano-banana` / Qwen edit) renders the PNG. Templates live in `thumbnailTemplates.ts` — edit them there rather than inlining prompts in the service.
+
+### Agent integration (`src-tauri/src/agent/`)
+
+The app embeds a Claude Code agent subprocess so users can co-edit projects with an assistant from inside the desktop shell. Modules:
+- `claude_subprocess.rs` — spawns/cancels the `claude` CLI as a child process (`agent_send`, `agent_cancel`).
+- `mcp_server.rs` + `agent_mcp_port` / `agent_register_mcp` — local MCP server the subprocess connects to so the agent can call Tauri-side tools.
+- `tool_bridge.rs` (`agent_tool_result`) — routes tool calls from the agent into the frontend and back.
+- `approval.rs` (`agent_approve`) — human-in-the-loop approval gate for risky tool calls; the UI surfaces a prompt before the agent acts.
+- `picker.rs` (`agent_picker_result`) — bridges native file/asset pickers to the agent.
+- `state.rs` + `agent_publish_state` — pushes app state snapshots to the agent so it has context.
+- `auth.rs` — handles Claude Code auth flow.
+
+`agent::init(&app.handle())` runs at Tauri startup. The `claude` binary must be installed and on PATH for this feature to work.
+
+### Live design notes
+
+`NOTES.md` at the repo root is a live design doc (multi-asset blocks, card UX, etc.) that captures in-flux decisions before they land in code. Skim it when working on the block card, asset attachment, or motion engine — it's where the "why" for half-finished UI work lives.

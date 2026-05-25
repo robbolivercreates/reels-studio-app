@@ -311,6 +311,24 @@ pub struct GenerateCarouselArgs {
     pub slides_json: Option<String>,
 }
 
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GenerateThumbnailArgs {
+    /// O título principal do vídeo para ser usado como base do gancho e pesquisa.
+    pub video_title: String,
+    /// Resumo do roteiro do Reels (ou o roteiro completo) para contextualização da IA (opcional).
+    #[serde(default)]
+    pub script_summary: Option<String>,
+    /// Instruções personalizadas do usuário sobre o que desenhar ou destacar na thumbnail (opcional).
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// O estilo estético desejado. Padrão: 'standard' (Rob Boliver signature aesthetic) (opcional).
+    #[serde(default)]
+    pub style: Option<String>,
+    /// Opcional. Foto do criador em base64 (data URI ou bytes puros). Quando fornecida, usa o GPT Image 2 em modo edição para incluir a aparência real do criador na thumbnail.
+    #[serde(default)]
+    pub creator_photo_base64: Option<String>,
+}
+
 // ---- Wave 2: visual tools (motion + avatar) ----------------------------
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -902,6 +920,23 @@ impl ReelsAgentService {
               "desc": "Mimica a interface do Claude — útil pra demos meta." }
         ]);
         Ok(CallToolResult::success(vec![Content::text(presets.to_string())]))
+    }
+
+    #[tool(
+        description = "Gera uma thumbnail (capa de Reels/TikTok 9:16) premium com IA. Utiliza um fluxo em duas etapas: (1) pesquisa grounded (Gemini 3.5 Flash) sobre marcas e logotipos citados e CTR do nicho; (2) fusão com o padrão estético Rob Boliver (deep dark background, electric cyan/sapphire/indigo/violet accents, tipografia oversized bold sans-serif) e geração final de imagem via GPT Image 2 no Fal.ai. Salva o arquivo diretamente na pasta Assets do projeto."
+    )]
+    async fn generate_thumbnail(
+        &self,
+        Parameters(args): Parameters<GenerateThumbnailArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let payload = json!({
+            "video_title": args.video_title,
+            "script_summary": args.script_summary,
+            "instructions": args.instructions,
+            "style": args.style.unwrap_or_else(|| "standard".into()),
+            "creator_photo_base64": args.creator_photo_base64,
+        });
+        self.bridge_write("generate-thumbnail", payload).await
     }
 
     #[tool(

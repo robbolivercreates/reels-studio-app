@@ -52,6 +52,7 @@ pub fn run() {
             agent::agent_health,
             agent::agent_register_mcp,
             agent::agent_read_file_b64,
+            agent::agent_write_attachment_temp,
             agent::claude_subprocess::agent_send,
             agent::claude_subprocess::agent_cancel,
             agent::approval::agent_approve,

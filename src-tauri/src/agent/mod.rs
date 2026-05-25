@@ -92,6 +92,54 @@ pub async fn agent_register_mcp(state: State<'_, AgentState>) -> Result<(), Stri
 }
 
 /// Reads bytes from an absolute file path. Used by tools that need to
+/// Write raw bytes (typically a picked image/video) to an OS temp file and
+/// return its absolute path. Used by the agent chat so attachments can be
+/// referenced as `@<path>` in the Claude prompt instead of being inlined as
+/// base64 text. Inlining blew up two limits in sequence: ARG_MAX (OS error 7
+/// when the prompt is a CLI arg) and the Claude context window ("Prompt is
+/// too long") — both fixed by passing the file by path.
+///
+/// The caller passes the original filename (so the extension survives, which
+/// the CLI uses to decide if the file is an image) and the bytes themselves.
+/// Files land in `tempdir()/reels-agent-attachments/<random>-<filename>` and
+/// stick around for the OS to clean. We don't reuse a stable name across
+/// calls — collisions between concurrent sends would mix up content.
+#[tauri::command]
+pub fn agent_write_attachment_temp(filename: String, bytes: Vec<u8>) -> Result<String, String> {
+    // Cap at 50 MB to match agent_read_file_b64 — pictures/clips for the
+    // agent shouldn't be bigger; runaway uploads would also fill the temp
+    // partition.
+    const MAX_BYTES: usize = 50 * 1024 * 1024;
+    if bytes.len() > MAX_BYTES {
+        return Err(format!(
+            "Anexo muito grande ({} MB; limite 50 MB).",
+            bytes.len() / (1024 * 1024)
+        ));
+    }
+    // Sanitize the filename — strip any directory component the browser
+    // might've included and any null bytes. Spaces are fine, the CLI
+    // tolerates quoted paths.
+    let safe_name: String = filename
+        .rsplit('/')
+        .next()
+        .unwrap_or("attachment")
+        .replace('\0', "_");
+    let dir = std::env::temp_dir().join("reels-agent-attachments");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("mkdir {}: {e}", dir.display()))?;
+    // Random suffix so concurrent attachments with the same filename don't
+    // overwrite each other.
+    let nonce: u64 = {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0)
+    };
+    let path = dir.join(format!("{nonce:016x}-{safe_name}"));
+    std::fs::write(&path, &bytes).map_err(|e| format!("write {}: {e}", path.display()))?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
 /// upload local files to fal.ai (e.g. clone_voice_from_audio). Locked to
 /// regular files only — refuses dirs/symlinks. Returns base64 so the IPC
 /// JSON channel doesn't blow up on large blobs.

@@ -15,6 +15,7 @@
  */
 
 import { GoogleGenAI, Type } from '@google/genai';
+import { logActualCost, calculateActualCost } from './costPredictor';
 import type { MotionConfig, FontSet } from '../components/reelsStudio/motionLibrary';
 import { buildFontSetHead, FONT_SETS_PROMPT_TABLE } from '../components/reelsStudio/motionFontSets';
 import { buildOverlays, OVERLAYS_PROMPT_HINT } from '../components/reelsStudio/motionOverlays';
@@ -24,6 +25,9 @@ import {
   FORBIDDEN_PATTERNS,
   findStylePreset,
 } from '../components/reelsStudio/motionStylePresets';
+
+// Memory cache to avoid repeating Google Search grounding for the same brand in the same session.
+export const BRAND_CACHE = new Map<string, any>();
 
 export interface GenerationOutput {
   /** The intent Gemini decided to illustrate (echoed back so user can review/edit). */
@@ -41,6 +45,13 @@ export interface GenerationOutput {
    * engine made it, independent of the currently-selected preference.
    */
   modelUsed: string;
+  /** Actual cost in USD for generating this motion. */
+  actualCostUSD?: number;
+  /** Actual token count metadata. */
+  actualTokens?: {
+    prompt: number;
+    candidates: number;
+  };
 }
 
 const getApiKey = (): string => {
@@ -84,6 +95,17 @@ const getModelCandidates = (preferred?: string): readonly MotionModelId[] => {
     ? (preferred as MotionModelId)
     : undefined;
   const selected = valid ?? readSelectedMotionModel();
+  
+  const allowProFallback = localStorage.getItem('ALLOW_PRO_FALLBACK') === 'true';
+  
+  // If Pro fallback is not allowed and the chosen model is NOT Pro, exclude it from candidates.
+  // This keeps the user safe from silent $0.05/call fallbacks by accident.
+  if (!allowProFallback && selected !== 'gemini-3.1-pro-preview') {
+    const flashModels = SUPPORTED_MOTION_MODELS.filter(m => m !== 'gemini-3.1-pro-preview');
+    const rest = flashModels.filter(m => m !== selected);
+    return [selected, ...rest];
+  }
+  
   const rest = SUPPORTED_MOTION_MODELS.filter(m => m !== selected);
   return [selected, ...rest];
 };
@@ -1087,6 +1109,12 @@ const isBannedColor = (hex: string, topic: string): { banned: boolean; label: st
 };
 
 async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: GenerateMotionInput['reelContext']): Promise<BrandResearch | null> {
+  const cacheKey = reelContext?.projectName ? `proj_${reelContext.projectName}` : `text_${blockText.slice(0, 100)}`;
+  if (BRAND_CACHE.has(cacheKey)) {
+    console.log('[motion] Brand research cache HIT for key:', cacheKey);
+    return BRAND_CACHE.get(cacheKey)!;
+  }
+
   // Brand research — Pro and Flash only. Lite is not capable enough (user requirement).
   const groundingModels = [
     'gemini-3.1-pro-preview',
@@ -1114,6 +1142,10 @@ async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: G
           temperature: 0.1,
         },
       });
+      
+      // LOG COST
+      logActualCost('Brand Research Grounding', model, response.usageMetadata, 1);
+
       const raw = response.candidates?.[0]?.content?.parts?.find(p => p.text)?.text ?? '';
       if (!raw) continue;
       const match = raw.match(/\{[\s\S]*\}/);
@@ -1137,6 +1169,8 @@ async function researchBrand(ai: GoogleGenAI, blockText: string, reelContext?: G
         console.warn('[motion] brand research returned banned accent colors, falling back to neutral', { topic, offenders });
         return null;
       }
+
+      BRAND_CACHE.set(cacheKey, parsed);
       return parsed;
     } catch {
       // grounding failed or model not available — proceed without brand colors
@@ -2217,6 +2251,14 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           thinkingConfig: { thinkingBudget: 4096 },
         },
       });
+
+      // LOG COST
+      logActualCost('Motion Generation', model, response.usageMetadata, 0);
+      const usage = response.usageMetadata;
+      const actualCostUSD = usage
+        ? calculateActualCost(model, usage.promptTokenCount, usage.candidatesTokenCount, 0, 0)
+        : 0;
+
       // If the model ran out of output budget, the JSON/HTML is truncated and
       // unusable — skip to the next candidate instead of feeding broken HTML to
       // the renderer (which then fails the lint or throws SVG attribute errors).
@@ -2314,6 +2356,11 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           // Return the brand so the caller can cache it on the reel state and
           // pass it back via existingBrand on subsequent motions.
           brand: brand ?? undefined,
+          actualCostUSD,
+          actualTokens: usage ? {
+            prompt: usage.promptTokenCount ?? 0,
+            candidates: usage.candidatesTokenCount ?? 0
+          } : undefined
         };
       }
     } catch (err) {

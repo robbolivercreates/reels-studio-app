@@ -122,6 +122,9 @@ export interface ChatMessage {
   streaming?: boolean;
   /** Optional: image/video chips to display under a user message. */
   attachments?: Array<{ kind: 'image' | 'video'; name: string; previewUrl?: string }>;
+  /** Optional: AI generated thumbnail data URL (base64 image) and its filename */
+  thumbnailDataUrl?: string;
+  thumbnailFilename?: string;
 }
 
 interface MessageEnvelope {
@@ -211,22 +214,35 @@ function loadStoredModel(): ClaudeModel {
   return 'sonnet';
 }
 
-// Read an image file as a data URL so we can inline it in the prompt as
-// `<image data:image/png;base64,…>` for Claude Vision. Capped at ~5MB
-// per file to keep prompts manageable.
-const MAX_INLINE_IMAGE_BYTES = 5 * 1024 * 1024;
-async function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(new Error('readAsDataURL failed'));
-    reader.readAsDataURL(file);
+// Cap on attachment size that gets uploaded to a temp file for the agent.
+// Mirrors the limit enforced by the Rust `agent_write_attachment_temp`
+// command — keeping them in sync avoids confusing error messages.
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
+async function fileToBytes(file: File): Promise<Uint8Array> {
+  const buf = await file.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+/// Persist an attachment to an OS temp file (via the Rust side) and return
+/// its absolute path. The agent prompt references the file by path instead
+/// of inlining base64 — which would blow past the Claude context window for
+/// anything beyond a small thumbnail.
+async function persistAttachmentTemp(att: AttachmentMeta): Promise<string> {
+  const bytes = await fileToBytes(att.file);
+  return await invoke<string>('agent_write_attachment_temp', {
+    filename: att.name,
+    bytes: Array.from(bytes),
   });
 }
 
 /// Build the augmented prompt that goes to Claude when attachments are
-/// present. Images become inline data URLs (Claude Vision); videos pass
-/// as `<video_path>` tags the agent can hand to MCP tools.
+/// present. Images and videos are saved to OS temp files and referenced by
+/// absolute path — Claude Code CLI can read them via the `@<path>` syntax
+/// (for images it routes them through Vision automatically). We avoid
+/// inlining base64 because (a) it explodes ARG_MAX when prompts are passed
+/// as CLI args and (b) it consumes the Claude context window character-by-
+/// character even though the bytes are opaque to the model.
 async function buildPromptWithAttachments(
   prompt: string,
   attachments: AttachmentMeta[],
@@ -234,25 +250,26 @@ async function buildPromptWithAttachments(
   if (attachments.length === 0) return prompt;
   const chunks: string[] = [prompt];
   for (const att of attachments) {
-    if (att.kind === 'image') {
-      if (att.size > MAX_INLINE_IMAGE_BYTES) {
-        chunks.push(`\n[Imagem ${att.name} excedeu 5MB — anexada apenas como referência de nome.]`);
-        continue;
+    if (att.size > MAX_ATTACHMENT_BYTES) {
+      chunks.push(`\n[${att.name} excedeu 50MB — anexada apenas como referência de nome.]`);
+      continue;
+    }
+    try {
+      const path = await persistAttachmentTemp(att);
+      if (att.kind === 'image') {
+        // Claude Code CLI's `@<path>` syntax auto-loads the file. For images
+        // that means Vision processes it as a real image block — no token
+        // bloat from base64 in the prompt body.
+        chunks.push(`\n<image filename="${att.name}">@${path}</image>`);
+      } else {
+        // Videos pass as a path the agent can hand to MCP tools
+        // (add_broll_to_block, attach_asset_from_path, etc.). Claude itself
+        // can't view video frames yet.
+        chunks.push(`\n<video_path filename="${att.name}">${path}</video_path>`);
       }
-      try {
-        const data = await fileToDataUrl(att.file);
-        chunks.push(`\n<image filename="${att.name}">${data}</image>`);
-      } catch {
-        chunks.push(`\n[Falhou ao ler ${att.name}.]`);
-      }
-    } else {
-      // Videos can't go inline (Vision is image-only). Provide path so the
-      // agent can call tools like add_broll_to_block with it.
-      // File.path is non-standard but Tauri's webview exposes it; fall
-      // back to name when missing.
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const path = (att.file as any).path ?? att.name;
-      chunks.push(`\n<video_path filename="${att.name}">${path}</video_path>`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      chunks.push(`\n[Falhou ao anexar ${att.name}: ${msg}]`);
     }
   }
   return chunks.join('\n');
@@ -320,6 +337,13 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
   // we just track the id locally so we can pass `--session-id` consistently.
   const [sessionId, setSessionId] = useState<string | null>(() => loadSessionFor(projectKey));
   const [model, setModelState] = useState<ClaudeModel>(loadStoredModel);
+
+  // Mirror projectKey into a ref so the long-lived event listeners (installed
+  // once in a useEffect with stable deps) can always read the CURRENT key
+  // when an event fires — without re-installing the listeners on every
+  // project switch (which would duplicate them).
+  const projectKeyRef = useRef(projectKey);
+  useEffect(() => { projectKeyRef.current = projectKey; }, [projectKey]);
 
   // Reload session when project changes.
   useEffect(() => {
@@ -534,7 +558,23 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
 
       await installed(listen<ErrorEvent>('agent://error', e => {
         setBusy(false);
-        append({ role: 'error', text: e.payload.message });
+        const msg = e.payload.message;
+        // Detect context-window overflow — usually means a previous turn
+        // baked something huge into the session (image base64 dumped inline
+        // before the temp-file fix). Resuming carries that payload forward
+        // forever, so the only way out is a fresh session. Reset locally
+        // and tell the user — without this they're stuck re-typing into
+        // a poisoned chat with no obvious way out.
+        if (/prompt is too long|context.*too long|context.*window|too many tokens/i.test(msg)) {
+          setSessionId(null);
+          deleteSessionFor(projectKeyRef.current);
+          append({
+            role: 'error',
+            text: `${msg}\n\nA sessão anterior ficou pesada demais. Iniciei uma nova — pode reenviar.`,
+          });
+        } else {
+          append({ role: 'error', text: msg });
+        }
       }));
 
       await installed(listen<{ run_id: string; exit_code: number | null; cancelled?: boolean }>(
@@ -800,6 +840,15 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
     [],
   );
 
+  const proposeThumbnail = useCallback((dataUrl: string, filename: string) => {
+    append({
+      role: 'system',
+      text: '',
+      thumbnailDataUrl: dataUrl,
+      thumbnailFilename: filename,
+    });
+  }, [append]);
+
   const clear = useCallback(() => {
     setMessages([]);
     setSessionId(null);
@@ -821,6 +870,7 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
     updateDraft,
     proposeSetup,
     resolveSetup,
+    proposeThumbnail,
     clear,
     sessionId,
     setSessionId,

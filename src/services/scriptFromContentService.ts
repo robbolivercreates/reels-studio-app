@@ -3,6 +3,7 @@ import type { ScriptBlock, BlockKind, RegenerateContext } from '../components/re
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
 import { buildRegenPromptSection } from './regenPrompt';
 import { buildContentModeSection } from './contentMode';
+import { logActualCost } from './costPredictor';
 
 // ─── STYLES ─────────────────────────────────────────────────────────────
 
@@ -53,7 +54,7 @@ const FRAMEWORK_INSTRUCTION: Record<Framework, string> = {
 
 // ─── DURATION ───────────────────────────────────────────────────────────
 
-export type DurationTarget = 15 | 20 | 30 | 45 | 60;
+export type DurationTarget = 15 | 20 | 30 | 45 | 60 | 90;
 
 // ─── INPUT ──────────────────────────────────────────────────────────────
 
@@ -169,10 +170,8 @@ const getApiKey = (): string => {
   return key;
 };
 
-// Flash como primeira escolha; Pro como fallback se Flash falhar (timeout,
-// 503 etc). Flash Lite foi removido — entrega script raso na maioria dos
-// artigos longos e o ganho de custo não compensa a regressão de qualidade.
-const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-pro-preview'];
+// Prioritize cheap Gemini 3.1 Flash-Lite, then try Gemini 3.5 Flash, then 3.1 Pro as fallback.
+const MODEL_CANDIDATES = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro-preview'];
 
 // Source content can be very long. Gemini Flash handles 1M tokens, but we still
 // trim to a sane upper bound to keep latency + cost down. Most articles fit in 30k chars.
@@ -243,8 +242,14 @@ export const generateReelFromContent = async (
           temperature: regen
             ? 0.9
             : options.style === 'viral' || options.style === 'opinion' ? 0.85 : 0.55,
+          // Habilita raciocínio (Thinking) para evitar respostas vazias ou rasas na leitura de posts/artigos.
+          thinkingConfig: { thinkingBudget: 2048 },
         },
       });
+
+      // LOG COST
+      logActualCost('Script from Content', model, response.usageMetadata, 0);
+
       break;
     } catch (err) {
       lastError = err;

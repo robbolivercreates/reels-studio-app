@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { logActualCost, calculateActualCost } from './costPredictor';
 import type { ScriptBlock, BlockKind, RegenerateContext } from '../components/reelsStudio/types';
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
 import { buildRegenPromptSection } from './regenPrompt';
@@ -42,6 +43,8 @@ export interface VideoAnalysisResult {
   directions: BlockDirection[];
   /** Reel-level production notes (setup, watch-outs, soundbed). */
   production: ProductionNotes;
+  /** Actual cost in USD for this analysis invocation. */
+  actualCostUSD?: number;
 }
 
 const uid = () => `b_${Math.random().toString(36).slice(2, 9)}`;
@@ -186,10 +189,8 @@ const sanitizeMime = (file: Blob | { type?: string }): string => {
   return 'video/mp4';
 };
 
-// Flash em primeiro (multimodal barato); Pro como fallback de qualidade.
-// Flash Lite foi cortado — em análise de vídeo ele perde direção/tone com
-// frequência o suficiente pra atrapalhar mais que ajudar no custo.
-const MODEL_CANDIDATES = ['gemini-3-flash-preview', 'gemini-3.1-pro-preview'];
+// Prioritize cheap Gemini 3.1 Flash-Lite, then try Gemini 3.5 Flash, then 3.1 Pro as quality fallback.
+const MODEL_CANDIDATES = ['gemini-3.1-flash-lite', 'gemini-3.5-flash', 'gemini-3.1-pro-preview'];
 
 /** Status callback for the UI — surfaces upload/processing stages of large files. */
 export type AnalysisStatus =
@@ -231,6 +232,7 @@ const callGemini = async (
 
   let lastError: unknown;
   let response: Awaited<ReturnType<typeof ai.models.generateContent>> | undefined;
+  let finalModel = '';
   for (const model of MODEL_CANDIDATES) {
     try {
       response = await ai.models.generateContent({
@@ -244,6 +246,7 @@ const callGemini = async (
             : voiceProfile?.rewriteLevel === 'reimagine' ? 0.85 : 0.55,
         },
       });
+      finalModel = model;
       break;
     } catch (err) {
       lastError = err;
@@ -253,6 +256,13 @@ const callGemini = async (
     }
   }
   if (!response) throw lastError instanceof Error ? lastError : new Error('Nenhum modelo Gemini disponível.');
+
+  // LOG COST
+  logActualCost('Video Analysis', finalModel, response.usageMetadata, 0);
+  const usage = response.usageMetadata;
+  const actualCostUSD = usage
+    ? calculateActualCost(finalModel, usage.promptTokenCount, usage.candidatesTokenCount, 0, 0)
+    : 0;
 
   const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   if (!raw) throw new Error('Gemini não retornou conteúdo. Tente de novo.');
@@ -326,6 +336,7 @@ const callGemini = async (
     brollSuggestions: parsed.brollSuggestions ?? [],
     directions,
     production,
+    actualCostUSD,
   };
 };
 

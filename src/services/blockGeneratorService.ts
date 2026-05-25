@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import type { ScriptBlock, BlockKind } from '../components/reelsStudio/types';
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
+import { logActualCost } from './costPredictor';
 
 const uid = () => `b_${Math.random().toString(36).slice(2, 9)}`;
 
@@ -10,7 +11,7 @@ const getApiKey = (): string => {
   return key;
 };
 
-const MODEL = 'gemini-3-flash-preview';
+const MODEL = 'gemini-3.1-flash-lite';
 
 interface Neighbors {
   prev?: ScriptBlock;
@@ -89,6 +90,9 @@ export const regenerateBlock = async (
     },
   });
 
+  // LOG COST
+  logActualCost('Regenerate Block', MODEL, response.usageMetadata, 0);
+
   const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   const { kind, text } = parseSingleBlock(raw);
   return { ...block, kind, text };
@@ -146,6 +150,9 @@ export const generateNewBlock = async (
       temperature: 0.8,
     },
   });
+
+  // LOG COST
+  logActualCost('Generate New Block', MODEL, response.usageMetadata, 0);
 
   const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
   const parsed = parseSingleBlock(raw);

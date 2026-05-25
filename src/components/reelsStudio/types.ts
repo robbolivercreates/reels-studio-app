@@ -296,6 +296,9 @@ export interface PersistedAnalysis {
   sourceUrl?: string;
   /** When the analysis was generated. */
   createdAt: number;
+  /** Cost tracking properties */
+  actualCostUSD?: number;
+  actualTokens?: { prompt: number; candidates: number };
 }
 
 /** Minimax HD 2.8 emotion presets. Drives voice expression on TTS generation. */

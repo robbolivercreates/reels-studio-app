@@ -19,6 +19,7 @@ import type {
 import type { MotionConfig } from '../reelsStudio/motionLibrary';
 import type { StylePresetId } from '../reelsStudio/motionStylePresets';
 import { regenerateBlock, generateNewBlock } from '../../services/blockGeneratorService';
+import { generateThumbnail } from '../../services/thumbnailService';
 import { ensureProfiles } from '../reelsStudio/voiceProfile';
 import {
   generateReelFromContent,
@@ -1739,6 +1740,45 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               };
               dispatch({ type: 'set-block-motion', id, motion });
               await reply(call_id, true, { id, hasMotion: true, status: 'pending-render' });
+              return;
+            }
+
+            case 'generate-thumbnail': {
+              const videoTitle = String(payload.video_title ?? '');
+              const scriptSummary = payload.script_summary ? String(payload.script_summary) : undefined;
+              const instructions = payload.instructions ? String(payload.instructions) : undefined;
+              const creatorPhotoBase64 = payload.creator_photo_base64 ? String(payload.creator_photo_base64) : undefined;
+              const projectName = state.projectName;
+
+              if (!videoTitle) {
+                await reply(call_id, false, null, 'O parâmetro video_title é obrigatório para gerar thumbnail.');
+                return;
+              }
+
+              console.log('[bridge] Invocando geração de thumbnail...', { videoTitle, projectName });
+              const result = await generateThumbnail({
+                projectName,
+                videoTitle,
+                scriptSummary,
+                instructions,
+                creatorPhotoBase64,
+              });
+
+              // Expose/call proposeThumbnail via the window shim to show inline in the chat
+              const w = window as unknown as Window & {
+                __reelsAgent?: { proposeThumbnail?: (dataUrl: string, filename: string) => void };
+              };
+              if (w.__reelsAgent?.proposeThumbnail) {
+                w.__reelsAgent.proposeThumbnail(result.dataUrl, result.filename);
+              }
+
+              await reply(call_id, true, {
+                filename: result.filename,
+                insights: result.insights,
+                concept: result.concept,
+                suggested_text: result.suggestedText,
+                status: 'success',
+              });
               return;
             }
 

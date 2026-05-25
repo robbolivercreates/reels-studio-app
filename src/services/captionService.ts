@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import type { ScriptBlock } from '../components/reelsStudio/types';
+import { logActualCost } from './costPredictor';
 
 const getApiKey = (): string => {
   const key = localStorage.getItem('GOOGLE_API_KEY');
@@ -7,7 +8,7 @@ const getApiKey = (): string => {
   return key;
 };
 
-const MODEL = 'gemini-3-flash-preview';
+const MODEL = 'gemini-3.1-flash-lite';
 
 export const generateInstagramCaption = async (
   blocks: ScriptBlock[],
@@ -42,9 +43,8 @@ REGRAS:
 
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
-  // Flash em primeiro; Pro como fallback. Flash Lite cortado — entrega
-  // caption morna pra texto criativo.
-  const models = [MODEL, 'gemini-3.1-pro-preview'];
+  // Prioritize super cheap Flash Lite model; fallback to 3.5 Flash if needed.
+  const models = [MODEL, 'gemini-3.5-flash'];
   let lastErr: unknown;
   for (const model of models) {
     try {
@@ -53,6 +53,10 @@ REGRAS:
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         config: { temperature: 0.8, maxOutputTokens: 2048 },
       });
+      
+      // LOG COST
+      logActualCost('Instagram Caption', model, response.usageMetadata, 0);
+
       const text = response.text?.trim();
       if (!text) throw new Error('Resposta vazia do modelo.');
       return text;

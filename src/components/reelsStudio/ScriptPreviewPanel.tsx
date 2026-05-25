@@ -397,6 +397,8 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
                 onChange={e => updateBlockText(b.id, e.target.value)}
                 disabled={busyHere}
                 rows={2}
+                spellCheck={false}
+                autoCorrect="off"
                 className="w-full text-[12.5px] text-zinc-100 leading-relaxed bg-transparent outline-none resize-none placeholder:text-zinc-600"
                 placeholder="(vazio)"
                 style={{ minHeight: 36 }}
@@ -415,6 +417,7 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
                     value={blockInstructions}
                     onChange={e => setBlockInstructions(e.target.value)}
                     rows={2}
+                    spellCheck={false}
                     placeholder="ex: mais provocativo, sem rodeios"
                     className="w-full text-[11px] bg-black/40 border border-white/10 rounded-md px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-violet-400/50"
                   />
@@ -495,6 +498,7 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
               value={addBlockPrompt}
               onChange={e => setAddBlockPrompt(e.target.value)}
               rows={2}
+              spellCheck={false}
               placeholder="Sobre o que? (opcional — deixa vazio pra preencher o gap entre vizinhos)"
               className="w-full text-[11px] bg-black/40 border border-white/10 rounded-md px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-violet-400/50"
             />
@@ -529,6 +533,7 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
               value={globalInstructions}
               onChange={e => setGlobalInstructions(e.target.value)}
               rows={2}
+              spellCheck={false}
               placeholder="ex: mais direto, corta o final, foca só no problema"
               className="w-full text-[11px] bg-black/30 border border-white/10 rounded-md px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600 outline-none focus:border-violet-400/50"
             />

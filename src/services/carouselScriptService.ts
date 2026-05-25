@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import type { ScriptBlock } from '../components/reelsStudio/types';
+import { logActualCost } from './costPredictor';
 
 const getApiKey = (): string => {
   const key = localStorage.getItem('GOOGLE_API_KEY');
@@ -7,10 +8,7 @@ const getApiKey = (): string => {
   return key;
 };
 
-// Flash (não Flash Lite) — Lite entrega slides com texto raso e pouco
-// criativos pro custo que economiza. Flash dá qualidade muito superior no
-// volume típico de um carrossel (3-15 slides).
-const MODEL = 'gemini-3-flash-preview';
+const MODEL = 'gemini-3.1-flash-lite';
 
 // ─── TYPES ────────────────────────────────────────────────────────────────────
 
@@ -100,6 +98,8 @@ Return JSON matching the schema. No extra commentary.`;
       temperature: 0.85,
       maxOutputTokens: 2048,
       responseMimeType: 'application/json',
+      // Habilita raciocínio (Thinking) para garantir a estruturação rica de cada slide do carrossel.
+      thinkingConfig: { thinkingBudget: 2048 },
       responseSchema: {
         type: Type.OBJECT,
         properties: {
@@ -122,6 +122,9 @@ Return JSON matching the schema. No extra commentary.`;
       },
     },
   });
+
+  // LOG COST
+  logActualCost('Carousel Script', MODEL, response.usageMetadata, 0);
 
   const raw = response.text?.trim();
   if (!raw) throw new Error('Resposta vazia do Gemini.');

@@ -29,7 +29,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
@@ -254,8 +254,14 @@ pub async fn agent_send(
     );
 
     let mut cmd = Command::new(&bin);
+    // Prompt comes via stdin instead of as a CLI argument. Passing it inline
+    // (`-p <prompt>`) blows past macOS ARG_MAX (~256KB) when the user attaches
+    // an image: the base64-encoded payload alone is hundreds of KB and the
+    // spawn fails with `Argument list too long (os error 7)`. `-p` (alias for
+    // `--print`) reads the prompt from stdin when no positional argument is
+    // provided. The prompt itself is written to stdin further down, right
+    // after spawn.
     cmd.arg("-p")
-        .arg(&prompt)
         .arg("--output-format")
         .arg("stream-json")
         .arg("--verbose")
@@ -287,7 +293,7 @@ pub async fn agent_send(
         }
     }
 
-    cmd.stdin(Stdio::null())
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
@@ -302,6 +308,21 @@ pub async fn agent_send(
 
     let mut child = cmd.spawn().map_err(|e| format!("spawn claude: {e}"))?;
     let pid = child.id().ok_or_else(|| "child has no pid".to_string())? as i32;
+
+    // Write the prompt to stdin then close it so the CLI knows the input is
+    // complete and starts streaming. Done in a spawned task so a very large
+    // prompt (image attachments) doesn't block the rest of the setup.
+    if let Some(mut child_stdin) = child.stdin.take() {
+        let prompt_for_stdin = prompt.clone();
+        tokio::spawn(async move {
+            if let Err(e) = child_stdin.write_all(prompt_for_stdin.as_bytes()).await {
+                eprintln!("[agent] failed to write prompt to claude stdin: {e}");
+            }
+            // Dropping `child_stdin` closes the pipe; explicit shutdown gives
+            // a clean EOF signal that some Node-based CLIs need to flush.
+            let _ = child_stdin.shutdown().await;
+        });
+    }
 
     let stdout = child
         .stdout

@@ -444,7 +444,7 @@ Other rules for "blocks[].text":
 - Spell out numbers in words ("dois milhões" not "2.000.000", "cinquenta por cento" not "50%").
 - Spell out symbols and currencies ("dólares" not "$", "arroba" not "@").
 - Spell out abbreviations on first mention ("inteligência artificial" not "IA", unless the abbreviation is itself pronounced as a word).
-- Letter-by-letter acronyms must be written PHONETICALLY in pt-BR so Minimax pronounces them correctly. The TTS engine reads raw letters as a single broken word ("UX" → "ucs"). Write them spelled out instead:
+- Letter-by-letter acronyms must be written PHONETICALLY in pt-BR ONLY for the short list below. The TTS engine reads raw letters as a single broken word ("UX" → "ucs"), so these specific abbreviations get spelled out:
   ✓ "u-éqis"  (not "UX")
   ✓ "i-á"     (not "IA")
   ✓ "ei-ai"   (not "AI")
@@ -453,7 +453,10 @@ Other rules for "blocks[].text":
   ✓ "u-ai"    (not "UI")
   ✓ "sé-ó"    (not "SEO")
   ✓ "êa-pi-i" (not "API")
-  Exception — acronyms that are pronounced as a single word (LASER, NASA, UNESCO, GIF, JPEG) stay as-is. When unsure, ask: "does a Brazilian say each letter separately, or as one word?" If letter-by-letter, spell phonetically.
+  EXCEPTIONS — write these AS-IS, never transliterate them:
+    • Brand and product names, even when they contain letters that look like an acronym: ChatGPT, GPT, GPT-4, Claude, Gemini, Sora, Midjourney, Notion, Canva, Figma, Photoshop, Slack, Linear, TikTok, YouTube, Instagram, Facebook, WhatsApp, iPhone, MacBook, VS Code, etc. Keep the original spelling — the TTS handles them well and transliterating ("chat-gê-pê-tê") looks broken in the script.
+    • Acronyms pronounced as a single word (LASER, NASA, UNESCO, GIF, JPEG) stay as-is.
+  When unsure whether something is a brand name or a generic acronym, leave it as written.
 - No emojis, no parentheses, no brackets, no hashtags, no URLs, no markdown formatting.
 - KEEP all standard punctuation: periods, commas, question marks, exclamation marks, colons, semicolons, em-dashes.
 - Avoid ellipses ("...") — Minimax over-extends pauses on them. Use a period instead.

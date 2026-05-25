@@ -268,6 +268,8 @@ interface CreationWizardProps {
   initialFormat?: WizardFormat;
   /** Open directly into source 'video' / saved sub-tab, auto-running reanalysis on this ref. */
   initialReanalyzeMeta?: ReferenceMeta;
+  /** Hand-off from GuidedWizard: skip 'format' and 'source', land in 'config' with the URL prefilled. */
+  initialVideoUrl?: string;
   onClose: () => void;
   onConfirm: (
     blocks: ScriptBlock[],
@@ -335,6 +337,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
   existingBlockCount,
   initialFormat,
   initialReanalyzeMeta,
+  initialVideoUrl,
   onClose,
   onConfirm,
 }) => {
@@ -349,6 +352,15 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
           videoTab: 'saved' as const,
           selectedSavedRef: initialReanalyzeMeta,
         }
+      : initialVideoUrl
+        ? {
+            ...INITIAL,
+            step: 'config' as const,
+            format: (initialFormat ?? 'reel') as WizardFormat,
+            source: 'video' as const,
+            videoTab: 'new' as const,
+            videoUrl: initialVideoUrl,
+          }
       : initialFormat
         ? { ...INITIAL, format: initialFormat, step: 'source' as const }
         : INITIAL,
@@ -571,12 +583,8 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
           if (ws.articleSourceMode === 'text' && ws.articleText.trim()) {
             content = ws.articleText.trim();
           } else if (ws.articleUrl.trim()) {
-            try {
-              const fetched = await fetchArticleFromUrl(ws.articleUrl.trim());
-              content = fetched.text;
-            } catch {
-              content = `Gere o carrossel baseado neste artigo/URL: ${ws.articleUrl.trim()}`;
-            }
+            const fetched = await fetchArticleFromUrl(ws.articleUrl.trim());
+            content = fetched.text;
           }
         }
         const result = await generateCarouselScript(content, ws.slideCount, ws.carouselTone);
@@ -603,15 +611,10 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
           let sourceUrl: string | undefined;
           let title: string | undefined = ws.articleTitle.trim() || undefined;
           if (ws.articleSourceMode === 'url') {
-            try {
-              const fetched = await fetchArticleFromUrl(ws.articleUrl.trim());
-              text = fetched.text;
-              sourceUrl = fetched.sourceUrl;
-              title = fetched.title || title;
-            } catch {
-              text = `Gere o roteiro baseado neste artigo/URL: ${ws.articleUrl.trim()}`;
-              sourceUrl = ws.articleUrl.trim();
-            }
+            const fetched = await fetchArticleFromUrl(ws.articleUrl.trim());
+            text = fetched.text;
+            sourceUrl = fetched.sourceUrl;
+            title = fetched.title || title;
           }
           const result = await generateReelFromContent(
             { text, sourceUrl, title },

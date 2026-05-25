@@ -59,6 +59,7 @@ import { ApprovalCard } from './ApprovalCard';
 import { PickerCard } from './PickerCard';
 import { DraftCard } from './DraftCard';
 import { SetupCard, type SetupChoice } from './SetupCard';
+import { ThumbnailCard } from './ThumbnailCard';
 import { getHealth } from './agentBridge';
 import type { ClaudeHealth } from './types';
 import type { AppTheme, ThemeTokens } from '../reelsStudio/theme';
@@ -133,7 +134,7 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
     [locale],
   );
 
-  const { messages, busy, stale, send, cancel, approve, pick, proposeDraft, resolveDraft, updateDraft, proposeSetup, resolveSetup, clear, model, setModel } = useAgentChat(locale, projectKey);
+  const { messages, busy, stale, send, cancel, approve, pick, proposeDraft, resolveDraft, updateDraft, proposeSetup, resolveSetup, proposeThumbnail, clear, model, setModel } = useAgentChat(locale, projectKey);
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<AttachmentMeta[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -181,11 +182,13 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
         title?: string;
         subtitle?: string;
       }) => Promise<{ kind: 'submit'; choice: SetupChoice } | { kind: 'skip' } | { kind: 'cancel' }>;
+      proposeThumbnail?: (dataUrl: string, filename: string) => void;
     };
     const w = window as unknown as Window & { __reelsAgent?: ReelsAgentShim };
     if (!w.__reelsAgent) w.__reelsAgent = {};
     w.__reelsAgent.proposeDraft = proposeDraft;
     w.__reelsAgent.updateDraft = updateDraft;
+    w.__reelsAgent.proposeThumbnail = proposeThumbnail;
     w.__reelsAgent.requestSetup = (args) => {
       const setupId = `setup_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       proposeSetup({ setupId, title: args.title, subtitle: args.subtitle });
@@ -198,9 +201,10 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
         delete w.__reelsAgent.proposeDraft;
         delete w.__reelsAgent.updateDraft;
         delete w.__reelsAgent.requestSetup;
+        delete w.__reelsAgent.proposeThumbnail;
       }
     };
-  }, [proposeDraft, updateDraft, proposeSetup]);
+  }, [proposeDraft, updateDraft, proposeSetup, proposeThumbnail]);
 
   /// Click handlers for the DraftCard. We route through the bridge-installed
   /// shim (it knows the reducer + the full ScriptBlock objects), then mark
@@ -503,6 +507,7 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
             message={m}
             tokens={tokens}
             locale={locale}
+            projectName={projectKey}
             onApprove={approve}
             onPick={pick}
             onApplyDraft={handleApplyDraft}
@@ -851,6 +856,7 @@ const MessageRow: React.FC<{
   message: ChatMessage;
   tokens: ThemeTokens;
   locale: Locale;
+  projectName: string;
   onApprove: (id: string, allow: boolean) => void;
   onPick: (pickerId: string, optionId: string | null) => void;
   onApplyDraft: (draftId: string) => void;
@@ -858,8 +864,20 @@ const MessageRow: React.FC<{
   onSetupSubmit: (setupId: string, choice: SetupChoice) => void;
   onSetupSkip: (setupId: string) => void;
   onSetupCancel: (setupId: string) => void;
-}> = ({ message, tokens, locale, onApprove, onPick, onApplyDraft, onDiscardDraft, onSetupSubmit, onSetupSkip, onSetupCancel }) => {
+}> = ({ message, tokens, locale, projectName, onApprove, onPick, onApplyDraft, onDiscardDraft, onSetupSubmit, onSetupSkip, onSetupCancel }) => {
   const t = useCallback((k: string, vars?: Record<string, string | number>) => tx(locale, k, vars), [locale]);
+
+  // Thumbnail preview card (when an AI-generated thumbnail is provided)
+  if (message.thumbnailDataUrl) {
+    return (
+      <ThumbnailCard
+        dataUrl={message.thumbnailDataUrl}
+        filename={message.thumbnailFilename || 'thumbnail.png'}
+        projectName={projectName}
+        tokens={tokens}
+      />
+    );
+  }
 
   // Setup card branch (pre-flight Q&A before video import)
   if (message.setup) {
