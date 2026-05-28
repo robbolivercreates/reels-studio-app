@@ -22,6 +22,7 @@ import { generateCarouselScript, carouselSlidesToBlocks } from '../../services/c
 import { VOICE_OPTIONS } from './voices';
 import { loadAvatarPhotos, type AvatarPhoto } from './avatarPhotosStore';
 import { ensureProfiles, upsertProfile, LANGUAGE_OPTIONS, type OutputLanguage, type VoiceProfile } from './voiceProfile';
+import { loadClonedVoices, type ClonedVoice } from '../../services/minimaxService';
 
 const VIOLET = '#A78BFA';
 
@@ -92,6 +93,11 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
   const [voiceId, setVoiceId] = useState(initialVoiceId ?? VOICE_OPTIONS[0].id);
   const [emotion, setEmotion] = useState<ReelEmotion>('neutral');
   const [speed, setSpeed] = useState(1.0);
+  // Cloned voices (Minimax voice clones the user has saved in Settings →
+  // Voices). Loaded once when the wizard mounts; surfaced as a "Minhas
+  // vozes" group at the top of the picker so the user's own voice wins
+  // visibility over the built-in defaults.
+  const [clonedVoices] = useState<ClonedVoice[]>(() => loadClonedVoices());
 
   // Default output language — seeded from the active voice profile (the global
   // default). Changing it here persists back to that profile, so it becomes the
@@ -433,7 +439,40 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
 
           {step === 'voz' && (
             <>
-              <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: tokens.text.tertiary }}>Escolha a voz</div>
+              {/* Minhas vozes — surface the user's cloned Minimax voices first
+                  so they win visibility over the defaults. Empty state points
+                  the user to Settings → Vozes for cloning. */}
+              {clonedVoices.length > 0 && (
+                <>
+                  <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: '#A78BFA' }}>Minhas vozes</div>
+                  <div className="grid grid-cols-3 gap-2.5 mb-4">
+                    {clonedVoices.map(v => {
+                      const daysLeft = Math.max(0, Math.floor((v.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));
+                      return (
+                        <button
+                          key={v.id}
+                          onClick={() => setVoiceId(v.voiceId)}
+                          className="rounded-xl p-3 text-left"
+                          style={{ ...card(voiceId === v.voiceId), cursor: 'pointer' }}
+                          title={`Voz clonada · ${v.model}`}
+                        >
+                          <div className="text-[13px] font-bold flex items-center gap-1.5">
+                            <span style={{ color: VIOLET }}>●</span>
+                            {v.name}
+                          </div>
+                          <div className="text-[11px] mt-0.5" style={{ color: tokens.text.tertiary }}>
+                            {daysLeft > 1 ? `expira em ${daysLeft} dias` : daysLeft === 1 ? 'expira amanhã' : 'expira hoje'}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: tokens.text.tertiary }}>
+                {clonedVoices.length > 0 ? 'Ou escolha uma voz padrão' : 'Escolha a voz'}
+              </div>
               <div className="grid grid-cols-3 gap-2.5 mb-4">
                 {VOICE_OPTIONS.map(v => (
                   <button key={v.id} onClick={() => setVoiceId(v.id)} className="rounded-xl p-3 text-left" style={{ ...card(voiceId === v.id), cursor: 'pointer' }}>
@@ -442,6 +481,11 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
                   </button>
                 ))}
               </div>
+              {clonedVoices.length === 0 && (
+                <div className="mb-4 px-3 py-2 rounded-lg text-[11px]" style={{ backgroundColor: tokens.bg.elevated, border: `1px dashed ${tokens.border.subtle}`, color: tokens.text.tertiary }}>
+                  💡 Quer usar sua própria voz? Clona ela em <b>Configurações → Vozes</b> e ela aparece aqui no topo do picker.
+                </div>
+              )}
               <div className="flex gap-3.5">
                 <div className="flex-1">
                   <label className="block text-[10px] uppercase mb-1.5 font-semibold" style={{ color: tokens.text.tertiary }}>Emoção</label>
