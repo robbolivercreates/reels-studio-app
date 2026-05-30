@@ -1,6 +1,7 @@
 import { generateSpeech, DEFAULT_VOICE_SETTINGS, type MinimaxEmotion, type TtsLanguage } from '../../services/minimaxService';
 import type { ScriptBlock, WordTimestamp, ReelEmotion } from './types';
 import { WAVEFORM_BUCKETS } from './types';
+import { detectKeepSegments, type KeepSegment } from './silenceDetector';
 
 export interface AudioGenerationResult {
   url: string;
@@ -50,22 +51,68 @@ export const computePeaks = (buffer: AudioBuffer, buckets = WAVEFORM_BUCKETS): n
   return peaks.map(p => p / max);
 };
 
-const buildWordTimestamps = (blocks: ScriptBlock[], totalDuration: number): WordTimestamp[] => {
+// Só encaixa uma fronteira de bloco numa pausa real a até esta distância da
+// estimativa uniforme; além disso, mantém a estimativa (fallback seguro).
+const SNAP_WINDOW_SEC = 0.7;
+// Não deixa um bloco colapsar pra menos que isso ao encaixar.
+const SNAP_MIN_BLOCK_SEC = 0.25;
+
+const buildWordTimestamps = (
+  blocks: ScriptBlock[],
+  totalDuration: number,
+  silentRanges?: KeepSegment[],
+): WordTimestamp[] => {
   const blockTokens = blocks.map(b => ({ block: b, words: tokenize(b.text) }));
   const totalWords = blockTokens.reduce((sum, b) => sum + b.words.length, 0);
   if (totalWords === 0) return [];
 
   const perWordDuration = totalDuration / totalWords;
-  const result: WordTimestamp[] = [];
+
+  // 1) Fronteiras uniformes: o start de cada bloco (+ sentinela = duração total).
+  const starts: number[] = [];
   let cursor = 0;
-  for (const { block, words } of blockTokens) {
-    for (const word of words) {
-      const start = cursor;
-      const end = cursor + perWordDuration;
-      result.push({ word, start, end, blockId: block.id });
-      cursor = end;
+  for (const { words } of blockTokens) { starts.push(cursor); cursor += words.length * perWordDuration; }
+  starts.push(totalDuration);
+
+  // 2) Encaixa cada fronteira INTERNA na borda de pausa real mais próxima (±0.7s),
+  //    preservando ordem e duração mínima. Sem pausa por perto → mantém a uniforme.
+  //    Corrige a deriva avatar↔B-roll (fronteiras estimadas erravam até ~0.6s).
+  if (silentRanges && silentRanges.length > 0) {
+    try {
+      const edges: number[] = [];
+      for (const s of silentRanges) { edges.push(s.start, s.end); }
+      for (let i = 1; i < starts.length - 1; i++) {
+        const x = starts[i];
+        let best: number | null = null;
+        let bestDist = SNAP_WINDOW_SEC;
+        for (const e of edges) {
+          const d = Math.abs(e - x);
+          if (d <= bestDist) { bestDist = d; best = e; }
+        }
+        if (best !== null) {
+          const lo = starts[i - 1] + SNAP_MIN_BLOCK_SEC;
+          const hi = starts[i + 1] - SNAP_MIN_BLOCK_SEC;
+          if (best > lo && best < hi) starts[i] = best; // só aplica se mantém ordem/duração
+        }
+      }
+    } catch (e) {
+      console.warn('[reels/timing] snap de fronteira falhou — usando timings uniformes:', e);
     }
   }
+
+  // 3) Re-distribui as palavras dentro de cada bloco pra preencher [start, próximo start].
+  //    Mantém palavras e blocos consistentes (o reducer deriva o bloco das palavras).
+  const result: WordTimestamp[] = [];
+  blockTokens.forEach(({ block, words }, k) => {
+    const segStart = starts[k];
+    const segEnd = starts[k + 1];
+    const per = words.length > 0 ? (segEnd - segStart) / words.length : 0;
+    let c = segStart;
+    for (const word of words) {
+      result.push({ word, start: c, end: c + per, blockId: block.id });
+      c += per;
+    }
+  });
   return result;
 };
 
@@ -122,7 +169,17 @@ export const generateProjectAudio = async (
   const buffer = await decodeBlob(blob);
   const duration = buffer.duration;
   const peaks = computePeaks(buffer);
-  const words = buildWordTimestamps(blocks, duration);
+  // Detecta as pausas reais do áudio pra encaixar as fronteiras dos blocos
+  // (corrige a dessincronia avatar↔B-roll). Best-effort: se falhar, snap vira no-op.
+  let silentRanges: KeepSegment[] = [];
+  try {
+    const det = await detectKeepSegments(blob, { minSilenceMs: 180, thresholdDb: -25, breathMs: 0, windowMs: 10 });
+    silentRanges = det.silentRaw;
+    console.log('[reels/timing] pausas detectadas pra snap de fronteira:', silentRanges.length);
+  } catch (e) {
+    console.warn('[reels/timing] detecção de pausa falhou — timings uniformes:', e);
+  }
+  const words = buildWordTimestamps(blocks, duration, silentRanges);
   return { url, blob, duration, peaks, words };
 };
 
