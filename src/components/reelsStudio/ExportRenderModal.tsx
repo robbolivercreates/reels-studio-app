@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { renderMp4, type RenderProgress, type RenderHandle } from './mp4Renderer';
+import { notifyDone } from './notify';
 import { saveExport, loadAudioBlob, type ExportRecord } from './persistence';
 import { detectExportCapability } from './exportCapability';
 import type { ReelsState, ScriptBlock } from './types';
@@ -444,6 +445,7 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       setMuxedOutputPath(outputTmpPath);
       setResultBlob(blob);
       setPhase('done');
+      void notifyDone('Reel pronto ✅', 'Seu vídeo terminou de renderizar.');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Falha desconhecida';
       if (msg.toLowerCase().includes('cancelado')) {

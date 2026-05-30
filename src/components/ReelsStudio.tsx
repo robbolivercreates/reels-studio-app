@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { reducer, INITIAL_STATE } from './reelsStudio/reducer';
 import { useHistoryReducer } from './reelsStudio/useHistoryReducer';
 import { generateProjectAudio, estimateScriptDuration } from './reelsStudio/audioEngine';
+import { notifyDone } from './reelsStudio/notify';
 import { saveAudioBlob, saveClipBlob, saveNamedProject, listNamedProjects, loadNamedProject, deleteNamedProject, renameNamedProject, loadAudioBlob, loadAllClipBlobs, loadAllTakeBlobs, type NamedProjectMeta } from './reelsStudio/persistence';
 import { buildStateFromSnapshot } from './reelsStudio/useReelsPersistence';
 import { VOICE_OPTIONS, getVoice } from './reelsStudio/voices';
@@ -1485,6 +1486,7 @@ export const ReelsStudio: React.FC = () => {
           });
         },
       });
+      void notifyDone('Avatares prontos ✅', 'Os clipes de avatar terminaram de gerar.');
     } catch (err) {
       console.error('[reels] generateAvatarClips failed:', err);
     } finally {
@@ -3959,6 +3961,10 @@ export const ReelsStudio: React.FC = () => {
             onAvatars={() => setAvatarsModalOpen(true)}
             onMotions={() => { const ids = motionCandidates.map(b => b.id); if (ids.length) void handleAutoMotionMany(ids); }}
             onExport={exportEnabled ? () => setExportOpen(true) : undefined}
+            avatarChips={avatarBlocks.map(b => {
+              const s = state.avatarClips[b.id]?.status;
+              return s === 'ready' ? 'done' : s === 'error' ? 'error' : s && s !== 'idle' ? 'running' : 'pending';
+            })}
           />
         );
       })()}

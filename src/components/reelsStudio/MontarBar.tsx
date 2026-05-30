@@ -31,6 +31,8 @@ interface MontarBarProps {
   onAvatars: () => void;
   onMotions: () => void;
   onExport?: () => void;
+  /** Prontidão por bloco de avatar (pra mostrar B1✓ B2✓ B3⏳ na trilha). */
+  avatarChips?: Array<'done' | 'running' | 'error' | 'pending'>;
 }
 
 const VIOLET = '#60A5FA';
@@ -42,7 +44,7 @@ type PhaseState = 'locked' | 'pending' | 'running' | 'done' | 'error';
 export function MontarBar({
   tokens, audioStatus, avatarTotal, avatarReady, generatingClips,
   motionCandidates, motionDone, motionTotal, batch,
-  onAudio, onAvatars, onMotions, onExport,
+  onAudio, onAvatars, onMotions, onExport, avatarChips,
 }: MontarBarProps) {
   const audioReady = audioStatus === 'ready';
 
@@ -67,6 +69,7 @@ export function MontarBar({
   const phases: Array<{
     key: string; icon: string; title: string; sub: string;
     state: PhaseState; pct: number; onClick: () => void;
+    chips?: Array<'done' | 'running' | 'error' | 'pending'>;
   }> = [
     {
       key: 'audio', icon: '🎙', title: 'Áudio',
@@ -82,6 +85,7 @@ export function MontarBar({
         : `${avatarReady}/${avatarTotal} prontos`,
       state: avatarPhase, pct: avatarTotal > 0 ? Math.round((avatarReady / avatarTotal) * 100) : 0,
       onClick: onAvatars,
+      chips: avatarChips,
     },
     {
       key: 'motion', icon: '✨', title: 'Motions',
@@ -152,6 +156,21 @@ export function MontarBar({
                 <div className="mt-1.5 h-1 rounded overflow-hidden" style={{ backgroundColor: tokens.border.subtle }}>
                   <div className="h-full rounded" style={{ width: `${p.pct}%`, backgroundColor: accent(p.state), transition: 'width 0.3s' }} />
                 </div>
+                {p.chips && p.chips.length > 0 && (
+                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                    {p.chips.slice(0, 14).map((c, ci) => (
+                      <span
+                        key={ci}
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        title={`Bloco ${ci + 1}: ${c === 'done' ? 'pronto' : c === 'running' ? 'gerando' : c === 'error' ? 'erro' : 'pendente'}`}
+                        style={{ backgroundColor: c === 'done' ? EMERALD : c === 'error' ? RED : c === 'running' ? VIOLET : tokens.border.default }}
+                      />
+                    ))}
+                    {p.chips.length > 14 && (
+                      <span className="text-[8px] font-semibold" style={{ color: tokens.text.tertiary }}>+{p.chips.length - 14}</span>
+                    )}
+                  </div>
+                )}
               </button>
               {i < phases.length - 1 && <span className="shrink-0 text-[13px]" style={{ color: tokens.text.tertiary }}>→</span>}
             </div>
