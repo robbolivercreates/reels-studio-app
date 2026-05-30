@@ -30,6 +30,7 @@ interface MontarBarProps {
   onAudio: () => void;
   onAvatars: () => void;
   onMotions: () => void;
+  onExport?: () => void;
 }
 
 const VIOLET = '#60A5FA';
@@ -41,7 +42,7 @@ type PhaseState = 'locked' | 'pending' | 'running' | 'done' | 'error';
 export function MontarBar({
   tokens, audioStatus, avatarTotal, avatarReady, generatingClips,
   motionCandidates, motionDone, motionTotal, batch,
-  onAudio, onAvatars, onMotions,
+  onAudio, onAvatars, onMotions, onExport,
 }: MontarBarProps) {
   const audioReady = audioStatus === 'ready';
 
@@ -95,6 +96,23 @@ export function MontarBar({
 
   const accent = (s: PhaseState) => s === 'done' ? EMERALD : s === 'error' ? RED : VIOLET;
 
+  // Próximo passo recomendado — um único CTA que mata o "e agora?".
+  // Complementa (não substitui) os botões de fase: eles dão acesso manual a
+  // qualquer etapa; este destaca a única ação que faz sentido agora.
+  const nextStep: { label: string; onClick: () => void; disabled?: boolean; busy?: boolean } | null = (() => {
+    if (audioPhase === 'running') return { label: 'Gerando áudio…', onClick: () => {}, disabled: true, busy: true };
+    if (audioPhase === 'error')   return { label: 'Tentar áudio de novo', onClick: onAudio };
+    if (audioPhase !== 'done')     return { label: 'Gerar áudio', onClick: onAudio };
+    if (avatarPhase === 'running') return { label: 'Gerando avatares…', onClick: () => {}, disabled: true, busy: true };
+    if (avatarPhase === 'pending' && avatarTotal > 0)
+      return { label: avatarReady > 0 ? `Gerar avatares · faltam ${avatarTotal - avatarReady}` : 'Gerar avatares', onClick: onAvatars };
+    if (motionPhase === 'running') return { label: 'Gerando motions…', onClick: () => {}, disabled: true, busy: true };
+    if (motionPhase === 'pending' && motionCandidates > 0)
+      return { label: `Gerar motions (${motionCandidates})`, onClick: onMotions };
+    if (onExport) return { label: 'Exportar reel', onClick: onExport };
+    return null;
+  })();
+
   return (
     <div className="px-5 py-2.5 border-t border-white/5 flex items-center gap-3 shrink-0" style={{ backgroundColor: tokens.bg.surface }}>
       <div className="shrink-0 text-[12px] font-bold flex items-center gap-1.5" style={{ color: tokens.text.primary }}>
@@ -140,6 +158,27 @@ export function MontarBar({
           );
         })}
       </div>
+
+      {/* Próximo passo — único CTA recomendado */}
+      {nextStep && (
+        <div className="shrink-0 flex items-center gap-2 pl-3 ml-1 border-l" style={{ borderColor: tokens.border.subtle }}>
+          <span className="text-[9px] uppercase tracking-wider font-semibold hidden xl:block" style={{ color: tokens.text.tertiary }}>Próximo</span>
+          <button
+            onClick={nextStep.onClick}
+            disabled={nextStep.disabled}
+            className="px-4 py-2 rounded-lg text-[12px] font-bold transition-opacity flex items-center gap-1.5 whitespace-nowrap"
+            style={{
+              backgroundColor: nextStep.busy ? tokens.bg.active : tokens.accent.bg,
+              color: nextStep.busy ? tokens.text.secondary : tokens.accent.fg,
+              opacity: nextStep.disabled ? 0.7 : 1,
+              cursor: nextStep.disabled ? 'default' : 'pointer',
+            }}
+            title="Próximo passo recomendado"
+          >
+            {nextStep.label}{!nextStep.disabled && <span>→</span>}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

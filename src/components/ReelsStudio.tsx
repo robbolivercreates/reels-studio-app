@@ -3958,6 +3958,7 @@ export const ReelsStudio: React.FC = () => {
             onAudio={() => setConfirmOpen(true)}
             onAvatars={() => setAvatarsModalOpen(true)}
             onMotions={() => { const ids = motionCandidates.map(b => b.id); if (ids.length) void handleAutoMotionMany(ids); }}
+            onExport={exportEnabled ? () => setExportOpen(true) : undefined}
           />
         );
       })()}
@@ -6455,7 +6456,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
             : isStale
               ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
               : isReady
-                ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20'
                 : isError
                   ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
                   : 'bg-fuchsia-500/[0.08] border-fuchsia-400/30 text-fuchsia-200 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/50';
@@ -6535,7 +6536,11 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                       <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
                   )}
-                  {!isBusy && <span className="text-[12px] leading-none">🎨</span>}
+                  {!isBusy && (
+                    isReady
+                      ? <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
+                      : <span className="text-[12px] leading-none">🎨</span>
+                  )}
                   <span className="truncate">{motionLabel}</span>
                 </button>
                 {/* ⋯ menu (motion advanced · asset · jump/move/duplicate/delete) */}
