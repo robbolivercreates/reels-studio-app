@@ -2332,6 +2332,7 @@ export const ReelsStudio: React.FC = () => {
   //   to keep its own time once the initial seek lands.
   const wasPlayingRef = useRef(false);
   const lastSyncedBlockIdRef = useRef<string | null>(null);
+  const lastDiagAtRef = useRef(0); // [DESYNC-DIAG] throttle — REMOVER depois
   useEffect(() => {
     const v = previewVideoRef.current;
     if (!v || !currentBlock || currentBlock.kind !== 'avatar') return;
@@ -2340,6 +2341,25 @@ export const ReelsStudio: React.FC = () => {
     if (!slot) return;
     const target = Math.max(0, playhead - slot.projectStart);
     const gap = Math.abs(v.currentTime - target);
+    // [DESYNC-DIAG] Fase 0 — log throttled (~3x/s) do gap avatar<>áudio durante o play.
+    // gap crescendo até ~0.35 = deriva do free-run (#4). gap grande já no início do
+    // bloco = offset do clip (#1). REMOVER depois.
+    if (playing) {
+      const now = performance.now();
+      if (now - lastDiagAtRef.current > 333) {
+        lastDiagAtRef.current = now;
+        console.log(
+          '[DESYNC-DIAG/preview] block', currentBlock.id,
+          '· playhead', playhead.toFixed(3),
+          '· projectStart', slot.projectStart.toFixed(3),
+          '· target', target.toFixed(3),
+          '· video.currentTime', v.currentTime.toFixed(3),
+          '· gap', gap.toFixed(3),
+          '· clipDur', Number.isFinite(v.duration) ? v.duration.toFixed(3) : 'n/a',
+          '· blockLen', (slot.projectEnd - slot.projectStart).toFixed(3),
+        );
+      }
+    }
 
     const justStartedPlaying = playing && !wasPlayingRef.current;
     const blockChanged = lastSyncedBlockIdRef.current !== currentBlock.id;
@@ -2379,6 +2399,16 @@ export const ReelsStudio: React.FC = () => {
     if (!slot) return;
     const target = Math.max(0, playhead - slot.projectStart);
     const onMeta = () => {
+      // [DESYNC-DIAG] Fase 0 — duração real do clip vs comprimento do bloco (1x por swap).
+      // delta > 0 e variando por bloco = HeyGen não mapeia 1:1 (#1). REMOVER depois.
+      const blockLen = slot.projectEnd - slot.projectStart;
+      console.log(
+        '[DESYNC-DIAG/preview/meta] block', currentBlock.id,
+        '· clipDur', Number.isFinite(v.duration) ? v.duration.toFixed(3) : 'n/a',
+        '· blockLen', blockLen.toFixed(3),
+        '· sliceLen(+0.18)', (blockLen + 0.18).toFixed(3),
+        '· delta(clip-block)', Number.isFinite(v.duration) ? (v.duration - blockLen).toFixed(3) : 'n/a',
+      );
       try { v.currentTime = target; } catch { /* ignore */ }
       if (playing) v.play().catch(() => {});
     };

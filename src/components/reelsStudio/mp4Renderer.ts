@@ -762,6 +762,30 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     for (const [url, v] of videoMap.entries()) {
       if (Number.isFinite(v.duration) && v.duration > 0) clipDurations.set(url, v.duration);
     }
+    // [DESYNC-DIAG] Temporary diagnostic (Fase 0 do plano de sync) — REMOVER depois.
+    // Compara, por bloco de avatar, o comprimento do bloco vs a fatia de áudio enviada
+    // ao HeyGen (block + TAIL_PADDING_SEC=0.18) vs a duração real do MP4 devolvido.
+    // delta(clip-slice) ≈ 0  → HeyGen fiel (1:1), sync ok por aqui.
+    // delta varia por bloco / lead-in consistente → causa #1 (clip não mapeia 1:1).
+    {
+      const TAIL = 0.18;
+      for (const b of inputs.blocks) {
+        if (b.kind !== 'avatar') continue;
+        const url = inputs.avatarClips[b.id]?.videoUrl;
+        if (!url) continue;
+        const blockLen = b.end - b.start;
+        const sliceLen = blockLen + TAIL;
+        const clipDur = clipDurations.get(url);
+        console.log(
+          '[DESYNC-DIAG/export] block', b.id,
+          '· blockLen', blockLen.toFixed(3),
+          '· sliceLen(+0.18)', sliceLen.toFixed(3),
+          '· clipDur', clipDur != null ? clipDur.toFixed(3) : 'n/a',
+          '· delta(clip-block)', clipDur != null ? (clipDur - blockLen).toFixed(3) : 'n/a',
+          '· delta(clip-slice)', clipDur != null ? (clipDur - sliceLen).toFixed(3) : 'n/a',
+        );
+      }
+    }
     // Reset per-video timeout counters so retries don't inherit prior broken-marks.
     resetVideoHealth(Array.from(videoMap.values()));
 
