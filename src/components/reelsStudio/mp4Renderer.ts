@@ -16,7 +16,7 @@
  */
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { ScriptBlock, AvatarClipState, ScreenTake, BlockLayout, BlockTransition } from './types';
 import { computeLayout, hitTest } from './timeline';
 import { getLayoutSlots, defaultAvatarZoom, type LayoutBox } from './layouts';
@@ -769,21 +769,43 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     // delta varia por bloco / lead-in consistente → causa #1 (clip não mapeia 1:1).
     {
       const TAIL = 0.18;
+      const diagRows: Array<Record<string, unknown>> = [];
       for (const b of inputs.blocks) {
         if (b.kind !== 'avatar') continue;
         const url = inputs.avatarClips[b.id]?.videoUrl;
         if (!url) continue;
         const blockLen = b.end - b.start;
         const sliceLen = blockLen + TAIL;
-        const clipDur = clipDurations.get(url);
-        console.log(
-          '[DESYNC-DIAG/export] block', b.id,
-          '· blockLen', blockLen.toFixed(3),
-          '· sliceLen(+0.18)', sliceLen.toFixed(3),
-          '· clipDur', clipDur != null ? clipDur.toFixed(3) : 'n/a',
-          '· delta(clip-block)', clipDur != null ? (clipDur - blockLen).toFixed(3) : 'n/a',
-          '· delta(clip-slice)', clipDur != null ? (clipDur - sliceLen).toFixed(3) : 'n/a',
-        );
+        const clipDur = clipDurations.get(url) ?? null;
+        const row = {
+          blockId: b.id,
+          start: +b.start.toFixed(3),
+          end: +b.end.toFixed(3),
+          blockLen: +blockLen.toFixed(3),
+          sliceLen: +sliceLen.toFixed(3),
+          clipDur: clipDur != null ? +clipDur.toFixed(3) : null,
+          deltaClipBlock: clipDur != null ? +(clipDur - blockLen).toFixed(3) : null,
+          deltaClipSlice: clipDur != null ? +(clipDur - sliceLen).toFixed(3) : null,
+        };
+        diagRows.push(row);
+        console.log('[DESYNC-DIAG/export]', JSON.stringify(row));
+      }
+      // Auto-save to disk so it can be inspected without copy-pasting the console.
+      // Reuses the same file commands the MP4 writer uses. Best-effort; never blocks export.
+      try {
+        const payload = JSON.stringify({
+          note: 'Reels desync diagnostic — clipDur vs blockLen(+0.18 tail). deltaClipSlice≈0 em todos => HeyGen fiel (1:1). Se varia por bloco/tem offset => clip nao mapeia 1:1.',
+          totalAudioDuration: +inputs.duration.toFixed(3),
+          projectDuration: +layout.totalDuration.toFixed(3),
+          avatarBlocks: diagRows,
+        }, null, 2);
+        const b64 = btoa(unescape(encodeURIComponent(payload)));
+        const path = '/tmp/reels-desync-diag.json';
+        await invoke('truncate_file', { targetPath: path });
+        await invoke('append_chunk_to_file', { targetPath: path, base64Chunk: b64 });
+        console.log('[DESYNC-DIAG] salvo em', path);
+      } catch (e) {
+        console.warn('[DESYNC-DIAG] falha ao salvar arquivo (segue normal):', e);
       }
     }
     // Reset per-video timeout counters so retries don't inherit prior broken-marks.
