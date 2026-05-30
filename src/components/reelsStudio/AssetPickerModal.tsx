@@ -289,7 +289,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
                     disabled={!isAttached && atCap}
                     className={`group relative rounded-lg overflow-hidden border transition-all ${
                       isAttached
-                        ? 'border-violet-400 ring-2 ring-violet-400/40 shadow-[0_0_16px_rgba(167,139,250,0.35)]'
+                        ? 'border-violet-400 ring-2 ring-violet-400/40 shadow-[0_0_16px_rgba(10,132,255,0.35)]'
                         : atCap
                           ? 'border-white/5 opacity-40 cursor-not-allowed'
                           : 'border-white/10 hover:border-white/30'

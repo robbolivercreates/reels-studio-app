@@ -72,7 +72,7 @@ export const THEME_DARK: ThemeTokens = {
   accent: {
     bg: '#FAFAFA',
     fg: '#0A0A0B',
-    focus: '#8B5CF6',
+    focus: '#0A84FF', // Wave 1: foco/acento = azul Apple (era roxo #8B5CF6)
   },
   status: {
     ok: '#22C55E',
@@ -102,7 +102,7 @@ export const THEME_LIGHT: ThemeTokens = {
   accent: {
     bg: '#0A0A0B',
     fg: '#FAFAFA',
-    focus: '#7C3AED',
+    focus: '#0066CC', // Wave 1: foco/acento = azul Apple (era roxo #7C3AED)
   },
   status: {
     ok: '#16A34A',

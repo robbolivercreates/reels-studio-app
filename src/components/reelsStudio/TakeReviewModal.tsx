@@ -157,7 +157,7 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
               {/* Start handle */}
               <button
                 onMouseDown={(e) => { e.preventDefault(); setDraggingHandle('start'); }}
-                className="absolute top-0 bottom-0 w-2 -ml-1 bg-violet-400 hover:bg-violet-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(167,139,250,0.6)]"
+                className="absolute top-0 bottom-0 w-2 -ml-1 bg-violet-400 hover:bg-violet-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(10,132,255,0.6)]"
                 style={{ left: `${startPct}%` }}
                 title="Início"
               ></button>
@@ -165,7 +165,7 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
               {/* End handle */}
               <button
                 onMouseDown={(e) => { e.preventDefault(); setDraggingHandle('end'); }}
-                className="absolute top-0 bottom-0 w-2 -ml-1 bg-violet-400 hover:bg-violet-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(167,139,250,0.6)]"
+                className="absolute top-0 bottom-0 w-2 -ml-1 bg-violet-400 hover:bg-violet-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(10,132,255,0.6)]"
                 style={{ left: `${endPct}%` }}
                 title="Fim"
               ></button>
@@ -228,7 +228,7 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
 
         <div className="px-6 py-4 border-t border-white/5 bg-black/30 flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Cancelar</button>
-          <button onClick={handleSave} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-all">
+          <button onClick={handleSave} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all">
             Aplicar
           </button>
         </div>

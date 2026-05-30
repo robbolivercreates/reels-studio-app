@@ -783,7 +783,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
               <button
                 onClick={handleGenerate}
                 disabled={!!busy}
-                className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.4)] disabled:opacity-40 transition-all"
+                className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_15px_rgba(10,132,255,0.4)] disabled:opacity-40 transition-all"
               >
                 {NATIVE_PRESET_IDS.includes(motion.presetId)
                   ? (motion.html ? '↻ Regenerar (nativo)' : '⚡ Gerar (nativo)')
@@ -793,7 +793,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
                 <button
                   onClick={handleRender}
                   disabled={!!busy}
-                  className="w-full py-2.5 rounded-lg bg-fuchsia-500 hover:bg-fuchsia-400 text-xs font-semibold text-white shadow-[0_0_15px_rgba(217,70,239,0.4)] disabled:opacity-40 transition-all"
+                  className="w-full py-2.5 rounded-lg bg-fuchsia-500 hover:bg-fuchsia-400 text-xs font-semibold text-white shadow-[0_0_15px_rgba(10,132,255,0.4)] disabled:opacity-40 transition-all"
                 >
                   🎨 Renderizar pra MP4
                 </button>

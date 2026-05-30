@@ -86,7 +86,7 @@ export const VideoNewSourceForm: React.FC<Props> = ({
         <button
           onClick={onSubmitUrl}
           disabled={!url.trim() || !!busyMessage}
-          className="w-full mt-2 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(124,58,237,0.4)]"
+          className="w-full mt-2 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(10,132,255,0.4)]"
         >
           {busyMessage ? busyMessage : 'Baixar e analisar'}
         </button>
@@ -166,7 +166,7 @@ export const VideoNewSourceForm: React.FC<Props> = ({
           <button
             onClick={onSubmitFile}
             disabled={!!busyMessage}
-            className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(124,58,237,0.4)]"
+            className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(10,132,255,0.4)]"
           >
             {busyMessage ? busyMessage : 'Salvar na pasta e analisar'}
           </button>

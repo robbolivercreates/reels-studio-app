@@ -32,7 +32,7 @@ interface MontarBarProps {
   onMotions: () => void;
 }
 
-const VIOLET = '#A78BFA';
+const VIOLET = '#60A5FA';
 const EMERALD = '#34D399';
 const RED = '#F87171';
 

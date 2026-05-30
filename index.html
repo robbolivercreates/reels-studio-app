@@ -9,12 +9,21 @@
       tailwind.config = {
         theme: {
           extend: {
+            colors: {
+              /* De-purple (Wave 1): violet/purple/fuchsia remapeados pro azul Apple.
+                 Mata qualquer roxo/magenta vindo da fonte (633 usos) sem editar
+                 classe por classe. Onde a camada de override abaixo força neutro,
+                 o neutro vence (calmo); o resto vira azul. Zero roxo nos 2 temas. */
+              violet:  { 50:'#EFF6FF',100:'#DBEAFE',200:'#BFDBFE',300:'#93C5FD',400:'#60A5FA',500:'#3B82F6',600:'#2563EB',700:'#1D4ED8',800:'#1E40AF',900:'#1E3A8A',950:'#172554' },
+              purple:  { 50:'#EFF6FF',100:'#DBEAFE',200:'#BFDBFE',300:'#93C5FD',400:'#60A5FA',500:'#3B82F6',600:'#2563EB',700:'#1D4ED8',800:'#1E40AF',900:'#1E3A8A',950:'#172554' },
+              fuchsia: { 50:'#EFF6FF',100:'#DBEAFE',200:'#BFDBFE',300:'#93C5FD',400:'#60A5FA',500:'#3B82F6',600:'#2563EB',700:'#1D4ED8',800:'#1E40AF',900:'#1E3A8A',950:'#172554' },
+            },
             boxShadow: {
               'soft':    '0 2px 8px -1px rgba(0,0,0,0.06), 0 1px 4px -1px rgba(0,0,0,0.04)',
               'soft-lg': '0 4px 16px -2px rgba(0,0,0,0.08), 0 2px 8px -2px rgba(0,0,0,0.05)',
               'soft-xl': '0 8px 30px -4px rgba(0,0,0,0.10), 0 4px 14px -4px rgba(0,0,0,0.06)',
-              'glow-sm': '0 0 16px -4px rgba(124,58,237,0.20), 0 0 6px -2px rgba(124,58,237,0.12)',
-              'glow':    '0 0 24px -4px rgba(124,58,237,0.25), 0 4px 16px -4px rgba(124,58,237,0.12)',
+              'glow-sm': '0 0 16px -4px rgba(10,132,255,0.20), 0 0 6px -2px rgba(10,132,255,0.12)',
+              'glow':    '0 0 24px -4px rgba(10,132,255,0.25), 0 4px 16px -4px rgba(10,132,255,0.12)',
             }
           }
         }
@@ -39,7 +48,7 @@
           --text-tertiary: #71717A;
           --accent-bg: #FAFAFA;
           --accent-fg: #0A0A0B;
-          --accent-focus: #8B5CF6;
+          --accent-focus: #0A84FF;
           --status-ok: #22C55E;
           --status-warn: #F59E0B;
           --status-err: #EF4444;
@@ -61,7 +70,7 @@
           --text-tertiary: #71717A;
           --accent-bg: #0A0A0B;
           --accent-fg: #FAFAFA;
-          --accent-focus: #7C3AED;
+          --accent-focus: #0066CC;
           --status-ok: #16A34A;
           --status-warn: #D97706;
           --status-err: #DC2626;
@@ -198,38 +207,38 @@
         [data-theme="light"] .shadow-\[0_0_24px_rgba\(167\,139\,250\,0\.15\)\],
         [data-theme="light"] .shadow-\[0_0_16px_rgba\(124\,58\,237\,0\.4\)\],
         [data-theme="light"] .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.4\)\],
-        [data-theme="light"] .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.5\)\] { box-shadow: 0 4px 12px rgba(124,58,237,0.10) !important; }
+        [data-theme="light"] .shadow-\[0_0_20px_rgba\(124\,58\,237\,0\.5\)\] { box-shadow: 0 4px 12px rgba(10,132,255,0.10) !important; }
 
         /* Fuchsia motion-button chip — also needs light variant */
         [data-theme="light"] .bg-fuchsia-500\/\[0\.08\],
-        [data-theme="light"] .bg-fuchsia-500\/15 { background-color: rgba(217,70,239,0.10) !important; }
-        [data-theme="light"] .bg-fuchsia-500\/20 { background-color: rgba(217,70,239,0.14) !important; }
+        [data-theme="light"] .bg-fuchsia-500\/15 { background-color: rgba(10,132,255,0.10) !important; }
+        [data-theme="light"] .bg-fuchsia-500\/20 { background-color: rgba(10,132,255,0.14) !important; }
         [data-theme="light"] .text-fuchsia-200,
-        [data-theme="light"] .text-fuchsia-100 { color: #86198F !important; }
+        [data-theme="light"] .text-fuchsia-100 { color: #0066CC !important; }
         [data-theme="light"] .border-fuchsia-400\/30,
         [data-theme="light"] .border-fuchsia-400\/40,
-        [data-theme="light"] .border-fuchsia-400\/50 { border-color: rgba(192,38,211,0.40) !important; }
+        [data-theme="light"] .border-fuchsia-400\/50 { border-color: rgba(10,132,255,0.40) !important; }
         [data-theme="light"] .hover\:bg-fuchsia-500\/15:hover,
         [data-theme="light"] .hover\:bg-fuchsia-500\/25:hover,
-        [data-theme="light"] .hover\:bg-fuchsia-500\/30:hover { background-color: rgba(217,70,239,0.22) !important; }
+        [data-theme="light"] .hover\:bg-fuchsia-500\/30:hover { background-color: rgba(10,132,255,0.22) !important; }
 
         /* Violet accents (CTAs, selected items, links) */
         [data-theme="light"] .text-violet-200,
         [data-theme="light"] .text-violet-300,
-        [data-theme="light"] .text-violet-400 { color: #6D28D9 !important; }
+        [data-theme="light"] .text-violet-400 { color: #0066CC !important; }
         [data-theme="light"] .bg-violet-500\/10,
         [data-theme="light"] .bg-violet-500\/15,
         [data-theme="light"] .bg-violet-500\/\[0\.06\],
-        [data-theme="light"] .bg-violet-500\/\[0\.04\] { background-color: rgba(124,58,237,0.08) !important; }
+        [data-theme="light"] .bg-violet-500\/\[0\.04\] { background-color: rgba(10,132,255,0.08) !important; }
         [data-theme="light"] .bg-violet-500\/20,
         [data-theme="light"] .bg-violet-500\/25,
-        [data-theme="light"] .bg-violet-500\/30 { background-color: rgba(124,58,237,0.14) !important; }
+        [data-theme="light"] .bg-violet-500\/30 { background-color: rgba(10,132,255,0.14) !important; }
         [data-theme="light"] .border-violet-400\/20,
         [data-theme="light"] .border-violet-400\/40,
         [data-theme="light"] .border-violet-400\/50,
         [data-theme="light"] .border-violet-500\/20,
-        [data-theme="light"] .border-violet-500\/40 { border-color: rgba(124,58,237,0.40) !important; }
-        [data-theme="light"] .ring-violet-400 { --tw-ring-color: #7C3AED !important; }
+        [data-theme="light"] .border-violet-500\/40 { border-color: rgba(10,132,255,0.40) !important; }
+        [data-theme="light"] .ring-violet-400 { --tw-ring-color: #0066CC !important; }
 
         /* Red (destructive) — slightly darker reds on light */
         [data-theme="light"] .text-red-300,

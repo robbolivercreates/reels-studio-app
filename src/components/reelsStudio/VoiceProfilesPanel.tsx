@@ -314,7 +314,7 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
         <div className="flex items-center gap-2 pt-2 border-t border-white/5">
           <button
             onClick={handleSave}
-            className="flex-1 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all"
+            className="flex-1 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all"
           >
             {savedFlash ? '✓ Salvo' : 'Salvar perfil'}
           </button>

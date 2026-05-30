@@ -587,7 +587,7 @@ export const ScriptPreviewPanel: React.FC<ScriptPreviewPanelProps> = ({
           <button
             onClick={() => onApprove(language)}
             disabled={anyBusy || blocks.length === 0}
-            className="px-4 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Usar este roteiro →
           </button>

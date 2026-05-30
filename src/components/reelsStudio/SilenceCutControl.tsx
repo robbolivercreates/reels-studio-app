@@ -115,7 +115,7 @@ export const SilenceCutControl: React.FC<Props> = ({
               disabled={disabled}
               className={`px-2 py-2 rounded-lg border text-left transition-all ${
                 preset === p.id
-                  ? 'bg-violet-500/20 border-violet-400/60 shadow-[0_0_12px_rgba(167,139,250,0.25)]'
+                  ? 'bg-violet-500/20 border-violet-400/60 shadow-[0_0_12px_rgba(10,132,255,0.25)]'
                   : 'bg-black/20 border-white/5 hover:border-white/15'
               }`}
             >

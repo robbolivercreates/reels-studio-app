@@ -3521,7 +3521,7 @@ export const ReelsStudio: React.FC = () => {
                       {audio.status === 'ready' && (
                         <button
                           onClick={() => setConfirmOpen(true)}
-                          className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.35)] transition-all flex items-center justify-center gap-1.5"
+                          className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(10,132,255,0.35)] transition-all flex items-center justify-center gap-1.5"
                           title="Refaz o áudio com a emoção e ritmo escolhidos"
                         >
                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -3868,7 +3868,7 @@ export const ReelsStudio: React.FC = () => {
                       <button
                         onClick={() => setConfirmOpen(true)}
                         disabled={audio.status === 'generating'}
-                        className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         title={`Custo estimado · $${estimatedTotalCost.toFixed(2)}`}
                       >
                         {audio.status === 'generating'
@@ -4770,8 +4770,8 @@ export const ReelsStudio: React.FC = () => {
 
           {/* Playhead */}
           <div className="absolute top-0 bottom-0 pointer-events-none z-20" style={{ left: `calc(${playheadPct}% + 8px)` }}>
-            <div className="absolute top-0 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-violet-400 drop-shadow-[0_0_6px_rgba(167,139,250,0.8)]"></div>
-            <div className="absolute top-0 bottom-0 w-0.5 bg-violet-400 -translate-x-1/2 shadow-[0_0_8px_rgba(167,139,250,0.6)]"></div>
+            <div className="absolute top-0 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-violet-400 drop-shadow-[0_0_6px_rgba(10,132,255,0.8)]"></div>
+            <div className="absolute top-0 bottom-0 w-0.5 bg-violet-400 -translate-x-1/2 shadow-[0_0_8px_rgba(10,132,255,0.6)]"></div>
           </div>
 
           {/* Drop indicator while dragging a block to reorder */}
@@ -4890,7 +4890,7 @@ export const ReelsStudio: React.FC = () => {
             </div>
             <div className="px-6 py-4 flex gap-2">
               <button onClick={() => setConfirmOpen(false)} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Cancelar</button>
-              <button onClick={handleGenerate} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-all">Gerar agora</button>
+              <button onClick={handleGenerate} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all">Gerar agora</button>
             </div>
           </div>
         </div>
@@ -6269,7 +6269,7 @@ const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
 
 const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({ layout, selected }) => {
   // Each thumbnail is a stylized 9:16-ish rectangle showing where avatar (amber) and media (emerald) sit.
-  const borderClass = selected ? 'border-violet-400 shadow-[0_0_12px_rgba(167,139,250,0.4)]' : 'border-white/10';
+  const borderClass = selected ? 'border-violet-400 shadow-[0_0_12px_rgba(10,132,255,0.4)]' : 'border-white/10';
   return (
     <div className={`relative w-full aspect-[9/16] rounded border bg-zinc-900 overflow-hidden transition-all ${borderClass}`}>
       {layout === 'avatar-only' && (
@@ -6411,8 +6411,8 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
     <div
       onClick={onSelect}
       className={`group rounded-xl border transition-all ${
-        isSelected ? 'ring-2 ring-violet-400 shadow-[0_0_24px_rgba(167,139,250,0.35)]'
-        : isCurrent ? 'ring-1 ring-violet-400/50 shadow-[0_0_24px_rgba(167,139,250,0.15)]' : ''
+        isSelected ? 'ring-2 ring-violet-400 shadow-[0_0_24px_rgba(10,132,255,0.35)]'
+        : isCurrent ? 'ring-1 ring-violet-400/50 shadow-[0_0_24px_rgba(10,132,255,0.15)]' : ''
       } ${
         isAvatar ? 'bg-amber-500/[0.04] border-amber-500/20 hover:border-amber-500/40' : 'bg-emerald-500/[0.04] border-emerald-500/20 hover:border-emerald-500/40'
       }`}>

@@ -427,7 +427,7 @@ export const ProductionPlanModal: React.FC<Props> = ({ blocks, analysis, project
           </button>
           <button
             onClick={() => copyToClipboard(markdown, 'all')}
-            className="px-4 py-2 rounded-lg bg-violet-500 hover:bg-violet-400 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all"
+            className="px-4 py-2 rounded-lg bg-violet-500 hover:bg-violet-400 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all"
           >
             {copyState === 'all' ? '✓ Copiado' : 'Copiar plano completo'}
           </button>

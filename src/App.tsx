@@ -34,7 +34,7 @@ export default function App() {
           <p className="text-zinc-400 text-sm mb-8">Configure suas chaves de API pra começar.</p>
           <button
             onClick={() => setShowSettings(true)}
-            className="w-full py-3.5 bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white font-semibold rounded-xl transition-colors shadow-[0_0_20px_rgba(124,58,237,0.4)]"
+            className="w-full py-3.5 bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-white font-semibold rounded-xl transition-colors shadow-[0_0_20px_rgba(10,132,255,0.4)]"
           >
             Configurar chaves
           </button>

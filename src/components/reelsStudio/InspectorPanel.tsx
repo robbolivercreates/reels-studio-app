@@ -117,7 +117,7 @@ const TabBodyShell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
 // ─── Inline LayoutThumbnail (kept local to avoid circular imports) ──────
 const LayoutThumb: React.FC<{ layout: BlockLayout; selected: boolean }> = ({ layout, selected }) => {
-  const borderClass = selected ? 'border-violet-400 shadow-[0_0_8px_rgba(167,139,250,0.4)]' : 'border-white/10';
+  const borderClass = selected ? 'border-violet-400 shadow-[0_0_8px_rgba(10,132,255,0.4)]' : 'border-white/10';
   return (
     <div className={`relative w-full aspect-[9/16] rounded border bg-zinc-900 overflow-hidden transition-all ${borderClass}`}>
       {layout === 'avatar-only' && (
@@ -204,8 +204,8 @@ const DecidedPresetCard: React.FC<{
       className="rounded-lg px-4 py-3 flex items-center gap-4 transition-colors"
       style={{
         backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)',
-        border: `1px solid ${isAuto ? '#A78BFA' : tokens.border.subtle}`,
-        boxShadow: isAuto ? '0 0 0 3px rgba(167,139,250,0.10)' : 'none',
+        border: `1px solid ${isAuto ? '#60A5FA' : tokens.border.subtle}`,
+        boxShadow: isAuto ? '0 0 0 3px rgba(10,132,255,0.10)' : 'none',
       }}
     >
       {/* Big emoji + label cluster */}
@@ -219,7 +219,7 @@ const DecidedPresetCard: React.FC<{
       <div className="flex-1 min-w-0">
         <div
           className="text-[10px] uppercase tracking-wider font-semibold leading-none mb-1"
-          style={{ color: isAuto ? '#A78BFA' : tokens.text.tertiary }}
+          style={{ color: isAuto ? '#60A5FA' : tokens.text.tertiary }}
         >
           {isAuto ? '🤖 Sistema escolheu' : 'Você escolheu'}
         </div>
@@ -233,7 +233,7 @@ const DecidedPresetCard: React.FC<{
           onClick={onReset}
           className="shrink-0 text-[11px] font-medium underline-offset-2 hover:underline transition-colors"
           style={{
-            color: '#A78BFA',
+            color: '#60A5FA',
             backgroundColor: 'transparent',
             border: 'none',
             cursor: 'pointer',
@@ -631,9 +631,9 @@ export const InspectorPanel: React.FC<Props> = ({
                 className="relative shrink-0 rounded-lg transition-all flex flex-col items-center overflow-hidden"
                 style={{
                   width: STYLE_THUMB_WIDTH,
-                  border: `2px solid ${isActive ? '#A78BFA' : (auto ? '#A78BFA80' : tokens.border.subtle)}`,
+                  border: `2px solid ${isActive ? '#60A5FA' : (auto ? '#60A5FA80' : tokens.border.subtle)}`,
                   cursor: 'pointer',
-                  boxShadow: isActive ? '0 0 0 3px rgba(167,139,250,0.18)' : 'none',
+                  boxShadow: isActive ? '0 0 0 3px rgba(10,132,255,0.18)' : 'none',
                   backgroundColor: isLight ? '#FFFFFF' : 'rgba(255,255,255,0.04)',
                 }}
                 title={tip}
@@ -657,7 +657,7 @@ export const InspectorPanel: React.FC<Props> = ({
                     <span
                       className="absolute top-1 right-1 text-[8px] font-bold px-1 py-0.5 rounded-full leading-none"
                       style={{
-                        backgroundColor: '#A78BFA',
+                        backgroundColor: '#60A5FA',
                         color: '#fff',
                         boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                       }}
@@ -668,7 +668,7 @@ export const InspectorPanel: React.FC<Props> = ({
                 </div>
                 <span
                   className="text-[9px] text-center leading-tight font-medium truncate w-full px-1 py-1"
-                  style={{ color: isActive ? '#A78BFA' : tokens.text.secondary }}
+                  style={{ color: isActive ? '#60A5FA' : tokens.text.secondary }}
                 >
                   {p.label}
                 </span>
@@ -728,7 +728,7 @@ export const InspectorPanel: React.FC<Props> = ({
               disabled={isBusy}
               className="px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
               style={{
-                backgroundColor: '#A78BFA',
+                backgroundColor: '#60A5FA',
                 color: '#fff',
                 border: 'none',
                 cursor: isBusy ? 'wait' : 'pointer',
@@ -773,8 +773,8 @@ export const InspectorPanel: React.FC<Props> = ({
                   className="px-2.5 py-1.5 rounded-md text-[11px] font-medium flex items-center gap-1.5"
                   style={{
                     backgroundColor: 'transparent',
-                    color: overridden ? '#A78BFA' : tokens.text.secondary,
-                    border: `1px solid ${overridden ? '#A78BFA66' : tokens.border.subtle}`,
+                    color: overridden ? '#60A5FA' : tokens.text.secondary,
+                    border: `1px solid ${overridden ? '#60A5FA66' : tokens.border.subtle}`,
                     cursor: isBusy ? 'not-allowed' : 'pointer',
                     opacity: isBusy ? 0.5 : 1,
                   }}
@@ -793,7 +793,7 @@ export const InspectorPanel: React.FC<Props> = ({
                       <button
                         onClick={() => { onSetMotionModel(undefined); setModelMenuOpen(false); }}
                         className="w-full text-left px-3 py-1.5 text-[11px] flex items-center justify-between transition-colors"
-                        style={{ color: !overridden ? '#A78BFA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
+                        style={{ color: !overridden ? '#60A5FA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
                       >
                         <span>Padrão (global · {globalLabel})</span>
                         {!overridden && <span>✓</span>}
@@ -805,7 +805,7 @@ export const InspectorPanel: React.FC<Props> = ({
                             key={opt.id}
                             onClick={() => { onSetMotionModel(opt.id); setModelMenuOpen(false); }}
                             className="w-full text-left px-3 py-1.5 text-[11px] flex items-center justify-between transition-colors"
-                            style={{ color: active ? '#A78BFA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
+                            style={{ color: active ? '#60A5FA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
                           >
                             <span>{opt.label}</span>
                             {active && <span>✓</span>}
@@ -927,7 +927,7 @@ export const InspectorPanel: React.FC<Props> = ({
                 title={opt.label}
               >
                 <LayoutThumb layout={opt.id} selected={selected} />
-                <div className="text-[9px] text-center truncate" style={{ color: selected ? '#A78BFA' : tokens.text.tertiary }}>{opt.label}</div>
+                <div className="text-[9px] text-center truncate" style={{ color: selected ? '#60A5FA' : tokens.text.tertiary }}>{opt.label}</div>
               </button>
             );
           })}
@@ -974,8 +974,8 @@ export const InspectorPanel: React.FC<Props> = ({
       <div
         className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
         style={{
-          backgroundColor: isLight ? 'rgba(167,139,250,0.10)' : 'rgba(167,139,250,0.15)',
-          color: '#A78BFA',
+          backgroundColor: isLight ? 'rgba(10,132,255,0.10)' : 'rgba(10,132,255,0.15)',
+          color: '#60A5FA',
         }}
         aria-hidden
       >
@@ -1005,9 +1005,9 @@ export const InspectorPanel: React.FC<Props> = ({
               onClick={onOpenAssetPicker}
               className="px-2.5 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1.5"
               style={{
-                backgroundColor: isLight ? 'rgba(167,139,250,0.10)' : 'rgba(167,139,250,0.18)',
-                borderColor: 'rgba(167,139,250,0.40)',
-                color: '#A78BFA',
+                backgroundColor: isLight ? 'rgba(10,132,255,0.10)' : 'rgba(10,132,255,0.18)',
+                borderColor: 'rgba(10,132,255,0.40)',
+                color: '#60A5FA',
               }}
             >
               <span>📎</span>
@@ -1060,8 +1060,8 @@ export const InspectorPanel: React.FC<Props> = ({
             <div
               className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
               style={{
-                backgroundColor: isLight ? 'rgba(167,139,250,0.10)' : 'rgba(167,139,250,0.15)',
-                color: '#A78BFA',
+                backgroundColor: isLight ? 'rgba(10,132,255,0.10)' : 'rgba(10,132,255,0.15)',
+                color: '#60A5FA',
               }}
               aria-hidden
             >

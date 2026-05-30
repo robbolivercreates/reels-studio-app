@@ -24,7 +24,7 @@ import { loadAvatarPhotos, type AvatarPhoto } from './avatarPhotosStore';
 import { ensureProfiles, upsertProfile, LANGUAGE_OPTIONS, type OutputLanguage, type VoiceProfile } from './voiceProfile';
 import { loadClonedVoices, type ClonedVoice } from '../../services/minimaxService';
 
-const VIOLET = '#A78BFA';
+const VIOLET = '#60A5FA';
 
 /** Read the active voice profile (the one that carries the default language). */
 const activeProfile = (): VoiceProfile => {
@@ -444,7 +444,7 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
                   the user to Settings → Vozes for cloning. */}
               {clonedVoices.length > 0 && (
                 <>
-                  <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: '#A78BFA' }}>Minhas vozes</div>
+                  <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: '#60A5FA' }}>Minhas vozes</div>
                   <div className="grid grid-cols-3 gap-2.5 mb-4">
                     {clonedVoices.map(v => {
                       const daysLeft = Math.max(0, Math.floor((v.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));

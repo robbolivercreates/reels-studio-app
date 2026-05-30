@@ -146,7 +146,7 @@ export const FetchHeyGenAvatarsModal: React.FC<Props> = ({ onClose, onImported }
                         already
                           ? 'border-emerald-500/40 opacity-60 cursor-not-allowed'
                           : isSelected
-                          ? 'border-violet-400 shadow-[0_0_24px_rgba(167,139,250,0.4)] scale-[1.02]'
+                          ? 'border-violet-400 shadow-[0_0_24px_rgba(10,132,255,0.4)] scale-[1.02]'
                           : 'border-white/10 hover:border-white/30'
                       }`}
                     >
@@ -202,7 +202,7 @@ export const FetchHeyGenAvatarsModal: React.FC<Props> = ({ onClose, onImported }
               <button
                 onClick={handleImport}
                 disabled={selected.size === 0 || loading}
-                className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
+                className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
               >
                 Importar {selected.size > 0 ? `${selected.size} ` : ''}avatar{selected.size === 1 ? '' : 'es'}
               </button>

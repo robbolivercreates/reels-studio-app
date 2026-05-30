@@ -21,7 +21,7 @@ interface LandingScreenProps {
   onNewProject: () => void;
 }
 
-const VIOLET = '#A78BFA';
+const VIOLET = '#60A5FA';
 
 export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, onNewProject }: LandingScreenProps) {
   return (
