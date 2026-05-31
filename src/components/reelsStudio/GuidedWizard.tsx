@@ -19,6 +19,7 @@ import type { ThemeTokens } from './theme';
 import { importScriptWithAI } from './scriptImporter';
 import { generateReelFromContent, fetchArticleFromUrl, type DurationTarget } from '../../services/scriptFromContentService';
 import { generateCarouselScript, carouselSlidesToBlocks } from '../../services/carouselScriptService';
+import { generateHooks, researchViralHooks, buildHookReelSource, HOOK_REEL_INSTRUCTION, type Hook } from '../../services/hookGeneratorService';
 import { VOICE_OPTIONS } from './voices';
 import { loadAvatarPhotos, type AvatarPhoto } from './avatarPhotosStore';
 import { ensureProfiles, upsertProfile, LANGUAGE_OPTIONS, type OutputLanguage, type VoiceProfile } from './voiceProfile';
@@ -58,8 +59,10 @@ interface GuidedWizardProps {
   onUseVideoFlow: (url: string) => void;
 }
 
-type Step = 'conteudo' | 'roteiro' | 'voz';
+type Step = 'conteudo' | 'hooks' | 'roteiro' | 'voz';
 type InputKind = 'texto' | 'artigo' | 'video';
+/** Origem do reel: conteúdo pronto (texto/link/vídeo) ou só um tema (gera hooks). */
+type SourceMode = 'conteudo' | 'tema';
 
 const detectKind = (v: string): InputKind => {
   const t = v.trim();
@@ -80,9 +83,19 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
   const [format, setFormat] = useState<WizardFormat>(initialFormat ?? 'reel');
   const [input, setInput] = useState('');
   const [generating, setGenerating] = useState(false);
+  // Optional fine-grained status shown on the generate button (e.g. the viral
+  // research phase before hooks). Falls back to the generic "Gerando…" label.
+  const [genMsg, setGenMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<ScriptBlock[]>([]);
   const [refazer, setRefazer] = useState('');
+
+  // Modo de origem (reel): 'conteudo' (cola texto/link/vídeo) ou 'tema' (só um
+  // tema → gera hooks → escolhe → roteiro). Opcional e aditivo — default segue
+  // o comportamento de sempre.
+  const [sourceMode, setSourceMode] = useState<SourceMode>('conteudo');
+  const [hooks, setHooks] = useState<Hook[]>([]);
+  const [selectedHookIdx, setSelectedHookIdx] = useState<number | null>(null);
 
   // step 2 — avatar
   const [useAvatar, setUseAvatar] = useState(true);
@@ -181,6 +194,57 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
     }
   };
 
+  // Tema → pesquisa tendências virais (Google Search) → gera 9 ganchos
+  // viesados pro que está bombando → vai pro passo de escolha.
+  const runGenerateHooks = async () => {
+    setError(null);
+    setGenerating(true);
+    persistLanguageDefault(language);
+    const profile = profileForGen();
+    try {
+      // Etapa 1 — pesquisa tendências virais reais pro tema. Resiliente:
+      // researchViralHooks devolve null em qualquer falha, então a geração
+      // segue sem o viés de tendência (nunca trava o fluxo principal).
+      setGenMsg('🔍 Pesquisando tendências…');
+      const viralContext = await researchViralHooks(input.trim(), { voiceProfile: profile });
+      // Etapa 2 — gera os 9 ganchos, agora com o contexto viral injetado.
+      setGenMsg('✍️ Escrevendo ganchos…');
+      const list = await generateHooks(input.trim(), { voiceProfile: profile, viralContext });
+      setHooks(list);
+      setSelectedHookIdx(null);
+      setStep('hooks');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao gerar os ganchos.');
+    } finally {
+      setGenerating(false);
+      setGenMsg(null);
+    }
+  };
+
+  // Gancho escolhido → roteiro. Reusa o generateReelFromContent travando o hook
+  // como abertura (sem serviço novo de geração de roteiro).
+  const runGenerateFromHook = async () => {
+    if (selectedHookIdx === null) return;
+    setError(null);
+    setGenerating(true);
+    const profile = profileForGen();
+    const hook = hooks[selectedHookIdx];
+    const extra = [HOOK_REEL_INSTRUCTION, extraInstr.trim()].filter(Boolean).join('\n');
+    try {
+      const gen = await generateReelFromContent(
+        buildHookReelSource(input.trim(), hook),
+        { style: 'viral', framework: 'auto', durationSec, extraInstructions: extra, voiceProfile: profile },
+      );
+      if (!gen.blocks?.length) throw new Error('Nenhum bloco gerado. Tente outro gancho.');
+      setBlocks(gen.blocks);
+      setStep('roteiro');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha ao gerar o roteiro.');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
   const finish = () => {
     if (format === 'carousel') {
       // Carousel has no avatar/voice — pass through blocks as-is.
@@ -197,6 +261,13 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
     ? [
         { id: 'conteudo', label: '1 · Conteúdo' },
         { id: 'roteiro', label: '2 · Slides' },
+      ]
+    : sourceMode === 'tema'
+    ? [
+        { id: 'conteudo', label: '1 · Tema' },
+        { id: 'hooks', label: '2 · Hook' },
+        { id: 'roteiro', label: '3 · Roteiro & avatar' },
+        { id: 'voz', label: '4 · Voz' },
       ]
     : [
         { id: 'conteudo', label: '1 · Conteúdo' },
@@ -247,11 +318,12 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
 
           {step === 'conteudo' && (
             <>
-              {/* Format toggle — Reels vs Carrossel. Lives at the top so the user
-                  picks the output before pasting content, removing the need to
-                  bail out and re-paste in another wizard. */}
-              <div className="text-[11px] uppercase tracking-wider font-semibold mb-2" style={{ color: tokens.text.tertiary }}>Formato</div>
-              <div className="grid grid-cols-2 gap-2 mb-4">
+              {/* DECISÃO 1 — o que criar (formato de saída). Rótulo próprio +
+                  espaçamento pra não conflar com a decisão de origem abaixo.
+                  Antes as duas perguntas viviam sob um único "FORMATO" e duas
+                  tiles acendiam juntas, parecendo multi-select bugado. */}
+              <div className="text-[11px] uppercase tracking-wider font-semibold mb-2" style={{ color: tokens.text.tertiary }}>O que você quer criar?</div>
+              <div className="grid grid-cols-2 gap-2 mb-5">
                 <button
                   onClick={() => setFormat('reel')}
                   className="rounded-xl p-3 text-left"
@@ -270,21 +342,45 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
                 </button>
               </div>
 
-              <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: tokens.text.tertiary }}>Cole o que tiver — o app entende sozinho</div>
+              {/* DECISÃO 2 — por onde começar (fonte do conteúdo). Só pra reel.
+                  Rótulo próprio deixa claro que é OUTRA pergunta, não mais formato. */}
+              {format === 'reel' && (
+                <>
+                  <div className="text-[11px] uppercase tracking-wider font-semibold mb-2" style={{ color: tokens.text.tertiary }}>Por onde começamos?</div>
+                  <div className="grid grid-cols-2 gap-2 mb-5">
+                    <button onClick={() => { setSourceMode('conteudo'); setError(null); }} className="rounded-xl p-3 text-left" style={{ ...card(sourceMode === 'conteudo'), cursor: 'pointer' }}>
+                      <div className="text-[13px] font-bold">📋 Já tenho o conteúdo</div>
+                      <div className="text-[11px] mt-0.5" style={{ color: tokens.text.tertiary }}>Cola texto, link ou vídeo.</div>
+                    </button>
+                    <button onClick={() => { setSourceMode('tema'); setError(null); }} className="rounded-xl p-3 text-left" style={{ ...card(sourceMode === 'tema'), cursor: 'pointer' }}>
+                      <div className="text-[13px] font-bold">💡 Só a ideia</div>
+                      <div className="text-[11px] mt-0.5" style={{ color: tokens.text.tertiary }}>A IA pesquisa tendências e gera os ganchos.</div>
+                    </button>
+                  </div>
+                </>
+              )}
+
+              <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: tokens.text.tertiary }}>
+                {sourceMode === 'tema' && format === 'reel' ? 'Sobre o que é o reel?' : 'Cole o que tiver — o app entende sozinho'}
+              </div>
               <textarea
                 value={input}
                 onChange={e => { setInput(e.target.value); setError(null); }}
-                placeholder="Cole um texto, link de artigo ou link de vídeo (TikTok / YouTube / Instagram)…"
+                placeholder={sourceMode === 'tema' && format === 'reel'
+                  ? 'ex: produtividade pra quem tem TDAH · marketing pra dentistas · como começar a investir…'
+                  : 'Cole um texto, link de artigo ou link de vídeo (TikTok / YouTube / Instagram)…'}
                 className="w-full rounded-xl p-3.5 text-sm resize-none outline-none"
                 style={{ minHeight: 130, backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}`, color: tokens.text.primary }}
               />
-              <div className="mt-2.5 text-[12px] flex items-center gap-2" style={{ color: tokens.text.tertiary }}>
-                🔎 detectado: <b style={{ color: tokens.text.secondary }}>{kind === 'texto' ? 'texto' : kind === 'artigo' ? 'link de artigo' : 'link de vídeo'}</b>
-                {format === 'carousel' && kind !== 'video' && ' → gerar slides do carrossel'}
-                {format === 'reel' && kind === 'texto' && ' → gerar roteiro em blocos'}
-                {format === 'reel' && kind === 'artigo' && ' → ler o artigo e virar roteiro'}
-                {kind === 'video' && ' → abrir a importação de vídeo'}
-              </div>
+              {!(sourceMode === 'tema' && format === 'reel') && (
+                <div className="mt-2.5 text-[12px] flex items-center gap-2" style={{ color: tokens.text.tertiary }}>
+                  🔎 detectado: <b style={{ color: tokens.text.secondary }}>{kind === 'texto' ? 'texto' : kind === 'artigo' ? 'link de artigo' : 'link de vídeo'}</b>
+                  {format === 'carousel' && kind !== 'video' && ' → gerar slides do carrossel'}
+                  {format === 'reel' && kind === 'texto' && ' → gerar roteiro em blocos'}
+                  {format === 'reel' && kind === 'artigo' && ' → ler o artigo e virar roteiro'}
+                  {kind === 'video' && ' → abrir a importação de vídeo'}
+                </div>
+              )}
 
               {/* Default language — seeded from the active voice profile; changing
                   it here saves it as the global default for all future reels. */}
@@ -359,6 +455,37 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
                   style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}`, color: tokens.text.primary }}
                 />
               </div>
+            </>
+          )}
+
+          {step === 'hooks' && (
+            <>
+              <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: tokens.text.tertiary }}>
+                Escolha o gancho de abertura
+              </div>
+              <div className="flex flex-col gap-2 mb-4">
+                {hooks.map((h, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setSelectedHookIdx(i)}
+                    className="rounded-lg p-3 text-left"
+                    style={{ ...card(selectedHookIdx === i), cursor: 'pointer' }}
+                  >
+                    <div className="text-[9px] uppercase tracking-wide font-semibold mb-1" style={{ color: VIOLET }}>
+                      {h.title}{h.type ? ` · ${h.type}` : ''}
+                    </div>
+                    <div className="text-[13px] leading-snug" style={{ color: tokens.text.primary }}>{h.content}</div>
+                  </button>
+                ))}
+              </div>
+              <button
+                onClick={runGenerateHooks}
+                disabled={generating}
+                className="px-3.5 py-2 rounded-lg text-[12px] font-medium"
+                style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}`, color: tokens.text.secondary, cursor: generating ? 'wait' : 'pointer' }}
+              >
+                {generating ? (genMsg ?? '⏳ Gerando…') : '✨ Refazer ganchos'}
+              </button>
             </>
           )}
 
@@ -511,7 +638,12 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
         {/* footer */}
         <div className="px-6 py-3.5 flex items-center justify-between" style={{ borderTop: `1px solid ${tokens.border.subtle}` }}>
           <button
-            onClick={() => { if (step === 'conteudo') onClose(); else setStep(step === 'voz' ? 'roteiro' : 'conteudo'); }}
+            onClick={() => {
+              if (step === 'conteudo') { onClose(); return; }
+              if (step === 'hooks') { setStep('conteudo'); return; }
+              if (step === 'roteiro') { setStep(sourceMode === 'tema' && format === 'reel' ? 'hooks' : 'conteudo'); return; }
+              setStep('roteiro'); // voz → roteiro
+            }}
             className="px-4 py-2 rounded-lg text-[13px]"
             style={{ background: 'transparent', border: `1px solid ${tokens.border.subtle}`, color: tokens.text.secondary, cursor: 'pointer' }}
           >
@@ -519,7 +651,11 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
           </button>
 
           {step === 'conteudo' && (
-            kind === 'video' && format !== 'carousel' ? (
+            format === 'reel' && sourceMode === 'tema' ? (
+              <button onClick={() => runGenerateHooks()} disabled={!canGenerate} className="px-5 py-2.5 rounded-xl text-[14px] font-bold text-white" style={{ backgroundColor: VIOLET, border: 'none', opacity: !canGenerate ? 0.5 : 1, cursor: !canGenerate ? 'default' : 'pointer' }}>
+                {generating ? (genMsg ?? '⏳ Gerando…') : 'Gerar ganchos →'}
+              </button>
+            ) : kind === 'video' && format !== 'carousel' ? (
               <button onClick={() => onUseVideoFlow(input.trim())} className="px-5 py-2.5 rounded-xl text-[14px] font-bold text-white" style={{ backgroundColor: VIOLET, border: 'none', cursor: 'pointer' }}>
                 Importar este vídeo →
               </button>
@@ -530,6 +666,11 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
                   : format === 'carousel' ? 'Gerar slides →' : 'Gerar roteiro →'}
               </button>
             )
+          )}
+          {step === 'hooks' && (
+            <button onClick={runGenerateFromHook} disabled={selectedHookIdx === null || generating} className="px-5 py-2.5 rounded-xl text-[14px] font-bold text-white" style={{ backgroundColor: VIOLET, border: 'none', opacity: (selectedHookIdx === null || generating) ? 0.5 : 1, cursor: (selectedHookIdx === null || generating) ? 'default' : 'pointer' }}>
+              {generating ? '⏳ Gerando…' : 'Gerar roteiro →'}
+            </button>
           )}
           {step === 'roteiro' && (
             format === 'carousel'
