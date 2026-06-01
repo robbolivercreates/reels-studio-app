@@ -44,6 +44,11 @@ export interface GeneratedCarousel {
   slides: CarouselSlide[];
   /** One-line hook that captures the whole carousel theme. */
   theme: string;
+  /**
+   * Ready-to-paste GPT Image 2 prompt for the cover slide (Rob Boliver Signature aesthetic).
+   * Includes headline, topic anchor, scene, and pose — user brings their own reference photo.
+   */
+  coverImagePrompt: string;
 }
 
 // ─── SERVICE ─────────────────────────────────────────────────────────────────
@@ -67,12 +72,15 @@ export const generateCarouselScript = async (
     storytelling: 'Narrative arc: setup → tension → turning point → lesson. Cover opens mid-action.',
   };
 
-  const prompt = `You are a world-class Instagram carousel copywriter.
+  const prompt = `You are a world-class Instagram carousel copywriter AND a creative director.
 
-TASK: Write a ${clampedSlides}-slide animated video carousel script in Brazilian Portuguese.
+TASK A: Write a ${clampedSlides}-slide animated video carousel script in Brazilian Portuguese.
+TASK B: Generate a GPT Image 2 prompt for the cover slide using the "Rob Boliver Signature" aesthetic.
 
 TOPIC: ${topic}
 TONE: ${tone} — ${toneHints[tone]}
+
+─── TASK A: CAROUSEL SCRIPT ────────────────────────────────────────────────
 
 SLIDE STRUCTURE (exactly ${clampedSlides} slides):
 - Slide 1 (cover): Hook that stops the scroll. Bold claim or provocation. 10–20 words spoken.
@@ -87,7 +95,30 @@ RULES FOR SPOKEN TEXT:
 - Language: Brazilian Portuguese conversational. Not formal, not academic.
 
 VISUAL HINT:
-For each slide, write a short visual direction (1–2 sentences) describing what motion graphic, image, or animation would appear on screen. This is for the AI motion generator — be specific about subject matter, not style.
+For each slide (2–${clampedSlides}), write a short visual direction (1–2 sentences) for the motion generator.
+Slide 1 visual hint: write "Capa estática gerada com GPT Image 2."
+
+─── TASK B: COVER IMAGE PROMPT ────────────────────────────────────────────
+
+Generate a COMPLETE, ready-to-paste English prompt for GPT Image 2 to create the carousel cover.
+The prompt MUST follow this exact "Rob Boliver Signature" aesthetic template:
+
+FIXED AESTHETIC (do not change these):
+- Deep dark premium canvas (#0A0A0F). Atmosphere: "Apple Keynote × luxury tech startup × editorial magazine cover."
+- Electric cyan (#00B4D8) rim/key light on subject. Rich violet (#7B2FBE) deep background glow. One warm amber accent in background bokeh.
+- Heavy sans-serif headline, ALL CAPS, massively oversized, fills upper portion of frame, pure white #FFFFFF.
+- Matte surface with subtle reflection. Three depth planes. Subtle film grain. No neon, no particles, no flat overlays.
+- TOPIC ANCHOR: a realistic 3D physical object on the desk that visually represents the topic.
+- Subject (Rob Boliver): Long-sleeve black top. Cinematic cyan/violet rim light. No cutout box.
+- Frame: PORTRAIT 4:5 aspect ratio (1080×1350px). Subject in lower half. Headline in upper third.
+
+YOU MUST FILL IN based on the topic "${topic}":
+1. HEADLINE: 1–3 ALL-CAPS words in English that capture the topic's core idea (e.g. ALGORITMO, 5 PASSOS, VIRADA).
+2. TOPIC ANCHOR: describe a specific, recognizable physical/digital object that represents this topic — rendered as a 3D object on the desk.
+3. SCENE: 4–5 sentences describing the editorial workspace, subject position, anchor position, depth planes, and ambient light.
+4. POSE: describe the subject's pose, arm position, and facial expression that fits the topic's energy.
+
+Output the coverImagePrompt as a single block of English text (no section headers in the output, just the complete prompt ready to paste).
 
 Return JSON matching the schema. No extra commentary.`;
 
@@ -104,6 +135,7 @@ Return JSON matching the schema. No extra commentary.`;
         type: Type.OBJECT,
         properties: {
           theme: { type: Type.STRING },
+          coverImagePrompt: { type: Type.STRING },
           slides: {
             type: Type.ARRAY,
             items: {
@@ -118,7 +150,7 @@ Return JSON matching the schema. No extra commentary.`;
             },
           },
         },
-        required: ['theme', 'slides'],
+        required: ['theme', 'coverImagePrompt', 'slides'],
       },
     },
   });
@@ -142,7 +174,10 @@ Return JSON matching the schema. No extra commentary.`;
 
 // ─── CONVERTER ───────────────────────────────────────────────────────────────
 
-/** Convert carousel slides into ReelsStudio ScriptBlocks (all avatar kind, timings zeroed — audio generation fills them in). */
+/** Convert carousel slides into ReelsStudio ScriptBlocks.
+ *  Slides 2+ (body/CTA) get the rob-boliver preset pre-applied so motions
+ *  automatically match the brand aesthetic. Slide 1 (cover) is left without
+ *  a preset — it will be replaced by the GPT Image 2 generated cover image. */
 export const carouselSlidesToBlocks = (slides: CarouselSlide[]): ScriptBlock[] =>
   slides.map((s, i) => ({
     id: `carousel_${Date.now()}_${i}`,
@@ -150,4 +185,5 @@ export const carouselSlidesToBlocks = (slides: CarouselSlide[]): ScriptBlock[] =
     text: s.text,
     start: 0,
     end: 0,
+    ...(i > 0 ? { stylePresetOverride: 'rob-boliver' as const } : {}),
   }));

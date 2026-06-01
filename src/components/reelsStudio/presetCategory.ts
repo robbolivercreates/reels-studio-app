@@ -117,6 +117,8 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
       return 'effect';
     case 'claude-ui':
       return 'native';
+    case 'rob-boliver':
+      return 'style';
     default: {
       const _exhaustive: never = id;
       void _exhaustive;

@@ -32,7 +32,8 @@ export type StylePresetId =
   | 'before-after-split'
   | 'karaoke-captions'
   | 'icon-callout'
-  | 'claude-ui';
+  | 'claude-ui'
+  | 'rob-boliver';
 
 /**
  * Whether the preset's intrinsic mood is dark, light, or warm cream/paper.
@@ -1842,6 +1843,65 @@ NEVER:
 
 /** Preset IDs that are handled natively in motionService (no Gemini call). */
 export const NATIVE_PRESET_IDS: StylePresetId[] = ['claude-ui'];
+
+// Rob Boliver Signature — dark editorial carousel aesthetic.
+STYLE_PRESETS.push({
+  id: 'rob-boliver',
+  role: 'hook',
+  roleLabel: 'Capa / Hook',
+  defaultFontSet: 'brand',
+  label: 'Rob Boliver',
+  description: 'Dark editorial · cyan/violeta · Apple Keynote × luxury tech.',
+  emoji: '🎯',
+  bestFor: 'Carrosséis de marca, slides de conteúdo premium, posts de autoridade.',
+  bgType: 'dark',
+  atmosphere: {
+    baseBg: '#0A0A0F',
+    warmGlow:  { color: '#7B2FBE', alpha: 0.18, pos: '75% 80%' },
+    coolGlow:  { color: '#00B4D8', alpha: 0.22, pos: '20% 20%' },
+    vignetteIntensity: 0.75,
+  },
+  geminiBrief: `
+PALETTE — FIXED, DO NOT DEVIATE:
+  background:  #0A0A0F  (near-black, deep navy undertone)
+  primary:     #00B4D8  (electric cyan / sapphire)
+  secondary:   #7B2FBE  (rich violet / indigo)
+  text:        #FFFFFF  (pure white)
+  subtext:     #94A3B8  (slate-400 for secondary labels)
+  surface:     rgba(255,255,255,0.04)  (ultra-subtle card bg)
+
+ATMOSPHERE (MANDATORY):
+  • Deep dark canvas. Three depth planes minimum: foreground (sharp), midground (sharp), background (soft bokeh blur).
+  • Subtle film grain overlay at 3–5% opacity. No visible noise grain — just texture.
+  • Vignette on edges (rgba(0,0,0,0.55) radial mask).
+  • Cyan (#00B4D8) acts as the key/rim light — it should appear as realistic cinematic light, NOT a flat colored shape or overlay.
+  • Violet (#7B2FBE) acts as the deep background accent glow — warm counterpoint in the far background bokeh.
+  • NO neon glow halos. NO hexagonal particles. NO gamer RGB aesthetics. NO flat colored overlays.
+  • ONE warm amber (#C89B3C at ~15% opacity) accent deep in the background for depth — never on text or foreground.
+
+TYPOGRAPHY:
+  font-family: "Inter", "SF Pro Display", system-ui, sans-serif
+  weights: 800–900 (display headline), 400–500 (body/subtext)
+  headline: ALL CAPS, massive (80–140px for carousels), tight letter-spacing (-0.02em to -0.04em)
+  body text: 18–28px, normal weight, generous line-height (1.55)
+  color: always #FFFFFF or #94A3B8 — never colored text
+
+LAYOUT PHILOSOPHY:
+  • "Apple Keynote × editorial magazine × luxury tech startup."
+  • Strong vertical hierarchy: one dominant headline → one supporting visual element → quiet background.
+  • The text IS the message — make it dominate. Not a caption, not a label. THE thing.
+  • SAFE AREA for carousel (4:5, 1080×1350): primary content inside x:80–1000, y:160–1190.
+  • Top 160px: atmosphere only (no text, no icons).
+  • Bottom 160px: quiet zone (soft gradient fade, no text).
+  • Hero element vertical center: aim for y≈580–700.
+
+ANIMATION:
+  ease: power3.out or power2.inOut
+  durations: 0.5–1.2s (confident, not rushed, not slow)
+  style: elegant entrance — slide-up + fade-scale is canonical. Hold at end (no loop unless subtle).
+  stagger: 0.12–0.2s between headline and sub-elements
+  NEVER: frantic motion, bouncing, wiggle, color flash, strobe`.trim(),
+});
 
 // Append the claude-ui entry to the canonical preset list.
 STYLE_PRESETS.push({

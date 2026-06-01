@@ -7,6 +7,8 @@ import {
   CAROUSEL_TONE_OPTIONS,
   type CarouselTone,
 } from '../../services/carouselScriptService';
+import { generateCoverImage, hasCoverImageKey } from '../../services/openaiImageService';
+import { CoverSlideEditor } from './CoverSlideEditor';
 import {
   generateReelFromContent,
   fetchArticleFromUrl,
@@ -92,6 +94,16 @@ interface WizardState {
   // Carousel config
   slideCount: number;
   carouselTone: CarouselTone;
+  /** Rob Boliver cover prompt generated alongside the slides (editable before generating). */
+  coverImagePrompt: string | null;
+  /** User-edited version of the cover prompt (starts as coverImagePrompt, then user can tweak). */
+  coverImageEditedPrompt: string | null;
+  /** Base64 data-URI of the creator's reference photo for the cover. */
+  coverImageReferencePhoto: string | null;
+  /** URL or data-URI of the generated cover image. */
+  coverImageDataUrl: string | null;
+  coverImageGenerating: boolean;
+  coverImageError: string | null;
 
   // Source 'topic'
   topicText: string;
@@ -178,6 +190,12 @@ const INITIAL: WizardState = {
   reelDuration: 30,
   slideCount: 5,
   carouselTone: 'educativo',
+  coverImagePrompt: null,
+  coverImageEditedPrompt: null,
+  coverImageReferencePhoto: null,
+  coverImageDataUrl: null,
+  coverImageGenerating: false,
+  coverImageError: null,
   topicText: '',
   scriptText: '',
   useHeuristic: false,
@@ -590,6 +608,11 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
         const result = await generateCarouselScript(content, ws.slideCount, ws.carouselTone);
         blocks = carouselSlidesToBlocks(result.slides);
         header = { format: `${blocks.length} slides`, durationSec: 0 };
+        // Store the Rob Boliver cover prompt for GPT Image 2 generation.
+        dispatch({ type: 'set-field', key: 'coverImagePrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageEditedPrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageDataUrl', value: null });
+        dispatch({ type: 'set-field', key: 'coverImageError', value: null });
 
       } else {
         // reel
@@ -668,6 +691,23 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws, profileForCall, scriptEstimatedSec, activeProfile]);
 
+  // ─── COVER IMAGE HANDLER ───────────────────────────────────────────────
+
+  const handleGenerateCoverImage = useCallback(async () => {
+    const prompt = ws.coverImageEditedPrompt?.trim() || ws.coverImagePrompt;
+    if (!prompt) return;
+    dispatch({ type: 'set-field', key: 'coverImageGenerating', value: true });
+    dispatch({ type: 'set-field', key: 'coverImageError', value: null });
+    try {
+      const url = await generateCoverImage(prompt, ws.coverImageReferencePhoto ?? undefined);
+      dispatch({ type: 'set-field', key: 'coverImageDataUrl', value: url });
+    } catch (e) {
+      dispatch({ type: 'set-field', key: 'coverImageError', value: e instanceof Error ? e.message : 'Erro ao gerar imagem.' });
+    } finally {
+      dispatch({ type: 'set-field', key: 'coverImageGenerating', value: false });
+    }
+  }, [ws.coverImageEditedPrompt, ws.coverImagePrompt, ws.coverImageReferencePhoto]);
+
   // ─── PREVIEW PANEL HANDLERS ────────────────────────────────────────────
 
   const handleRegenerateAll = async (extra: string, tone: ToneOption, language: LanguageOption) => {
@@ -687,6 +727,10 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
         if (ws.source === 'article') content = ws.articleText.trim() || ws.articleUrl.trim();
         const result = await generateCarouselScript(content, ws.slideCount, ws.carouselTone);
         dispatch({ type: 'set-preview-blocks', blocks: carouselSlidesToBlocks(result.slides) });
+        dispatch({ type: 'set-field', key: 'coverImagePrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageEditedPrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageDataUrl', value: null });
+        dispatch({ type: 'set-field', key: 'coverImageError', value: null });
 
       } else if (ws.source === 'video' && ws.videoPreview) {
         const { bytes, mimeType } = await ws.videoPreview.bytesGetter();
@@ -1339,6 +1383,21 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                     )}
                   </div>
                 </div>
+              )}
+
+              {/* ── CAROUSEL COVER SLIDE (GPT Image 2 via fal.ai) ── */}
+              {ws.format === 'carousel' && ws.coverImagePrompt && !ws.generating && (
+                <CoverSlideEditor
+                  editedPrompt={ws.coverImageEditedPrompt ?? ws.coverImagePrompt}
+                  referencePhoto={ws.coverImageReferencePhoto}
+                  generatedImageUrl={ws.coverImageDataUrl}
+                  generating={ws.coverImageGenerating}
+                  error={ws.coverImageError}
+                  hasKey={hasCoverImageKey()}
+                  onPromptChange={v => dispatch({ type: 'set-field', key: 'coverImageEditedPrompt', value: v })}
+                  onReferencePhotoChange={v => dispatch({ type: 'set-field', key: 'coverImageReferencePhoto', value: v })}
+                  onGenerate={handleGenerateCoverImage}
+                />
               )}
 
               {ws.previewBlocks && !ws.generating && (

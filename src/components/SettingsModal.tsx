@@ -44,7 +44,7 @@ interface KeyConfig {
   hint: string;
   required: boolean;
   helpUrl?: string;
-  validate: (key: string) => Promise<{ ok: boolean; message: string }>;
+  validate?: (key: string) => Promise<{ ok: boolean; message: string }>;
 }
 
 const validateFalKey = async (key: string): Promise<{ ok: boolean; message: string }> => {
@@ -270,6 +270,10 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
   const handleValidate = async (k: KeyConfig) => {
     const v = fields[k.storageKey]?.value?.trim();
     if (!v) return;
+    if (!k.validate) {
+      patchField(k.storageKey, { validation: 'ok', validationMessage: 'Chave salva.' });
+      return;
+    }
     patchField(k.storageKey, { validation: 'validating', validationMessage: 'Testando…' });
     try {
       const result = await k.validate(v);

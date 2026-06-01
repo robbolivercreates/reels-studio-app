@@ -19,6 +19,8 @@ import type { ThemeTokens } from './theme';
 import { importScriptWithAI } from './scriptImporter';
 import { generateReelFromContent, fetchArticleFromUrl, type DurationTarget } from '../../services/scriptFromContentService';
 import { generateCarouselScript, carouselSlidesToBlocks } from '../../services/carouselScriptService';
+import { generateCoverImage, hasCoverImageKey } from '../../services/openaiImageService';
+import { CoverSlideEditor } from './CoverSlideEditor';
 import { generateHooks, researchViralHooks, buildHookReelSource, HOOK_REEL_INSTRUCTION, type Hook } from '../../services/hookGeneratorService';
 import { VOICE_OPTIONS } from './voices';
 import { loadAvatarPhotos, type AvatarPhoto } from './avatarPhotosStore';
@@ -89,6 +91,13 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
   const [error, setError] = useState<string | null>(null);
   const [blocks, setBlocks] = useState<ScriptBlock[]>([]);
   const [refazer, setRefazer] = useState('');
+  const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
+  const [coverImagePrompt, setCoverImagePrompt] = useState<string | null>(null);
+  const [coverImageEditedPrompt, setCoverImageEditedPrompt] = useState<string | null>(null);
+  const [coverImageReferencePhoto, setCoverImageReferencePhoto] = useState<string | null>(null);
+  const [coverImageDataUrl, setCoverImageDataUrl] = useState<string | null>(null);
+  const [coverImageGenerating, setCoverImageGenerating] = useState(false);
+  const [coverImageError, setCoverImageError] = useState<string | null>(null);
 
   // Modo de origem (reel): 'conteudo' (cola texto/link/vídeo) ou 'tema' (só um
   // tema → gera hooks → escolhe → roteiro). Opcional e aditivo — default segue
@@ -167,6 +176,10 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
         if (effectiveInstr) topic = `${topic}\n\n(Instrução extra: ${effectiveInstr})`;
         const gen = await generateCarouselScript(topic, slideCount, 'educativo');
         result = carouselSlidesToBlocks(gen.slides);
+        setCoverImagePrompt(gen.coverImagePrompt ?? null);
+        setCoverImageEditedPrompt(gen.coverImagePrompt ?? null);
+        setCoverImageDataUrl(null);
+        setCoverImageError(null);
       } else if (kind === 'artigo') {
         const fetched = await fetchArticleFromUrl(input.trim());
         const gen = await generateReelFromContent(
@@ -191,6 +204,21 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
       setError(err instanceof Error ? err.message : 'Falha ao gerar o roteiro.');
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const handleGenerateCoverImage = async () => {
+    const prompt = coverImageEditedPrompt?.trim() || coverImagePrompt;
+    if (!prompt) return;
+    setCoverImageGenerating(true);
+    setCoverImageError(null);
+    try {
+      const url = await generateCoverImage(prompt, coverImageReferencePhoto ?? undefined);
+      setCoverImageDataUrl(url);
+    } catch (e) {
+      setCoverImageError(e instanceof Error ? e.message : 'Erro ao gerar imagem.');
+    } finally {
+      setCoverImageGenerating(false);
     }
   };
 
@@ -491,21 +519,97 @@ export function GuidedWizard({ open, tokens, isLight, initialVoiceId, initialFor
 
           {step === 'roteiro' && (
             <>
+              {/* ── CAROUSEL COVER SLIDE (GPT Image 2 via fal.ai) ── */}
+              {format === 'carousel' && coverImagePrompt && (
+                <CoverSlideEditor
+                  editedPrompt={coverImageEditedPrompt ?? coverImagePrompt}
+                  referencePhoto={coverImageReferencePhoto}
+                  generatedImageUrl={coverImageDataUrl}
+                  generating={coverImageGenerating}
+                  error={coverImageError}
+                  hasKey={hasCoverImageKey()}
+                  onPromptChange={setCoverImageEditedPrompt}
+                  onReferencePhotoChange={setCoverImageReferencePhoto}
+                  onGenerate={handleGenerateCoverImage}
+                />
+              )}
+
               <div className="text-[11px] uppercase tracking-wider font-semibold mb-2.5" style={{ color: tokens.text.tertiary }}>
                 {format === 'carousel' ? 'Slides gerados — ajuste se quiser' : 'Roteiro gerado — ajuste se quiser'}
               </div>
               <div className="flex flex-col gap-2 mb-4">
-                {blocks.map((b, i) => (
-                  <div key={b.id} className="rounded-lg p-2.5 flex gap-2.5" style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}` }}>
-                    <div className="text-[10px] font-bold w-3.5 shrink-0" style={{ color: tokens.text.tertiary }}>{i + 1}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[9px] uppercase tracking-wide mb-0.5" style={{ color: tokens.text.tertiary }}>
-                        {format === 'carousel' ? '🖼 Slide' : b.kind === 'avatar' ? '👤 Avatar' : '🎞 B-roll'}
+                {blocks.map((b, i) => {
+                  const isEditing = editingBlockId === b.id;
+                  const isCoverSlot = format === 'carousel' && i === 0;
+                  return (
+                    <div
+                      key={b.id}
+                      className="rounded-lg overflow-hidden"
+                      style={{ border: `1px solid ${isEditing ? 'rgba(139,92,246,0.4)' : tokens.border.subtle}` }}
+                    >
+                      <div
+                        className="p-2.5 flex gap-2.5 cursor-pointer"
+                        style={{ backgroundColor: tokens.bg.elevated }}
+                        onClick={() => !isCoverSlot && setEditingBlockId(isEditing ? null : b.id)}
+                      >
+                        <div className="text-[10px] font-bold w-3.5 shrink-0 mt-0.5" style={{ color: tokens.text.tertiary }}>{i + 1}</div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center justify-between mb-0.5">
+                            <div className="text-[9px] uppercase tracking-wide" style={{ color: tokens.text.tertiary }}>
+                              {format === 'carousel'
+                                ? (i === 0 ? '🖼 Capa · editada acima' : `🖼 Slide ${i + 1}`)
+                                : b.kind === 'avatar' ? '👤 Avatar' : '🎞 B-roll'}
+                            </div>
+                            {!isCoverSlot && (
+                              <svg
+                                className="w-3 h-3 shrink-0"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                                style={{ color: isEditing ? '#a78bfa' : tokens.text.tertiary }}
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            )}
+                          </div>
+                          <div className="text-[13px] leading-snug" style={{ color: isCoverSlot ? tokens.text.tertiary : tokens.text.primary }}>
+                            {isCoverSlot ? '(imagem gerada com GPT Image 2 — veja o painel acima)' : b.text}
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-[13px] leading-snug">{b.text}</div>
+                      {isEditing && !isCoverSlot && (
+                        <div className="px-2.5 pb-2.5 pt-0" style={{ backgroundColor: tokens.bg.elevated }}>
+                          <textarea
+                            autoFocus
+                            value={b.text}
+                            onChange={e => {
+                              const updated = blocks.map(bl => bl.id === b.id ? { ...bl, text: e.target.value } : bl);
+                              setBlocks(updated);
+                            }}
+                            onKeyDown={e => { if (e.key === 'Escape') setEditingBlockId(null); }}
+                            rows={3}
+                            className="w-full rounded-md px-2.5 py-2 text-[12px] resize-none focus:outline-none transition-colors"
+                            style={{
+                              backgroundColor: 'rgba(255,255,255,0.04)',
+                              border: '1px solid rgba(139,92,246,0.3)',
+                              color: tokens.text.primary,
+                            }}
+                          />
+                          <div className="flex justify-end mt-1.5">
+                            <button
+                              onClick={() => setEditingBlockId(null)}
+                              className="text-[10px] px-2.5 py-1 rounded-md transition-colors"
+                              style={{ backgroundColor: 'rgba(139,92,246,0.2)', color: '#a78bfa' }}
+                            >
+                              Pronto
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
               <div className="flex gap-2 mb-5">
                 <input
