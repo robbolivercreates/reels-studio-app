@@ -3879,7 +3879,14 @@ export const ReelsStudio: React.FC = () => {
               </div>
             )}
 
-            {showAvatarVideo && currentClip?.videoUrl && !previewVideoError && avatarBoxStyle ? (
+            {/* The whole avatar/take/placeholder chain below is CREATION
+                machinery. In edit-video mode the base video IS the person —
+                rendering the "sem avatar ainda" placeholder here (z-15)
+                covered the user's footage whenever the fala was 🎥 Vídeo
+                (kind avatar), reading as "Vídeo mostra nada, B-roll mostra
+                meu vídeo" — inverted. Edit mode renders none of this. */}
+            {state.projectMode === 'edit' ? null
+            : showAvatarVideo && currentClip?.videoUrl && !previewVideoError && avatarBoxStyle ? (
               <>
                 <video
                   ref={previewVideoRef}
