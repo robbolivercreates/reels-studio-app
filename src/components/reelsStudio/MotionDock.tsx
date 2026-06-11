@@ -250,6 +250,17 @@ export const MotionDock: React.FC<Props> = ({
     </div>
   );
 
+  // Split = SOLID panel: the motion owns its half and the video is squeezed
+  // into the other one (preview and export). Said explicitly because the
+  // float-only Posição/Contraste controls vanish here and that read as a bug.
+  const isSplit = value.placement.area === 'top-half' || value.placement.area === 'bottom-half';
+  const splitHint = isSplit && (
+    <div className="text-[9px] leading-snug mt-1" style={{ color: C.text3 }}>
+      ◱ painel sólido — o vídeo é espremido pra outra metade.
+      Pra um card transparente <i>sobre</i> o vídeo, use <b style={{ color: C.text2 }}>Flutuar</b> (com Posição e Contraste).
+    </div>
+  );
+
   // Float position: a pure compositor translate of the full-frame blend —
   // moving the card top/middle/bottom is INSTANT (no regeneration; black
   // stays transparent under screen blend, so shifted edges are invisible).
@@ -358,6 +369,7 @@ export const MotionDock: React.FC<Props> = ({
             {stepLabel(2, 'Onde aparece')}
             {areaButtons}
             {floatPosition && <div className="mt-0.5" style={{ width: 268 }}>{floatPosition}</div>}
+            {splitHint && <div style={{ width: 268 }}>{splitHint}</div>}
           </div>
         )}
 
@@ -392,6 +404,7 @@ export const MotionDock: React.FC<Props> = ({
           {stepLabel(2, 'Onde aparece')}
           {areaButtons}
           {floatPosition && <div className="mt-1.5">{floatPosition}</div>}
+          {splitHint}
         </div>
       )}
 

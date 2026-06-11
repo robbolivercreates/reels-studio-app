@@ -68,7 +68,7 @@ import { SilenceCutControl } from './reelsStudio/SilenceCutControl';
 import { computeLayout, hitTest, projectToSourceTime } from './reelsStudio/timeline';
 import { getLayoutSlots, LAYOUT_OPTIONS, defaultAvatarZoom } from './reelsStudio/layouts';
 import type { SilencePreset, BlockLayout, BlockTransition, LanguageOption, ReelsState, HeyGenModelChoice, ToneOption, BlockKind } from './reelsStudio/types';
-import { ensureProfiles, outputLanguageToTts, type OutputLanguage } from './reelsStudio/voiceProfile';
+import { ensureProfiles, activeProfileWithSpeechStyle, outputLanguageToTts, type OutputLanguage } from './reelsStudio/voiceProfile';
 import { loadUserIdentity } from './reelsStudio/userIdentity';
 import { ScriptPreviewPanel, type BusyState } from './reelsStudio/ScriptPreviewPanel';
 import { regenerateBlock, generateNewBlock } from '../services/blockGeneratorService';
@@ -908,7 +908,14 @@ export const ReelsStudio: React.FC = () => {
       });
 
       setEditVideoStatus('Extraindo áudio…');
-      const wavPath = await invoke<string>('extract_audio', { videoPath: ref.absolute_path });
+      // Two extractions: 16kHz mono for Whisper (its native rate) and a
+      // 44.1kHz stereo master for playback/export — using the Whisper wav as
+      // the master is what made playback sound muffled (telephone band).
+      const [wavPath, hqResult] = await Promise.all([
+        invoke<string>('extract_audio', { videoPath: ref.absolute_path }),
+        invoke<string>('extract_audio_playback', { videoPath: ref.absolute_path })
+          .catch((e: unknown) => { console.warn('[reels/edit-video] extração HQ falhou — usando 16k:', e); return null; }),
+      ]);
 
       setEditVideoStatus('Transcrevendo com Whisper… (1ª vez baixa o modelo)');
       const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath });
@@ -916,9 +923,9 @@ export const ReelsStudio: React.FC = () => {
       const { blocks, words } = importWhisperTranscript(json);
       if (blocks.length === 0) throw new Error('Não encontrei fala transcrita no vídeo.');
 
-      // Master audio: the extracted wav (in asset scope) → peaks + playable URL + export blob.
+      // Master audio: the HQ wav (fallback: whisper wav) → peaks + playable URL + export blob.
       setEditVideoStatus('Montando a timeline…');
-      const audioUrl = convertFileSrc(wavPath);
+      const audioUrl = convertFileSrc(hqResult ?? wavPath);
       const arr = await (await fetch(audioUrl)).arrayBuffer();
       const ctx = new AudioContext();
       const buf = await ctx.decodeAudioData(arr.slice(0));
@@ -3751,19 +3758,46 @@ export const ReelsStudio: React.FC = () => {
             <div className="absolute inset-0 bg-black z-0" />
 
             {/* Edit-video mode: full-frame base video chasing the master audio.
-                Muted (the <audio> element is the master); covers the canvas. */}
-            {state.projectMode === 'edit' && state.baseVideoTake && (
-              <video
-                ref={baseVideoRef}
-                key={`base-${state.baseVideoTake.id}`}
-                src={state.baseVideoTake.url}
-                muted
-                playsInline
-                preload="auto"
-                className="absolute inset-0 w-full h-full z-[5]"
-                style={{ objectFit: 'cover', backgroundColor: 'black' }}
-              />
-            )}
+                Muted (the <audio> element is the master); covers the canvas.
+                When a SPLIT motion overlay is active at the playhead, the base
+                is squeezed into the complementary half — mirroring the export
+                compositor (base.box = underlyingBox + coral seam), so the
+                split doesn't read as "the panel covered my video". */}
+            {state.projectMode === 'edit' && state.baseVideoTake && (() => {
+              const activeSplitEl = (state.overlayElements ?? []).find(el => {
+                if (el.kind !== 'motion' || el.motion?.status !== 'ready') return false;
+                if (playhead < el.startSec || playhead >= el.startSec + el.durationSec) return false;
+                const a = placementOfElement(el).area;
+                return a === 'top-half' || a === 'bottom-half';
+              });
+              const splitArea = activeSplitEl ? placementOfElement(activeSplitEl).area : null;
+              // Motion occupies its half; base video gets the OTHER half.
+              const baseStyle: React.CSSProperties = splitArea === 'top-half'
+                ? { position: 'absolute', left: 0, right: 0, top: '50%', bottom: 0, width: '100%', height: '50%' }
+                : splitArea === 'bottom-half'
+                  ? { position: 'absolute', left: 0, right: 0, top: 0, width: '100%', height: '50%' }
+                  : { position: 'absolute', inset: 0, width: '100%', height: '100%' };
+              return (
+                <>
+                  <video
+                    ref={baseVideoRef}
+                    key={`base-${state.baseVideoTake.id}`}
+                    src={state.baseVideoTake.url}
+                    muted
+                    playsInline
+                    preload="auto"
+                    className="z-[5]"
+                    style={{ ...baseStyle, objectFit: 'cover', backgroundColor: 'black', zIndex: 5 }}
+                  />
+                  {splitArea && (
+                    <div
+                      className="absolute left-0 right-0 pointer-events-none z-[10]"
+                      style={{ top: 'calc(50% - 1px)', height: 2, backgroundColor: 'rgba(217,119,87,0.65)' }}
+                    />
+                  )}
+                </>
+              );
+            })()}
 
             {/* Edit-video overlay elements alive at the playhead (text + motion). */}
             {state.projectMode === 'edit' && (state.overlayElements ?? [])
@@ -6147,8 +6181,7 @@ export const ReelsStudio: React.FC = () => {
                 // No upstream source available here, so we regenerate each block in parallel.
                 setEditAllBusy({ kind: 'all' });
                 try {
-                  const { profiles, activeId } = ensureProfiles();
-                  const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+                  const profile = activeProfileWithSpeechStyle();
                   const next = await Promise.all(editAllBlocks.map((b, i) => regenerateBlock(
                     b,
                     { prev: editAllBlocks[i - 1], next: editAllBlocks[i + 1] },
@@ -6167,8 +6200,7 @@ export const ReelsStudio: React.FC = () => {
                 if (idx === -1) return;
                 setEditAllBusy({ kind: 'block', blockId });
                 try {
-                  const { profiles, activeId } = ensureProfiles();
-                  const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+                  const profile = activeProfileWithSpeechStyle();
                   const updated = await regenerateBlock(
                     editAllBlocks[idx],
                     { prev: editAllBlocks[idx - 1], next: editAllBlocks[idx + 1] },
@@ -6185,8 +6217,7 @@ export const ReelsStudio: React.FC = () => {
               onAddBlock={async (kind: BlockKind, prompt) => {
                 setEditAllBusy({ kind: 'add' });
                 try {
-                  const { profiles, activeId } = ensureProfiles();
-                  const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+                  const profile = activeProfileWithSpeechStyle();
                   const fresh = await generateNewBlock(
                     kind,
                     prompt,

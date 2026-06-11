@@ -1653,6 +1653,18 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ? Promise.resolve(input.existingBrand)
     : researchBrand(ai, input.blockText, input.reelContext);
 
+  // REAL logo for mentioned brands (Canva, Notion, …): fetched from
+  // Clearbit/iTunes in PARALLEL with generation. The model never sees the
+  // data URI — it emits the short __BRAND_LOGO__ token (same proven pattern
+  // as __CREATOR_AVATAR__) and we substitute the real image post-generation.
+  // Without this, only templates got real logos; the freeform path let
+  // Gemini draw a fake geometric "C".
+  const { detectKnownBrand, fetchKnownBrandLogo } = await import('./logoFetchService');
+  const mentionedBrand = detectKnownBrand(input.blockText);
+  const brandLogoPromise: Promise<string | null> = mentionedBrand
+    ? fetchKnownBrandLogo(mentionedBrand).catch(() => null)
+    : Promise.resolve(null);
+
   const ctx = input.reelContext;
   const recentIntents = [ctx?.prevPrevMotionIntent, ctx?.prevMotionIntent].filter(Boolean) as string[];
   const reelContextSection = ctx ? [
@@ -2433,8 +2445,26 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ``,
   ].join('\n') : '';
 
+  // Real-logo token section — only when a known brand is mentioned. The data
+  // URI never passes through the model (it would truncate/corrupt it); the
+  // token is substituted in code after generation.
+  const brandLogoSection = mentionedBrand ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  🏷 REAL BRAND LOGO AVAILABLE — ${mentionedBrand.name.toUpperCase()}`,
+    `╚══════════════════════════════════════════════════════╝`,
+    `The runtime has the REAL ${mentionedBrand.name} logo. Wherever the design`,
+    `shows the ${mentionedBrand.name} logo/icon, emit EXACTLY:`,
+    `  <img src="__BRAND_LOGO__" alt="${mentionedBrand.name}" style="width:..;height:..;border-radius:22%;object-fit:cover;">`,
+    `(pick the size/position; the runtime swaps __BRAND_LOGO__ for the real image).`,
+    `NEVER draw a fake/approximate logo with SVG paths or letters — the real`,
+    `asset always wins. Use the token at most ONCE unless the design truly`,
+    `needs repeats.`,
+    ``,
+  ].join('\n') : '';
+
   const userBrief = [
     overlayConstraintSection,
+    brandLogoSection,
     languageSection,
     slotSection,
     '',
@@ -2640,6 +2670,22 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           // pixel so the <img> never renders as a broken-image icon.
           const TRANSPARENT_PX = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
           parsed.htmlBody = parsed.htmlBody.split('__CREATOR_AVATAR__').join(TRANSPARENT_PX);
+        }
+
+        // Inject the REAL brand logo (Clearbit/iTunes, fetched in parallel) —
+        // same deterministic-token pattern as the creator avatar above.
+        if (parsed.htmlBody.includes('__BRAND_LOGO__')) {
+          const logoUri = await brandLogoPromise;
+          if (logoUri) {
+            parsed.htmlBody = parsed.htmlBody.split('__BRAND_LOGO__').join(logoUri);
+            console.log('[motion] injected REAL brand logo for', mentionedBrand?.name);
+          } else {
+            // Fetch failed — letter tile so the <img> never shows broken.
+            const letter = (mentionedBrand?.name ?? 'x').slice(0, 1).toUpperCase();
+            const tile = `data:image/svg+xml;base64,${btoa(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" rx="44" fill="#2563EB"/><text x="100" y="136" font-family="Arial,Helvetica,sans-serif" font-size="110" font-weight="800" fill="#fff" text-anchor="middle">${letter}</text></svg>`)}`;
+            parsed.htmlBody = parsed.htmlBody.split('__BRAND_LOGO__').join(tile);
+            console.warn('[motion] brand logo fetch failed — letter tile fallback for', mentionedBrand?.name);
+          }
         }
 
         // Debug: see if Gemini honoured the light-mode override. We count
