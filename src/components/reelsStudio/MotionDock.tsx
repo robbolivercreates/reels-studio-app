@@ -94,7 +94,11 @@ export const MotionDock: React.FC<Props> = ({
 }) => {
   const horizontal = layout === 'horizontal';
   const areas = AREAS.filter(a => !allowedAreas || allowedAreas.includes(a.id));
-  const showPlacementStep = areas.length > 1;
+  // The ② step is ALWAYS visible. When the block type locks the placement
+  // (b-roll → full only), we show the single locked option + how to unlock —
+  // hiding the step entirely read as "the float option disappeared".
+  const placementLocked = areas.length === 1;
+  const showPlacementStep = true;
   const visible = STYLE_PRESETS.filter(p => !isHidden(p.id));
   // Templates are full-frame DESIGNS (giant titles, centered grids) — they
   // only make sense when the motion IS the whole screen. On float/splits the
@@ -250,6 +254,16 @@ export const MotionDock: React.FC<Props> = ({
     </div>
   );
 
+  // Locked placement (b-roll block): explain WHY only "Tela cheia" shows and
+  // how to unlock the other options.
+  const lockedHint = placementLocked && (
+    <div className="text-[9px] leading-snug mt-1" style={{ color: C.text3 }}>
+      🔒 Bloco <b style={{ color: C.text2 }}>B-roll</b>: o motion É o conteúdo — sempre tela cheia.
+      Pra <b style={{ color: C.text2 }}>Flutuar/Metades</b>, mude o tipo do bloco no topo do card
+      (👤 Avatar na criação · 🎥 Vídeo na edição).
+    </div>
+  );
+
   // Split = SOLID panel: the motion owns its half and the video is squeezed
   // into the other one (preview and export). Said explicitly because the
   // float-only Posição/Contraste controls vanish here and that read as a bug.
@@ -371,6 +385,7 @@ export const MotionDock: React.FC<Props> = ({
             {areaButtons}
             {floatPosition && <div className="mt-0.5" style={{ width: 268 }}>{floatPosition}</div>}
             {splitHint && <div style={{ width: 268 }}>{splitHint}</div>}
+            {lockedHint && <div style={{ width: 200 }}>{lockedHint}</div>}
           </div>
         )}
 
@@ -406,6 +421,7 @@ export const MotionDock: React.FC<Props> = ({
           {areaButtons}
           {floatPosition && <div className="mt-1.5">{floatPosition}</div>}
           {splitHint}
+          {lockedHint}
         </div>
       )}
 
