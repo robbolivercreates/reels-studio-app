@@ -17,6 +17,7 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { logActualCost, calculateActualCost } from './costPredictor';
 import { EDITING_PACING_RULES, MOTION_LAWS_BRIEF, EASING_DICTIONARY, CAPTION_TONES } from './editingPlaybook';
+import { buildHouseStyleCss, buildHouseAtmosphereDiv, HOUSE_STYLE_PROMPT_BRIEF } from '../components/reelsStudio/motionHouseStyle';
 import type { MotionConfig, FontSet } from '../components/reelsStudio/motionLibrary';
 import { buildFontSetHead, FONT_SETS_PROMPT_TABLE } from '../components/reelsStudio/motionFontSets';
 import { buildOverlays, OVERLAYS_PROMPT_HINT } from '../components/reelsStudio/motionOverlays';
@@ -1648,10 +1649,21 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
 
   // If the reel already has a brand identity (from the first motion), reuse it
   // — every motion in the same reel must share the same palette/style.
-  // Otherwise, run brand research now.
+  //
+  // Brand RESEARCH (Gemini + Google Search grounding, 2-3× the cost of a
+  // normal call) is OFF by default: its outputs were superseded by strictly
+  // better local sources — the REAL logo (Clearbit/iTunes via __BRAND_LOGO__)
+  // and the official KNOWN_BRAND_COLORS map. The compact brand below feeds
+  // the same brandSection without any extra API call. Re-enable via Settings
+  // (localStorage BRAND_RESEARCH_ENABLED='true') for obscure brands.
+  const brandResearchEnabled = (() => {
+    try { return localStorage.getItem('BRAND_RESEARCH_ENABLED') === 'true'; } catch { return false; }
+  })();
   const brandPromise: Promise<BrandResearch | null> = input.existingBrand
     ? Promise.resolve(input.existingBrand)
-    : researchBrand(ai, input.blockText, input.reelContext);
+    : brandResearchEnabled
+      ? researchBrand(ai, input.blockText, input.reelContext)
+      : Promise.resolve(null);
 
   // REAL logo for mentioned brands (Canva, Notion, …): fetched from
   // Clearbit/iTunes in PARALLEL with generation. The model never sees the
@@ -1694,8 +1706,24 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
   ].filter(Boolean).join('\n') : '';
 
-  // Wait for brand research
-  const brand = await brandPromise;
+  // Wait for brand research (or build the compact local brand: when research
+  // is off and a KNOWN brand is mentioned, the official KNOWN_BRAND_COLORS +
+  // the real logo via __BRAND_LOGO__ feed the same brandSection — zero API).
+  const researched = await brandPromise;
+  const modeTokens = input.motionColorMode === 'light'
+    ? { bg: '#FAFAF8', text: '#1d1d1f' }
+    : { bg: '#0a0a0c', text: '#f5f5f5' };
+  const brand: BrandResearch | null = researched ?? (mentionedBrand ? {
+    topic: mentionedBrand.name.charAt(0).toUpperCase() + mentionedBrand.name.slice(1),
+    brandPrimaryColor: mentionedBrandColors?.[0] ?? '#60A5FA',
+    brandSecondaryColor: mentionedBrandColors?.[1] ?? mentionedBrandColors?.[0] ?? '#2563EB',
+    brandAccentColor: mentionedBrandColors?.[2] ?? mentionedBrandColors?.[0] ?? '#60A5FA',
+    brandBackgroundColor: modeTokens.bg,
+    brandTextColor: modeTokens.text,
+    logoSvg: '', // real logo arrives via the __BRAND_LOGO__ token substitution
+    brandFacts: [],
+    visualStyle: `Official ${mentionedBrand.name} accent palette over the house canvas`,
+  } : null);
   const isReusedBrand = !!input.existingBrand;
   const brandSection = brand ? [
     `╔══════════════════════════════════════════════════════╗`,
@@ -1791,79 +1819,26 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   // inject a mandatory override that forces a white/light background palette.
   // Light presets (bgType !== 'dark') are intentionally skipped — they are
   // already bright and don't need forcing.
+  // Mode overrides — COMPACT since the house wrapper now owns canvas + vars
+  // (--hs-bg/--hs-text are already mode-correct). The only remaining job is
+  // flipping stale hexes inside preset CSS examples.
   const lightModeSection = (input.motionColorMode === 'light' && preset.bgType === 'dark' && !input.overlayMode) ? [
-    `╔══════════════════════════════════════════════════════╗`,
-    `  ☀️  LIGHT MODE OVERRIDE — MANDATORY (user setting)`,
-    `╚══════════════════════════════════════════════════════╝`,
-    `The user switched the reel to LIGHT MODE. Some preset briefs below contain`,
-    `hardcoded dark hex values inside CSS examples — those are STALE REFERENCES.`,
-    `You MUST translate them to the light palette before emitting HTML.`,
-    ``,
-    `── HARD COLOR REMAPS (apply BEFORE writing any CSS) ──`,
-    ``,
-    `Replace these EXACT tokens whenever they appear in preset CSS examples:`,
-    `  #000  / #000000             → #ffffff`,
-    `  #0a0a0f / #08080f / #08080a → #ffffff`,
-    `  #1a1a1a / #1c1c1c           → #f4f4f5  (a soft off-white card on white bg)`,
-    `  rgba(30, 30, 30, 0.82)      → rgba(255, 255, 255, 0.92)  + 1px border rgba(0,0,0,0.08)`,
-    `  rgba(255,255,255,0.08-0.18) → rgba(0, 0, 0, 0.06)  (glass / frost layers)`,
-    `  white text (#fff / #ffffff) → #1d1d1f  on any element NOT layered over a brand-color block`,
-    `  inset rgba(0,0,0,0.4–0.65)  → remove entirely (no dark vignettes on white)`,
-    `  text-shadow with white glow → remove or replace with subtle #000 at alpha 0.06`,
-    `  "or pure #000 if bg is dark" / "if bg is dark" fallbacks → ALWAYS pick the light branch`,
-    `  "keep it dark" / "deep #0a0a0f" / similar moody bias phrases → IGNORE them`,
-    ``,
-    `── EFFECTIVE PALETTE for this generation ──`,
-    `brandBackgroundColor: #ffffff   (pure white canvas, overrides preset bg)`,
-    `brandTextColor:       #1d1d1f   (near-black, high contrast on white)`,
-    `brandPrimaryColor:    (keep as-is — accent + icons + bars)`,
-    `brandSecondaryColor / brandAccentColor: (keep as-is)`,
-    `Animation timing, easing, motion grammar: KEEP — only the palette shifts.`,
-    ``,
-    `── CONTRAST AUDIT (final check before emitting) ──`,
-    `Walk every <div>, <span>, <p> with text:`,
-    `  • If text color = white AND the immediate background is now white → FLIP to #1d1d1f`,
-    `  • If a card background was #1a1a1a (now #f4f4f5) and text was white → text becomes #1d1d1f`,
-    `  • If text is over a brandPrimaryColor block → keep contrast-aware (white on dark accent stays)`,
-    ``,
-    `The composition must feel bright, airy, clean — Apple.com product page energy.`,
+    `☀️ LIGHT MODE (user setting). The wrapper canvas/vars are ALREADY LIGHT`,
+    `(--hs-bg=#FAFAF8, --hs-text=#1d1d1f). Preset CSS examples below may carry`,
+    `stale DARK hexes — translate them: dark canvases/cards → transparent or`,
+    `rgba(255,255,255,0.92) cards with 1px rgba(0,0,0,0.08) borders; white text`,
+    `→ var(--hs-text); dark vignettes and white text-glows → remove. Keep brand`,
+    `accents as-is. Final audit: never white-on-white text. Bright, airy, Apple.`,
     '',
   ].join('\n') : '';
 
-  // ─── Dark mode override (analogue of lightModeSection, opposite direction) ──
-  // When the reel's motionColorMode is 'dark' AND the chosen preset is light
-  // (editorial-clean, illustrated-explainer, etc.), inject a mandatory override
-  // forcing a dark palette. Without this, light presets ignore the user's
-  // Dark toggle and continue emitting white backgrounds.
   const darkModeSection = (input.motionColorMode === 'dark' && preset.bgType === 'light') ? [
-    `╔══════════════════════════════════════════════════════╗`,
-    `  🌙  DARK MODE OVERRIDE — MANDATORY (user setting)`,
-    `╚══════════════════════════════════════════════════════╝`,
-    `The user switched the reel to DARK MODE. The preset "${preset.label}" is`,
-    `naturally a LIGHT preset — its CSS examples below contain light hex`,
-    `values. Those are STALE REFERENCES. You MUST translate them to the dark`,
-    `palette before emitting HTML.`,
-    ``,
-    `── HARD COLOR REMAPS (apply BEFORE writing any CSS) ──`,
-    ``,
-    `Replace these EXACT tokens whenever they appear in preset CSS examples:`,
-    `  #fff / #ffffff               → #0a0a0c  (deep dark canvas)`,
-    `  #fafafa / #fafbfc / #f5f5f5  → #0a0a0c`,
-    `  #f4f4f5 / #fef3e8            → rgba(255, 255, 255, 0.06)  (subtle card on dark bg)`,
-    `  #1a1a1a / #1d1d1f near-black text → #f5f5f5  (off-white text on dark bg)`,
-    `  rgba(0,0,0,0.04-0.12)        → rgba(255,255,255,0.06)  (hairline / divider)`,
-    `  warm grays (#86868b / #6e6e73) → #a3a3a3 (neutral grey on dark)`,
-    `  light gradients (#fafafa→#fff) → #08080c→#12121a  (subtle dark gradient)`,
-    `  black drop-shadows on text   → remove or use white at alpha 0.04 instead`,
-    ``,
-    `── EFFECTIVE PALETTE for this generation ──`,
-    `brandBackgroundColor: #0a0a0c   (deep dark canvas — never pure #000)`,
-    `brandTextColor:       #f5f5f5   (off-white, never pure #ffffff)`,
-    `brandPrimaryColor:    (keep as-is — accent + icons + bars)`,
-    `brandSecondaryColor / brandAccentColor: (keep as-is)`,
-    `Animation timing, easing, motion grammar: KEEP — only the palette shifts.`,
-    ``,
-    `The composition must feel dark, focused, cinematic — never cheerful/airy.`,
+    `🌙 DARK MODE (user setting). The wrapper canvas/vars are ALREADY DARK`,
+    `(--hs-bg=#0a0a0c, --hs-text=#f5f5f5). Preset "${preset.label}" carries stale`,
+    `LIGHT hexes — translate them: light canvases/cards → transparent or`,
+    `rgba(255,255,255,0.06); near-black text → var(--hs-text); black drop-shadows`,
+    `→ remove. Keep brand accents as-is. Final audit: never dark-on-dark text.`,
+    `Dark, focused, cinematic.`,
     '',
   ].join('\n') : '';
 
@@ -1874,39 +1849,13 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   // This makes the reel feel cohesive instead of every block reinventing its
   // own background. We only inject this when `isReusedBrand` is true so the
   // first motion stays clean (it sets the visual tone for the rest).
-  const brandChromeSection = isReusedBrand && brand ? [
-    `╔══════════════════════════════════════════════════════╗`,
-    `  🎨 PERSISTENT BRAND CHROME — track 9 (top, non-blocking)`,
-    `╚══════════════════════════════════════════════════════╝`,
-    `Every motion in this reel MUST include ONE subtle, always-on chrome layer at data-track-index="9"`,
-    `(rendered ON TOP of all content), running for the full duration. pointer-events:none so it never blocks.`,
-    `This is what makes consecutive blocks feel like the same piece. Track 9 is reserved for chrome —`,
-    `do NOT put any other element there. Track 0 is reserved for ONE bg/atmosphere layer only.`,
-    ``,
-    `Pick ONE of these patterns (do NOT combine; one chrome only):`,
-    ``,
-    `Option A — VIGNETTE FRAME:`,
-    `  <div id="brand-chrome-vignette" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="9"`,
-    `       style="position:absolute; inset:0; pointer-events:none;`,
-    `              box-shadow:inset 0 0 200px rgba(0,0,0,0.55), inset 0 0 0 1px ${brand.brandPrimaryColor}33;"></div>`,
-    ``,
-    `Option B — FAINT HEX MESH (canvas, deterministic):`,
-    `  <canvas id="brand-chrome-mesh" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="9"`,
-    `          width="1080" height="1920" style="position:absolute; inset:0; opacity:0.06;"></canvas>`,
-    `  // draw hex grid at low opacity in brandPrimaryColor — see GSAP TECHNIQUE L for the canvas pattern`,
-    ``,
-    `Option C — TOP+BOTTOM BRAND BARS:`,
-    `  <div id="brand-chrome-bars" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="9"`,
-    `       style="position:absolute; inset:0; pointer-events:none;`,
-    `              background: linear-gradient(180deg, ${brand.brandPrimaryColor}22 0%, transparent 8%, transparent 92%, ${brand.brandPrimaryColor}22 100%);"></div>`,
-    ``,
-    `RULES:`,
-    `• Chrome must be SUBTLE (opacity ≤ 0.12, or alpha-tinted brand color). It is not the focal element.`,
-    `• Chrome must use brand colors only — never decorative palettes.`,
-    `• Chrome can have a slow drift animation (e.g. canvas redraw via tl.eventCallback) but must not steal attention.`,
-    `• Pick the SAME chrome option you would expect a previous motion in this reel to have used — consistency over creativity here.`,
-    ``,
-  ].join('\n') : '';
+  // Brand chrome — RETIRED. Reel-to-reel cohesion is now provided
+  // deterministically by the house atmosphere the wrapper injects (same
+  // canvas, glow and vignette on every motion). Asking the model to also
+  // paint a chrome layer cost ~350 tokens/call and would collide with the
+  // wrapper's track-0/1 atmosphere.
+  const brandChromeSection = '';
+  void isReusedBrand;
 
   // Build assets section — give Gemini the asset:// URLs it can use directly in <img> tags.
   // PRIORITY: if `pinnedAssets` has entries (user explicitly attached one or more),
@@ -2252,69 +2201,11 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ].join('\n');
   })();
 
-  // Atmosphere snippet derived from the active preset's atmospherePalette.
-  // Replaces the previous A/B/C list in the SYSTEM_PROMPT — Gemini gets one
-  // explicit, copy-paste-ready CSS block tied to the preset's mood.
-  const atm = preset.atmosphere;
-  const rgba = (hex: string, alpha: number): string => {
-    const m = hex.replace('#', '');
-    const r = parseInt(m.length === 3 ? m[0] + m[0] : m.slice(0, 2), 16);
-    const g = parseInt(m.length === 3 ? m[1] + m[1] : m.slice(2, 4), 16);
-    const b = parseInt(m.length === 3 ? m[2] + m[2] : m.slice(4, 6), 16);
-    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-  };
-  // When the reel is in LIGHT mode, override the atmosphere's bg + glow alphas
-  // so the snippet itself is light. Otherwise the dark preset's `baseBg` would
-  // get rendered into the HTML literally, overriding the lightModeSection above
-  // it (Gemini follows the most concrete CSS — and the atmosphere snippet IS
-  // copy-paste CSS). vignette is suppressed in light mode (dark vignettes on
-  // white look filthy).
-  const forceLight = input.motionColorMode === 'light' && preset.bgType === 'dark';
-  // Opposite direction: user clicked dark on a light preset. Atmosphere is
-  // rewritten to a dark canvas so the snippet itself emits dark colors.
-  const forceDark = input.motionColorMode === 'dark' && preset.bgType === 'light';
-  const atmBg = forceLight
-    ? '#ffffff'
-    : forceDark
-      ? '#0a0a0c'
-      : atm.baseBg;
-  const atmWarmAlpha = forceLight
-    ? Math.min(atm.warmGlow.alpha, 0.06)
-    : forceDark
-      ? Math.max(atm.warmGlow.alpha, 0.12)
-      : atm.warmGlow.alpha;
-  const atmCoolAlpha = forceLight
-    ? Math.min(atm.coolGlow.alpha, 0.06)
-    : forceDark
-      ? Math.max(atm.coolGlow.alpha, 0.10)
-      : atm.coolGlow.alpha;
-  const atmVignette = forceLight
-    ? 0
-    : forceDark
-      ? Math.max(atm.vignetteIntensity, 0.5)
-      : atm.vignetteIntensity;
-  // Optional Notion-style "infinite canvas" dot grid. Only present on presets
-  // that declare atmosphere.dotGrid (today: animado-notion). Suppressed when a
-  // mode override is forcing a different canvas tone.
-  const dot = (!forceLight && !forceDark) ? atm.dotGrid : undefined;
-  // Build the track-0 background. Glow gradients always; dot-grid tile prepended
-  // (top-most, very faint) with matching background-size when declared.
-  const atmosBgStyle = dot
-    ? [
-        `       style="position:absolute; inset:0; background:${atmBg};`,
-        `              background-image:`,
-        `                radial-gradient(circle at center, ${dot.color} ${dot.dotRadius}px, transparent ${dot.dotRadius}px),`,
-        `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atmWarmAlpha)} 0%, transparent 60%),`,
-        `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atmCoolAlpha)} 0%, transparent 65%);`,
-        `              background-size: ${dot.tile}px ${dot.tile}px, auto, auto;`,
-        `              background-position: 0 0, 0 0, 0 0;"></div>`,
-      ].join('\n')
-    : [
-        `       style="position:absolute; inset:0; background:${atmBg};`,
-        `              background-image:`,
-        `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atmWarmAlpha)} 0%, transparent 60%),`,
-        `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atmCoolAlpha)} 0%, transparent 65%);"></div>`,
-      ].join('\n');
+  // Atmosphere — the WRAPPER owns it now (house style). buildFullHtmlDoc
+  // injects the ready-made track-0 background + track-1 vignette (steel glow
+  // on dark, line-grid + accent wash on light). The model only does
+  // foreground, which cuts ~700 prompt tokens AND the output tokens it used
+  // to spend re-painting canvases. Float keeps its pure-black mandate.
   const atmosphereSection = input.overlayMode ? [
     `╔══════════════════════════════════════════════════════╗`,
     `  🎨 ATMOSPHERE — FLOATING OVERLAY: NONE.`,
@@ -2329,35 +2220,12 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     `  (fully contained inside y:1064–1586) — never reaching the canvas edges.`,
     ``,
   ].filter(Boolean).join('\n') : [
-    `╔══════════════════════════════════════════════════════╗`,
-    `  🎨 ATMOSPHERE — copy this snippet for track 0`,
-    `╚══════════════════════════════════════════════════════╝`,
-    forceLight
-      ? `User is in LIGHT MODE. The atmosphere below has already been re-tinted to a bright palette — use it AS-IS, don't restore the preset's dark colours.`
-      : forceDark
-        ? `User is in DARK MODE. The atmosphere below has already been re-tinted to a dark palette — use it AS-IS, don't restore the preset's light colours.`
-        : `Preset "${preset.label}" declares this atmosphere palette. Use it AS-IS for the track-0 background — do not invent another colour scheme. Then add the vignette pass below as a sibling (track 1, full duration).`,
+    `🎨 ATMOSPHERE: provided by the runtime. The wrapper already injects the`,
+    `track-0 background + track-1 vignette (house style, mode-correct). Do NOT`,
+    `create any background, canvas-wide gradient, grid, vignette or grain — `,
+    `start your elements at data-track-index="2". Foreground only.`,
     ``,
-    `Track 0 — atmosphere base:`,
-    `  <div id="atmos-bg" class="clip" data-start="0" data-duration="${input.durationSec}" data-track-index="0"`,
-    atmosBgStyle,
-    dot ? `(The dot-grid tile is the Notion "infinite canvas" texture — keep it AS-IS, very subtle, never bump its opacity.)` : '',
-    ``,
-    atmVignette > 0
-      ? [
-          `Track 1 — vignette pass (anchors the eye, looks expensive):`,
-          `  <div id="atmos-vignette" class="clip atmos-vignette" data-start="0" data-duration="${input.durationSec}" data-track-index="1"`,
-          `       style="opacity:${atmVignette};"></div>`,
-          ``,
-        ].join('\n')
-      : '',
-    forceLight
-      ? `The base bg color is "${atmBg}" (white). ALL other elements should harmonise with a bright canvas: dark text (#1d1d1f), subtle shadows tinted with the brand accent, NEVER pure black shadows on white. NO dark vignettes.`
-      : forceDark
-        ? `The base bg color is "${atmBg}" (deep dark). ALL other elements should harmonise with a dark canvas: off-white text (#f5f5f5, never pure #fff), accents that pop against dark, vignette welcomed. NO bright white backgrounds.`
-        : `The base bg color "${atmBg}" is the canvas. ALL other elements should harmonise with it: text colours that contrast 7:1+ against it, accents that sit warmly on it, shadows tinted to its hue (warm bg → warm shadows, NEVER black shadows on cream).`,
-    ``,
-  ].filter(Boolean).join('\n');
+  ].join('\n');
 
   const lang = input.outputLanguage ?? 'pt-BR';
   const languageSection = buildMotionLanguageSection(lang);
@@ -2480,6 +2348,8 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
 
   const userBrief = [
     overlayConstraintSection,
+    HOUSE_STYLE_PROMPT_BRIEF,
+    '',
     brandLogoSection,
     languageSection,
     slotSection,
@@ -2574,16 +2444,12 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     // clusters all events early and leaves a dead tail at the end.
     .replace(/\{DURATION_SEC\}/g, input.durationSec.toString());
 
-  // Debug: confirm light-mode override is actually in the prompt + final HTML body.
-  console.log('[motion/audit] motionColorMode=', input.motionColorMode,
+  // Audit: mode + PROMPT SIZE (token-diet proof — compare before/after).
+  console.log('[motion/cost] prompt chars=', systemPromptForRequest.length + userBrief.length,
+    '(system', systemPromptForRequest.length, '+ brief', userBrief.length, ')',
+    '· mode=', input.motionColorMode,
     '· preset=', preset.id,
-    '· presetBgType=', preset.bgType,
-    '· forceLight=', forceLight,
-    '· forceDark=', forceDark,
-    '· lightModeSection chars=', lightModeSection.length,
-    '· atmosphere baseBg=', atmBg,
-    '· appMention=', appMention?.app ?? 'none',
-    '· hyperframesCatalogInjected=true');
+    '· appMention=', appMention?.app ?? 'none');
   let lastError: unknown;
   for (const model of getModelCandidates(input.preferredModel)) {
     try {
@@ -2599,7 +2465,10 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
           // default output cap, which truncates the HTML mid-tag — producing broken
           // SVG (width="500</div>) and a cut-off registration script that fails the
           // HyperFrames lint with [missing_timeline_registry]. Give it ample room.
-          maxOutputTokens: 32768,
+          // Cap, not target — typical motions emit 3-8k output tokens; the
+          // heaviest compositions stay well under 24k now that the wrapper
+          // owns backgrounds (the model no longer paints canvases).
+          maxOutputTokens: 24576,
           // gemini-3-flash / 3.5-flash are THINKING models: reasoning tokens are
           // billed against the SAME output budget. Left unbounded, thinking ate
           // most of the budget and the HTML came out truncated at ~6KB (no
@@ -2797,13 +2666,11 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         width: 1080px; height: ${canvasH}px; overflow: hidden;
-        /* Light mode gets a subtle dot grid texture (1.5px dots @ 24px spacing,
-           6% black alpha) so the white canvas has personality without competing
-           with content. Dark mode stays pure black — atmosphere comes from the
-           preset's own glow/vignette layers. */
-        background: ${isLight
-          ? '#ffffff radial-gradient(circle at center, rgba(0,0,0,0.06) 1.5px, transparent 1.5px) 0 0 / 24px 24px'
-          : '#000'};
+        /* Base canvas: overlay floats need PURE black (screen-blend
+           transparency); everything else gets the house bg — the actual
+           atmosphere (grid+gradient on light, steel glow on dark) is the
+           injected track-0 div below. */
+        background: ${effLayer === 'overlay' ? '#000' : isLight ? '#FAFAF8' : '#0a0a0c'};
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
@@ -2820,6 +2687,7 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
       }
       .clip { will-change: opacity, transform; }
       ${fontCss}
+      ${buildHouseStyleCss(isLight ? 'light' : 'dark')}
       /* Cinematic atmosphere helper — see ATMOSPHERE section in prompt.
          Dark mode: strong black inset shadow anchors the eye to centre.
          Light mode: very subtle warm-grey inset so edges don't blow out. */
@@ -2841,6 +2709,16 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
       data-width="1080"
       data-height="${canvasH}"
     >
+${
+  // House atmosphere (track 0+1) — injected by the wrapper so the model never
+  // paints backgrounds. Skipped when: overlay mode (pure black required for
+  // screen blend) or the HTML already carries its own track-0 background
+  // (legacy generations / atmosphere-bearing presets) — injecting twice would
+  // collide on track 0 and fail the HyperFrames lint.
+  effLayer !== 'overlay' && !/atmos-bg|data-track-index="0"/.test(motion.html)
+    ? buildHouseAtmosphereDiv(isLight ? 'light' : 'dark', dur)
+    : ''
+}
 ${motion.html}
     </div>
     ${overlay.html}

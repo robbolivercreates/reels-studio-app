@@ -153,6 +153,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
   // Motion HTML generation model — read on open, persisted on Salvar.
   const [motionModel, setMotionModel] = useState<MotionModelId>(DEFAULT_MOTION_MODEL);
   const [allowProFallback, setAllowProFallback] = useState(false);
+  const [brandResearchEnabled, setBrandResearchEnabled] = useState(false);
 
   const refreshClonedVoices = () => setClonedVoices(loadClonedVoices());
 
@@ -238,6 +239,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
         : DEFAULT_MOTION_MODEL,
     );
     setAllowProFallback(localStorage.getItem('ALLOW_PRO_FALLBACK') === 'true');
+    setBrandResearchEnabled(localStorage.getItem('BRAND_RESEARCH_ENABLED') === 'true');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, initialTab]);
 
@@ -265,6 +267,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
     // a downgrade from a non-default + Salvar takes effect immediately.
     localStorage.setItem(MOTION_MODEL_STORAGE_KEY, motionModel);
     localStorage.setItem('ALLOW_PRO_FALLBACK', allowProFallback ? 'true' : 'false');
+    localStorage.setItem('BRAND_RESEARCH_ENABLED', brandResearchEnabled ? 'true' : 'false');
     onSave();
   };
 
@@ -645,6 +648,21 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                 <div className="text-[11px] font-semibold text-zinc-200">Permitir Fallback para Gemini Pro</div>
                 <div className="text-[10px] text-zinc-500 mt-0.5 leading-relaxed">
                   Se desativado, o app usará apenas modelos Flash mais baratos, impedindo gastos altos acidentais.
+                </div>
+              </div>
+            </label>
+            <label className="flex items-start gap-2.5 cursor-pointer py-1 mt-1.5">
+              <input
+                type="checkbox"
+                checked={brandResearchEnabled}
+                onChange={e => setBrandResearchEnabled(e.target.checked)}
+                className="mt-0.5 accent-blue-400 shrink-0"
+              />
+              <div className="flex-1">
+                <div className="text-[11px] font-semibold text-zinc-200">Pesquisa de marca via Google (custo extra)</div>
+                <div className="text-[10px] text-zinc-500 mt-0.5 leading-relaxed">
+                  Desligado por padrão: logos reais e cores oficiais das ~35 marcas mapeadas já vêm de graça.
+                  Ligue só pra marcas obscuras — usa Gemini com Google Search (2–3× o custo) no 1º motion de cada reel.
                 </div>
               </div>
             </label>
