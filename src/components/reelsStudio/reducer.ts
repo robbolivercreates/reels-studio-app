@@ -575,6 +575,20 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       return { ...state, blocks };
     }
 
+    case 'set-block-motion-setup': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          if (action.setup === null) {
+            const { motionSetup: _, ...rest } = b;
+            return rest;
+          }
+          return { ...b, motionSetup: action.setup };
+        }),
+      };
+    }
+
     case 'set-block-transition': {
       return {
         ...state,

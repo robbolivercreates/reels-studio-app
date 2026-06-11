@@ -157,6 +157,15 @@ export interface ScriptBlock {
    * Last block's value is ignored (no next block).
    */
   transition?: BlockTransition;
+  /**
+   * Pre-generation motion setup ("marcar pra gerar"): the user configures
+   * placement/visual per block via the Dock, marks it, and later generates
+   * everything marked in ONE batch. Cleared when the motion is generated.
+   */
+  motionSetup?: {
+    placement: import('./motionLibrary').MotionPlacement;
+    visual: 'auto' | StylePresetId;
+  };
 }
 
 export type AudioStatus = 'idle' | 'generating' | 'ready' | 'error';
@@ -448,6 +457,8 @@ export type ReelsAction =
   | { type: 'move-block'; id: string; direction: 'up' | 'down' }
   | { type: 'reorder-blocks'; orderedIds: string[] }
   | { type: 'set-block-transition'; id: string; transition: BlockTransition }
+  /** Marca/desmarca o bloco pra geração em lote (setup pré-geração). null = desmarcar. */
+  | { type: 'set-block-motion-setup'; id: string; setup: NonNullable<ScriptBlock['motionSetup']> | null }
   | { type: 'set-brand-identity'; brand: Record<string, unknown> | undefined }
   | { type: 'replace-blocks'; blocks: ScriptBlock[]; analysis?: PersistedAnalysis }
   | { type: 'resplit-blocks'; blocks: ScriptBlock[]; words: WordTimestamp[]; removedIds: string[]; oldIdToHeadId: Record<string, string> }

@@ -568,12 +568,15 @@ export const ReelsStudio: React.FC = () => {
     const colorMode = state.motionColorMode ?? 'dark';
 
     // Per-fala role: a block marked 🖥️ B-roll forces full-frame — the motion
-    // IS the content during that segment. 🎥 Vídeo blocks use the Dock's
-    // chosen placement (float/split/full over the footage).
+    // IS the content during that segment. 🎥 Vídeo blocks use the block's own
+    // saved setup ("marcar pra gerar") when present, else the Dock's current
+    // placement.
     const placementForBlock = (block: ScriptBlock): MotionPlacement =>
       block.kind === 'broll'
         ? { area: 'full', startOffsetSec: 0, durationSec: block.end - block.start }
-        : placement;
+        : (block.motionSetup?.placement ?? placement);
+    const visualForBlock = (block: ScriptBlock): 'auto' | StylePresetId =>
+      block.motionSetup?.visual ?? visual;
 
     // ── Scene director (same workflow as creation): ONE planning call over
     // the video's transcription — visual per speech segment. In edit mode
@@ -636,10 +639,11 @@ export const ReelsStudio: React.FC = () => {
             .filter(w => w.end > w.start)
         : undefined;
       try {
-        // Resolve the visual per block: director plan → per-block router.
-        let presetId: StylePresetId = visual === 'auto' ? 'bold-pop' : visual;
+        // Resolve the visual per block: setup salvo → director plan → router.
+        const blockVisual = visualForBlock(block);
+        let presetId: StylePresetId = blockVisual === 'auto' ? 'bold-pop' : blockVisual;
         let templateVars: Record<string, string> | undefined;
-        if (visual === 'auto' && plan) {
+        if (blockVisual === 'auto' && plan) {
           if (plan.templateId) {
             presetId = plan.templateId as StylePresetId;
             templateVars = plan.variables;
@@ -648,7 +652,7 @@ export const ReelsStudio: React.FC = () => {
             presetId = plan.styleHint as StylePresetId;
             console.log('[overlay/director] estilo:', plan.styleHint, '·', plan.rationale);
           }
-        } else if (visual === 'auto') {
+        } else if (blockVisual === 'auto') {
           setOverlayBusy(prev => ({ ...prev, [elId]: 'Escolhendo template…' }));
           try {
             const route = await routeTemplateForBlock({
@@ -711,6 +715,8 @@ export const ReelsStudio: React.FC = () => {
         motion.status = 'ready';
         motion.renderedAt = Date.now();
         dispatch({ type: 'set-overlay-motion', id: elId, motion });
+        // Setup consumido — limpa a marca 🏷 do bloco.
+        if (block.motionSetup) dispatch({ type: 'set-block-motion-setup', id: block.id, setup: null });
         setOverlayBusy(prev => { const n = { ...prev }; delete n[elId]; return n; });
       } catch (err) {
         console.error('[overlay-gen] failed for block', block.id, err);
@@ -881,6 +887,44 @@ export const ReelsStudio: React.FC = () => {
           } : undefined}
           onOpenAdvanced={isEdit ? undefined : () => setMotionPickerBlockId(b.id)}
         />
+
+        {/* Edit mode: "marcar pra gerar" — configura cada fala (placement/visual
+            do Dock) sem gastar nada, depois UM clique gera todas as marcadas. */}
+        {isEdit && (() => {
+          const isMarked = !!b.motionSetup;
+          const markedBlocks = blocks.filter(x => x.motionSetup);
+          return (
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap">
+              <button
+                onClick={() => dispatch({
+                  type: 'set-block-motion-setup',
+                  id: b.id,
+                  setup: isMarked ? null : { placement: dockValue.placement, visual: dockValue.visual },
+                })}
+                className="px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors"
+                style={isMarked
+                  ? { backgroundColor: 'rgba(251,191,36,0.15)', color: '#fcd34d', border: '1px solid rgba(251,191,36,0.45)' }
+                  : { backgroundColor: 'transparent', color: 'rgba(161,161,170,1)', border: '1px solid rgba(255,255,255,0.12)' }}
+                title={isMarked
+                  ? 'Marcada com a config salva. Clique pra desmarcar (pra atualizar a config, desmarque e marque de novo).'
+                  : 'Salva a config atual do Dock nesta fala pra gerar depois em lote'}
+              >
+                {isMarked ? '🏷 Marcada ✓' : '🏷 Marcar pra gerar'}
+              </button>
+              {markedBlocks.length > 0 && (
+                <button
+                  onClick={() => { if (!overlayGenerating) void handleGenerateOverlays(markedBlocks, 'auto', editDockValue.placement); }}
+                  disabled={overlayGenerating}
+                  className="px-2.5 py-1 rounded-lg text-[10px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+                  style={{ background: 'linear-gradient(180deg, #fbbf24, #d97706)' }}
+                  title="Gera só as falas marcadas, cada uma com a config salva nela"
+                >
+                  ⚡ Gerar marcadas ({markedBlocks.length})
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Edit mode: generated overlays list lives right below the dock */}
         {isEdit && (state.overlayElements ?? []).length > 0 && (
@@ -5118,6 +5162,20 @@ export const ReelsStudio: React.FC = () => {
             >
               {overlayGenerating ? '⏳ Gerando overlays…' : `⚡ Gerar overlays — diretor de cenas (${editTargets.length})`}
             </button>
+            {(() => {
+              const marked = blocks.filter(x => x.motionSetup);
+              if (marked.length === 0 || overlayGenerating) return null;
+              return (
+                <button
+                  onClick={() => void handleGenerateOverlays(marked, 'auto', editDockValue.placement)}
+                  className="shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-bold text-white transition-opacity hover:opacity-90"
+                  style={{ background: 'linear-gradient(180deg, #fbbf24, #d97706)' }}
+                  title="Gera só as falas marcadas (🏷), cada uma com a config salva nela"
+                >
+                  🏷 Gerar marcadas ({marked.length})
+                </button>
+              );
+            })()}
             {overlayGenerating && (
               <button
                 onClick={() => { overlayCancelRef.current = true; }}
@@ -5595,7 +5653,7 @@ export const ReelsStudio: React.FC = () => {
                   >
                     <div className="px-2 py-1 min-w-0">
                       <div className="text-[9px] truncate" style={{ color: selected ? '#dbeafe' : isBrollRole ? '#a7f3d0' : 'rgba(244,244,245,0.75)' }}>
-                        {isBrollRole ? '🖥️ ' : ''}{b.text.slice(0, 48) || '(fala)'}
+                        {b.motionSetup ? '🏷 ' : ''}{isBrollRole ? '🖥️ ' : ''}{b.text.slice(0, 48) || '(fala)'}
                       </div>
                       <div className="text-[8px] font-mono" style={{ color: 'rgba(161,161,170,0.7)' }}>{blockLen.toFixed(1)}s</div>
                     </div>
@@ -5785,8 +5843,12 @@ export const ReelsStudio: React.FC = () => {
             {/* Transition junction markers — between each pair of consecutive blocks (any kind) */}
             {!draggingBlockId && blocks.slice(0, -1).map((b, i) => {
               const slot = slotById.get(b.id);
-              if (!slot) return null;
-              const leftPct = viewPct(slot.projectEnd);
+              const nextSlot = slotById.get(blocks[i + 1].id);
+              if (!slot || !nextSlot) return null;
+              // Center the marker in the GAP between the two chips (edit-mode
+              // falas have real silence between them). At projectEnd it sat on
+              // top of the chip's ✕ delete button and looked missing/offset.
+              const leftPct = viewPct((slot.projectEnd + nextSlot.projectStart) / 2);
               // Default to 'cut' to match the compositor's new default for
               // middle blocks (see mp4Renderer.ts). The previous 'fade' default
               // here was a stale label — the renderer was actually doing
