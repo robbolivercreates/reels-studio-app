@@ -544,6 +544,10 @@ export const ReelsStudio: React.FC = () => {
   });
   const [overlayGenerating, setOverlayGenerating] = useState(false);
   const [overlayBusy, setOverlayBusy] = useState<Record<string, string>>({});
+  // Batch cancellation flags — checked between iterations: the in-flight
+  // generation finishes, the loop just doesn't start the next block.
+  const overlayCancelRef = useRef(false);
+  const batchMotionCancelRef = useRef(false);
 
   /**
    * Generate motion overlays for the given transcript blocks using the Motion
@@ -558,6 +562,7 @@ export const ReelsStudio: React.FC = () => {
   ) => {
     if (targets.length === 0) return;
     setOverlayGenerating(true);
+    overlayCancelRef.current = false;
     const colorMode = state.motionColorMode ?? 'dark';
 
     // Per-fala role: a block marked 🖥️ B-roll forces full-frame — the motion
@@ -601,6 +606,10 @@ export const ReelsStudio: React.FC = () => {
     }
 
     for (const block of targets) {
+      if (overlayCancelRef.current) {
+        console.log('[overlay-gen] cancelado pelo usuário — parando antes do próximo bloco');
+        break;
+      }
       const elId = `ovmot_${block.id}`;
       const blockDur = block.end - block.start;
       const plan = ovPlan.get(block.id);
@@ -1978,6 +1987,7 @@ export const ReelsStudio: React.FC = () => {
       let failed = 0;
       const failedIds: string[] = [];
       const total = ids.length;
+      batchMotionCancelRef.current = false;
       console.log('[batch-motion] starting', total, 'blocks:', ids);
 
       // ── Scene director (motion-pack guide workflow): ONE planning call for
@@ -2027,6 +2037,10 @@ export const ReelsStudio: React.FC = () => {
 
       try {
         for (let i = 0; i < ids.length; i++) {
+          if (batchMotionCancelRef.current) {
+            console.log('[batch-motion] cancelado pelo usuário — parando antes do próximo bloco');
+            break;
+          }
           const id = ids[i];
           setBatchMotionProgress({ current: i + 1, total, blockId: id });
           console.log('[batch-motion] iteration', i + 1, '/', total, '· blockId=', id);
@@ -4884,6 +4898,7 @@ export const ReelsStudio: React.FC = () => {
             onAudio={() => setConfirmOpen(true)}
             onAvatars={() => setAvatarsModalOpen(true)}
             onMotions={() => { const ids = motionCandidates.map(b => b.id); if (ids.length) void handleAutoMotionMany(ids); }}
+            onCancelBatch={() => { batchMotionCancelRef.current = true; }}
             onExport={exportEnabled ? () => setExportOpen(true) : undefined}
             avatarChips={avatarBlocks.map(b => {
               const s = state.avatarClips[b.id]?.status;
@@ -4930,6 +4945,16 @@ export const ReelsStudio: React.FC = () => {
             >
               {overlayGenerating ? '⏳ Gerando overlays…' : `⚡ Gerar overlays — diretor de cenas (${editTargets.length})`}
             </button>
+            {overlayGenerating && (
+              <button
+                onClick={() => { overlayCancelRef.current = true; }}
+                className="shrink-0 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors"
+                style={{ backgroundColor: 'rgba(239,68,68,0.15)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.4)' }}
+                title="Para depois da fala atual terminar (a geração em andamento não é interrompida no meio)"
+              >
+                ✕ Cancelar
+              </button>
+            )}
           </div>
         );
       })()}

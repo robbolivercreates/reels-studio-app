@@ -27,6 +27,8 @@ interface MontarBarProps {
   motionDone: number;       // blocks that already have a rendered motion
   motionTotal: number;      // blocks that should have a motion
   batch: { current: number; total: number } | null;
+  /** Cancel the running motion batch — stops after the current block. */
+  onCancelBatch?: () => void;
   onAudio: () => void;
   onAvatars: () => void;
   onMotions: () => void;
@@ -43,7 +45,7 @@ type PhaseState = 'locked' | 'pending' | 'running' | 'done' | 'error';
 
 export function MontarBar({
   tokens, audioStatus, avatarTotal, avatarReady, generatingClips,
-  motionCandidates, motionDone, motionTotal, batch,
+  motionCandidates, motionDone, motionTotal, batch, onCancelBatch,
   onAudio, onAvatars, onMotions, onExport, avatarChips,
 }: MontarBarProps) {
   const audioReady = audioStatus === 'ready';
@@ -163,6 +165,20 @@ export function MontarBar({
                       style={{ backgroundColor: VIOLET, color: '#fff' }}
                     >
                       {p.key === 'motion' ? `⚡ Gerar todos (${motionCandidates})` : p.key === 'avatar' ? `Gerar (${avatarTotal - avatarReady})` : 'Gerar'}
+                    </span>
+                  )}
+                  {/* Cancel pill — visible while the motion batch runs. Stops
+                      after the block currently generating (in-flight call
+                      finishes; the loop doesn't start the next one). */}
+                  {p.key === 'motion' && p.state === 'running' && batch && onCancelBatch && (
+                    <span
+                      role="button"
+                      onClick={(e) => { e.stopPropagation(); onCancelBatch(); }}
+                      className="shrink-0 text-[9.5px] font-bold px-2 py-0.5 rounded-md cursor-pointer"
+                      style={{ backgroundColor: 'rgba(239,68,68,0.18)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.4)' }}
+                      title="Para depois do bloco atual terminar"
+                    >
+                      ✕ Cancelar
                     </span>
                   )}
                 </div>
