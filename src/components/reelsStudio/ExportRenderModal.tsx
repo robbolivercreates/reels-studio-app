@@ -36,6 +36,7 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
   const [resultBlob, setResultBlob] = useState<Blob | null>(null);
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [muxedOutputPath, setMuxedOutputPath] = useState<string | null>(null);
+  const [freezeWarning, setFreezeWarning] = useState<string | null>(null);
   // Path where the user's MP4 ended up after a successful "Baixar MP4" click.
   // Surfaced as a chip ("Salvo em Downloads") so the user knows it worked
   // even though we skip the native save dialog.
@@ -448,6 +449,17 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
       // Store the output path so downloadResult can use it.
       setMuxedOutputPath(outputTmpPath);
       setResultBlob(blob);
+      // Freeze accounting from the renderer — anything > 0 means some frames
+      // drew a stale frame because a source clip was too slow/corrupt. Warn
+      // instead of staying silent (the old behavior behind "vídeo congela").
+      const h = handleRef.current?.health;
+      if (h && h.frozenFrames > 0) {
+        const secs = (h.frozenFrames / 30).toFixed(1);
+        setFreezeWarning(`⚠ ~${secs}s podem ter ficado congelados (${h.brokenSources.size} clipe${h.brokenSources.size === 1 ? '' : 's'} lento/corrompido). Confira o vídeo; se notar travadas, regenere o avatar/motion do trecho e exporte de novo.`);
+        console.warn('[export/health] frozenFrames=', h.frozenFrames, '· sources=', Array.from(h.brokenSources));
+      } else {
+        setFreezeWarning(null);
+      }
       setPhase('done');
       void notifyDone('Reel pronto ✅', 'Seu vídeo terminou de renderizar.');
     } catch (err) {
@@ -704,6 +716,11 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
             </div>
             <div className="text-base font-semibold text-zinc-100 mb-1">Reel pronto</div>
             <div className="text-xs text-zinc-500">{formatBytes(resultBlob.size)} · {formatTime(state.audio.duration)} · {state.aspect}</div>
+            {freezeWarning && (
+              <div className="mt-3 text-left text-[11px] leading-relaxed text-amber-200 bg-amber-500/10 border border-amber-500/30 rounded-lg px-3 py-2">
+                {freezeWarning}
+              </div>
+            )}
           </div>
 
           {resultUrl && (

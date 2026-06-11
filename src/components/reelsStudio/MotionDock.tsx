@@ -178,27 +178,34 @@ export const MotionDock: React.FC<Props> = ({
     </div>
   );
 
-  const colorToggle = isFloat ? (
-    <span
-      className="text-[9px] px-1.5 py-0.5 rounded shrink-0"
-      style={{ color: C.text3, border: `1px solid ${C.border}` }}
-      title="Flutuar usa fundo transparente (screen-blend) — sempre sobre o vídeo, sem modo claro."
-    >🌙 transparente</span>
-  ) : (
-    <div className="flex rounded-lg p-0.5 shrink-0" style={{ backgroundColor: 'rgba(0,0,0,0.35)' }}>
-      {(['dark', 'light'] as const).map(m => (
-        <button
-          key={m}
-          onClick={() => onSetMotionColorMode(m)}
-          className="px-1.5 py-0.5 rounded-md text-[10px]"
-          style={{
-            backgroundColor: motionColorMode === m ? C.surface : 'transparent',
-            color: motionColorMode === m ? C.text : C.text3,
-            border: 'none', cursor: 'pointer',
-          }}
-          title={m === 'dark' ? 'Fundo escuro' : 'Fundo claro'}
-        >{m === 'dark' ? '🌙' : '☀️'}</button>
-      ))}
+  // Real toggle in ALL placements now — float included: dark float = screen
+  // blend (conteúdo claro), LIGHT float = multiply blend (conteúdo escuro
+  // sobre scrim branco com grade). Trocar o modo de um float existente exige
+  // regenerar (a arte é autorada pro fundo).
+  const colorToggle = (
+    <div className="flex items-center gap-1 shrink-0">
+      <div className="flex rounded-lg p-0.5" style={{ backgroundColor: 'rgba(0,0,0,0.35)' }}>
+        {(['dark', 'light'] as const).map(m => (
+          <button
+            key={m}
+            onClick={() => onSetMotionColorMode(m)}
+            className="px-1.5 py-0.5 rounded-md text-[10px]"
+            style={{
+              backgroundColor: motionColorMode === m ? C.surface : 'transparent',
+              color: motionColorMode === m ? C.text : C.text3,
+              border: 'none', cursor: 'pointer',
+            }}
+            title={isFloat
+              ? (m === 'dark' ? 'Float escuro: conteúdo claro flutuando (screen-blend)' : 'Float claro: conteúdo escuro + faixa branca com grade (multiply)')
+              : (m === 'dark' ? 'Fundo escuro' : 'Fundo claro')}
+          >{m === 'dark' ? '🌙' : '☀️'}</button>
+        ))}
+      </div>
+      {isFloat && (
+        <span className="text-[9px] shrink-0" style={{ color: C.text3 }} title="O fundo do float é sempre transparente sobre o vídeo; o modo muda a arte (clara/escura). Regenerar aplica.">
+          transparente
+        </span>
+      )}
     </div>
   );
 

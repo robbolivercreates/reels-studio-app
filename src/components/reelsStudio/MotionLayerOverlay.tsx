@@ -159,22 +159,21 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer: la
       }
     : layer === 'overlay'
     ? (() => {
-        // Float = FULL-FRAME screen blend — identical to composeMotionLayer
-        // in mp4Renderer (FULL_FRAME box + screen + contrast filter + the
-        // floatShiftY translate), so preview === export. The motion authors
-        // its content in the face-safe lower zone; black stays transparent,
-        // and the shift moves the card top/middle/bottom instantly. When
-        // shifted, the top/bottom edges are feathered (same as the export's
-        // featherY pass) so atmosphere gradients can't cut a visible seam.
+        // Float = FULL-FRAME blend — identical to composeMotionLayer in
+        // mp4Renderer, so preview === export. Two duals by authored mode:
+        // dark art → SCREEN (black transparent); light art → MULTIPLY
+        // (white transparent, dark content shows). floatShiftY translates
+        // instantly; shifted edges get the same feather as the export.
+        const isLightFloat = motion.authoredMode === 'light';
         const shift = placement?.floatShiftY ?? 0;
         const feather = Math.abs(shift) > 0.005
-          ? 'linear-gradient(180deg, transparent 0%, #000 7%, #000 93%, transparent 100%)'
+          ? `linear-gradient(180deg, transparent 0%, ${isLightFloat ? '#fff' : '#000'} 7%, ${isLightFloat ? '#fff' : '#000'} 93%, transparent 100%)`
           : undefined;
         return {
           position: 'absolute', left: 0, right: 0,
           top: `${shift * 100}%`, height: '100%',
-          opacity: 1, mixBlendMode: 'screen', zIndex: 30,
-          filter: 'contrast(1.35) brightness(1.05)',
+          opacity: 1, mixBlendMode: isLightFloat ? 'multiply' : 'screen', zIndex: 30,
+          filter: isLightFloat ? 'contrast(1.18) brightness(0.99)' : 'contrast(1.35) brightness(1.05)',
           ...(feather ? { WebkitMaskImage: feather, maskImage: feather } : {}),
         } as React.CSSProperties;
       })()
@@ -218,9 +217,16 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer: la
     if (layer !== 'overlay') return null;
     const a = Math.min(0.85, placement?.scrimAlpha ?? DEFAULT_SCRIM_ALPHA);
     if (a <= 0.005) return null;
+    const isLightFloat = motion.authoredMode === 'light';
+    const rgb = isLightFloat ? '255,255,255' : '0,0,0';
     const cy = (FLOAT_CARD_CENTER + (placement?.floatShiftY ?? 0)) * 100; // % of frame
     const spread = (placement?.scrimSpread ?? DEFAULT_SCRIM_SPREAD) * 100; // % — alpha 0 at cy±spread
     const core = spread * 0.36; // % — full alpha at cy±core (scales with band)
+    const stops = `rgba(${rgb},0) 0%, rgba(${rgb},${a}) ${((spread - core) / (2 * spread) * 100).toFixed(1)}%, rgba(${rgb},${a}) ${((spread + core) / (2 * spread) * 100).toFixed(1)}%, rgba(${rgb},0) 100%`;
+    // Core position within the band wrapper (band spans cy±spread → the
+    // full-alpha core is the middle (spread-core)/(2·spread) .. mirrored).
+    const coreTopPct = ((spread - core) / (2 * spread)) * 100;
+    const coreHeightPct = (core / spread) * 100;
     return (
       <div
         className="pointer-events-none"
@@ -228,9 +234,21 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer: la
           position: 'absolute', left: 0, right: 0,
           top: `${cy - spread}%`, height: `${spread * 2}%`,
           zIndex: 25,
-          background: `linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,${a}) ${((spread - core) / (2 * spread) * 100).toFixed(1)}%, rgba(0,0,0,${a}) ${((spread + core) / (2 * spread) * 100).toFixed(1)}%, rgba(0,0,0,0) 100%)`,
+          background: `linear-gradient(180deg, ${stops})`,
         }}
-      />
+      >
+        {isLightFloat && (
+          // House grid lines, clipped to the full-alpha core (mirrors the
+          // export's clipped grid pass). 44px tile @1920 ≈ 2.29% of frame.
+          <div
+            style={{
+              position: 'absolute', left: 0, right: 0,
+              top: `${coreTopPct}%`, height: `${coreHeightPct}%`,
+              backgroundImage: `repeating-linear-gradient(to right, rgba(0,0,0,${(a * 0.12).toFixed(3)}) 0 1px, transparent 1px 2.29cqh), repeating-linear-gradient(to bottom, rgba(0,0,0,${(a * 0.12).toFixed(3)}) 0 1px, transparent 1px 2.29cqh)`,
+            }}
+          />
+        )}
+      </div>
     );
   })();
 

@@ -697,6 +697,8 @@ export const ReelsStudio: React.FC = () => {
           status: 'rendering',
           createdAt: Date.now(),
           canvasAspect: '9:16',
+          // Float compositor blend: dark→screen, light→multiply.
+          authoredMode: colorMode,
           modelUsed: result.modelUsed,
         };
         const fullHtml = buildFullHtmlDoc(motion, '9:16', colorMode);
@@ -1372,6 +1374,10 @@ export const ReelsStudio: React.FC = () => {
 
   const [previewZoom, setPreviewZoom] = useState(1);
   const [previewZoomHudVisible, setPreviewZoomHudVisible] = useState(false);
+  // 👁 layer isolation: temporarily hide the AI motion layers in the preview
+  // to see what's underneath (avatar/footage). Local-only, never affects
+  // export — answers "o que é motion e o que é o avatar/vídeo?".
+  const [motionLayerHidden, setMotionLayerHidden] = useState(false);
   const previewZoomHudTimer = useRef<number | null>(null);
   const flashPreviewZoomHud = useCallback(() => {
     setPreviewZoomHudVisible(true);
@@ -1803,6 +1809,7 @@ export const ReelsStudio: React.FC = () => {
         /repeat\s*:\s*-1/g,
         () => `repeat: Math.floor(${seed.durationSec} / 0.8) - 1`
       );
+      const resolvedColorMode = state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark');
       const generated: MotionConfig = {
         ...seed,
         // Sync the legacy layer with the RESOLVED placement — the doc wrapper
@@ -1817,6 +1824,8 @@ export const ReelsStudio: React.FC = () => {
         status: 'rendering',
         generatedAt: Date.now(),
         canvasAspect,
+        // Drives the float compositor blend: dark→screen, light→multiply.
+        authoredMode: resolvedColorMode,
         modelUsed: result.modelUsed,
         // Cost tracking — feeds the "Gasto API Gemini (Real)" panel.
         actualCostUSD: result.actualCostUSD,
@@ -1838,8 +1847,9 @@ export const ReelsStudio: React.FC = () => {
       // lint failures trigger a retry — all other errors propagate immediately.
       for (let attempt = 0; attempt <= 1; attempt++) {
         try {
-          const fullHtml = buildFullHtmlDoc(activeGenerated, canvasAspect,
-            effectiveLayer === 'overlay' ? 'dark' : (state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')));
+          // Overlay floats follow the reel's color mode too now: dark art →
+          // screen blend, LIGHT art → multiply blend ("float claro").
+          const fullHtml = buildFullHtmlDoc(activeGenerated, canvasAspect, resolvedColorMode);
           await invoke('save_motion_html', { motionId: activeGenerated.id, html: fullHtml });
           renderResult = await invoke<{ mp4_path: string; size_bytes: number }>(
             'render_motion', { motionId: activeGenerated.id },
@@ -2788,18 +2798,82 @@ export const ReelsStudio: React.FC = () => {
   // its final frame for ~100-200ms during the React swap to the next block,
   // creating a visible "freeze" between blocks. With the fade, the outgoing
   // block dims to 0 and the incoming block fades from 0, hiding the swap.
-  const blockFadeOpacity = (() => {
-    if (!currentBlock) return 1;
+  // TRANSITION-AWARE boundary effects. The old version applied a fixed 200ms
+  // cross-fade to every boundary regardless of block.transition — the user
+  // picked whip-pan/glitch/flash and saw nothing ("não consigo fazer o
+  // preview da transição"), and even 'cut' (the recommended default) got a
+  // fade. Now the preview approximates each transition with CSS on the
+  // preview container (transform/filter) + black/white overlays. The export
+  // (applyTransition in mp4Renderer) remains the source of truth; same
+  // resolution rule: the transition AT a boundary is the OUTGOING block's.
+  const previewFx = (() => {
+    const none = { opacity: 1, transform: '', filter: '', blackAlpha: 0, whiteAlpha: 0, active: false };
+    if (!currentBlock) return none;
     const slot = slotById.get(currentBlock.id);
-    if (!slot) return 1;
-    const dur = slot.projectEnd - slot.projectStart;
+    if (!slot) return none;
     const localT = playhead - slot.projectStart;
-    const FADE = 0.2;
-    if (localT < FADE) return Math.max(0, Math.min(1, localT / FADE));
-    const slack = dur - localT;
-    if (slack < FADE) return Math.max(0, Math.min(1, slack / FADE));
-    return 1;
+    const slack = (slot.projectEnd - slot.projectStart) - localT;
+    const idx = blocks.findIndex(b => b.id === currentBlock.id);
+    const prevB = idx > 0 ? blocks[idx - 1] : null;
+    const nextB = idx >= 0 && idx < blocks.length - 1 ? blocks[idx + 1] : null;
+    const inTr: BlockTransition = prevB ? (prevB.transition ?? 'cut') : 'fade';
+    const outTr: BlockTransition = currentBlock.transition ?? (nextB ? 'cut' : 'fade');
+    // 'cut' keeps a hair of fade (70ms) purely to mask the <video> element
+    // src swap; everything else gets the full 200ms window.
+    const winFor = (tr: BlockTransition) => (tr === 'cut' ? 0.07 : 0.2);
+    const fxFor = (tr: BlockTransition, t: number, dir: 'in' | 'out') => {
+      const entering = dir === 'in';
+      const cross = entering ? t : 1 - t; // crossfade-style opacity
+      switch (tr) {
+        case 'cut':
+          return { ...none, opacity: cross, active: true };
+        case 'fade':
+          return { ...none, blackAlpha: entering ? 1 - t : t, active: true };
+        case 'dissolve':
+          return { ...none, opacity: cross, active: true };
+        case 'whip-pan': {
+          const amt = entering ? (1 - t) : t;
+          return {
+            ...none,
+            transform: `translateX(${(entering ? 1 : -1) * amt * 36}px)`,
+            filter: amt > 0.05 ? `blur(${(amt * 8).toFixed(1)}px)` : '',
+            active: true,
+          };
+        }
+        case 'zoom-blur': {
+          const amt = entering ? (1 - t) : t;
+          return {
+            ...none,
+            opacity: Math.max(cross, 0.25),
+            transform: `scale(${(1 + amt * 0.12).toFixed(3)})`,
+            filter: amt > 0.05 ? `blur(${(amt * 10).toFixed(1)}px)` : '',
+            active: true,
+          };
+        }
+        case 'glitch': {
+          const seed = Math.floor(t * 6);
+          const j = ((seed * 11) % 3 - 1) * 5;
+          return {
+            ...none,
+            opacity: Math.max(cross, 0.3),
+            transform: `translateX(${j}px)`,
+            filter: `contrast(1.25) saturate(1.5) hue-rotate(${seed % 2 ? 12 : -12}deg)`,
+            active: true,
+          };
+        }
+        case 'light-flash':
+          return { ...none, whiteAlpha: entering ? 1 - t : t, active: true };
+        default:
+          return { ...none, opacity: cross, active: true };
+      }
+    };
+    const inWin = winFor(inTr);
+    if (localT < inWin) return fxFor(inTr, Math.max(0, Math.min(1, localT / inWin)), 'in');
+    const outWin = winFor(outTr);
+    if (slack < outWin) return fxFor(outTr, Math.max(0, Math.min(1, 1 - slack / outWin)), 'out');
+    return none;
   })();
+  const blockFadeOpacity = previewFx.opacity;
   // Avatar is visible only while we're inside the block AND within the configured visibility window.
   const avatarVisibilityCutoff = currentBlock && currentBlock.kind === 'avatar' && currentBlock.avatarVisibleSec !== undefined
     ? (slotById.get(currentBlock.id)?.projectStart ?? 0) + currentBlock.avatarVisibleSec
@@ -3765,9 +3839,13 @@ export const ReelsStudio: React.FC = () => {
             style={{
               boxShadow: isLight ? '0 12px 40px rgba(0,0,0,0.18)' : '0 30px 80px rgba(0,0,0,0.8)',
               border: `1px solid ${tokens.border.subtle}`,
-              transform: `scale(${previewZoom})`,
+              // Transition fx compose with the zoom (whip translate / zoom-blur
+              // scale). The 120ms CSS transition is disabled while a boundary
+              // effect drives the transform per-frame — easing would lag it.
+              transform: `scale(${previewZoom})${previewFx.transform ? ` ${previewFx.transform}` : ''}`,
               transformOrigin: 'center center',
-              transition: 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
+              transition: previewFx.active ? 'none' : 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
+              filter: previewFx.filter || undefined,
               // Container for cqh units so edit-video overlay text scales to the
               // preview box height (matches the renderer's height*0.05 sizing).
               containerType: 'size',
@@ -3843,6 +3921,7 @@ export const ReelsStudio: React.FC = () => {
             {state.projectMode === 'edit' && (state.overlayElements ?? [])
               .filter(el => playhead >= el.startSec && playhead < el.startSec + el.durationSec)
               .map(el => {
+                if (el.kind === 'motion' && motionLayerHidden) return null;
                 if (el.kind === 'motion' && el.motion?.status === 'ready') {
                   // AI-generated motion clip — unified placement drives the
                   // preview exactly like the export compositor (float/split/full).
@@ -3996,7 +4075,8 @@ export const ReelsStudio: React.FC = () => {
                   <div className="w-40 h-40 rounded-full bg-gradient-to-b from-zinc-600 to-zinc-700 mx-auto mb-5 flex items-center justify-center opacity-60">
                     <svg className="w-20 h-20 text-zinc-900/40" fill="currentColor" viewBox="0 0 24 24"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
                   </div>
-                  <div className="text-[10px] uppercase tracking-widest text-zinc-500">Preview · sem avatar ainda</div>
+                  <div className="text-[10px] uppercase tracking-widest text-zinc-400 font-semibold">👤 Seu avatar entra AQUI</div>
+                  <div className="mt-1 text-[10px] text-zinc-600">ainda não gerado — use "Gerar avatares" · o que você vê por cima é a camada ✨ motion</div>
                   {state.avatarClips[currentBlock.id] && state.avatarClips[currentBlock.id].status !== 'ready' && (
                     <div className="mt-3 text-[11px] text-blue-300">⏳ {state.avatarClips[currentBlock.id].message ?? state.avatarClips[currentBlock.id].status}</div>
                   )}
@@ -4022,7 +4102,7 @@ export const ReelsStudio: React.FC = () => {
                 from motion.layer (which reflects the Gemini prompt canvas, not
                 the live preview layout). This keeps motion and avatar in sync
                 when the user changes layout after generating the motion. */}
-            {currentBlock?.motion && currentMotionPlacement && (() => {
+            {currentBlock?.motion && currentMotionPlacement && !motionLayerHidden && (() => {
               const motion = currentBlock.motion;
               // THE same placement resolution as the export compositor
               // (resolveMotionPlacement) — placement chosen in the Dock wins;
@@ -4056,6 +4136,32 @@ export const ReelsStudio: React.FC = () => {
               );
             })()}
 
+            {/* 👁 layer isolation — hide the AI motion layers to see the
+                avatar/footage underneath. Visible whenever a motion could be
+                on screen. Preview-only; export is untouched. */}
+            {(currentBlock?.motion || (state.projectMode === 'edit' && (state.overlayElements ?? []).some(el => el.kind === 'motion'))) && (
+              <button
+                onClick={() => setMotionLayerHidden(v => !v)}
+                className="absolute bottom-3 right-3 z-[65] px-2.5 py-1 rounded-md backdrop-blur text-[10px] font-medium transition-colors flex items-center gap-1.5"
+                style={motionLayerHidden
+                  ? { backgroundColor: 'rgba(251,191,36,0.2)', color: '#fcd34d', border: '1px solid rgba(251,191,36,0.45)' }
+                  : { backgroundColor: 'rgba(0,0,0,0.6)', color: '#a1a1aa', border: '1px solid rgba(255,255,255,0.1)' }}
+                title={motionLayerHidden
+                  ? 'Camada de motion OCULTA — você está vendo só o que fica por baixo (avatar/vídeo). Clique pra mostrar de novo.'
+                  : 'Ocultar a camada de motion (✨ IA) pra ver o avatar/vídeo por baixo'}
+              >
+                {motionLayerHidden ? '👁 motion oculto' : '👁 motion'}
+              </button>
+            )}
+
+            {/* Transition flash overlays (fade→black · light-flash→white). */}
+            {previewFx.blackAlpha > 0.01 && (
+              <div className="absolute inset-0 pointer-events-none z-[60]" style={{ backgroundColor: '#000', opacity: previewFx.blackAlpha }} />
+            )}
+            {previewFx.whiteAlpha > 0.01 && (
+              <div className="absolute inset-0 pointer-events-none z-[60]" style={{ backgroundColor: '#fff', opacity: previewFx.whiteAlpha }} />
+            )}
+
             <div className="absolute top-3 right-3 px-2.5 py-1 rounded-md bg-black/60 backdrop-blur text-[10px] font-mono text-zinc-300">
               {formatTime(cutOn ? sourceToEffective(playhead) : playhead)} / {formatTime(viewDuration)}
             </div>
@@ -4072,11 +4178,11 @@ export const ReelsStudio: React.FC = () => {
                 : isGenerating ? 'bg-amber-500/30 border-amber-400/40 text-amber-100'
                 : isRendering ? 'bg-cyan-500/30 border-cyan-400/40 text-cyan-100'
                 : 'bg-blue-500/25 border-blue-400/40 text-blue-100';
-              const label = isError ? '🎨 Motion · erro'
-                : isReady ? '🎨 Motion · pronto'
-                : isGenerating ? '🎨 Motion · gerando IA…'
-                : isRendering ? `🎨 Motion · ${busy ?? 'renderizando…'}`
-                : '🎨 Motion ativo';
+              const label = isError ? '✨ Motion (camada IA) · erro'
+                : isReady ? '✨ Motion (camada IA) · pronto'
+                : isGenerating ? '✨ Motion (camada IA) · gerando…'
+                : isRendering ? `✨ Motion (camada IA) · ${busy ?? 'renderizando…'}`
+                : '✨ Motion (camada IA) ativo';
               return (
                 <div className={`absolute bottom-3 left-3 px-2 py-0.5 rounded-md backdrop-blur text-[10px] font-medium border ${tone} ${(isGenerating || isRendering) ? 'animate-pulse' : ''}`}>
                   {label}

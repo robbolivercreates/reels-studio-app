@@ -56,6 +56,9 @@ export interface RenderProgress {
 export interface RenderHandle {
   promise: Promise<Blob>;
   cancel: () => void;
+  /** Live freeze accounting — read after `promise` resolves to warn the
+   *  user when frames rendered frozen (slow/broken source clips). */
+  health: { frozenFrames: number; brokenSources: Set<string> };
 }
 
 const FRAMERATE = 30;
@@ -112,7 +115,7 @@ interface FrameLayer {
    * Float overlays need it — screen blend can only lighten, so light text
    * over bright footage washes out without a dark backdrop.
    */
-  scrim?: { centerY: number; alpha: number; spread: number };
+  scrim?: { centerY: number; alpha: number; spread: number; tone: 'dark' | 'light' };
 }
 
 interface FrameDecoration {
@@ -157,6 +160,7 @@ const composeMotionLayer = (
   motionUrl: string,
   motionSeek: number,
   motionAlpha: number,
+  authoredMode: 'dark' | 'light' = 'dark',
 ): { motionLayer: FrameLayer; underlyingBox: LayoutBox | null; seamY: number | null } => {
   switch (placement.area) {
     case 'full':
@@ -178,25 +182,25 @@ const composeMotionLayer = (
         seamY: 0.5,
       };
     case 'float':
-    default:
-      // Full-frame screen blend: the motion is authored at 1080×1920 with a
-      // pure-black background and face-safe content placement — the blend
-      // makes black transparent, so the whole frame composites 1:1. (The old
-      // band-box model died: LLMs author in 1920-space no matter the canvas.)
-      // floatShiftY translates the layer so the user can park the card at
-      // the top/middle/bottom without regenerating — shifted edges stay
-      // invisible because black is transparent under the blend.
+    default: {
+      // Full-frame blend float. Two physical duals, picked by the mode the
+      // art was AUTHORED for:
+      //   dark  → black canvas, SCREEN blend (black = transparent)
+      //   light → white canvas, MULTIPLY blend (white = transparent) — the
+      //           "float claro": dark content over the footage with a light
+      //           scrim band (white gradient + house grid) behind it.
+      // floatShiftY translates the layer (instant repositioning); feather
+      // hides any edge when shifted.
+      const isLightFloat = authoredMode === 'light';
       return {
         motionLayer: {
           videoUrl: motionUrl,
           sourceSeek: motionSeek,
           box: FULL_FRAME,
           alpha: motionAlpha,
-          blend: 'screen',
-          filter: 'contrast(1.35) brightness(1.05)',
+          blend: isLightFloat ? 'multiply' : 'screen',
+          filter: isLightFloat ? 'contrast(1.18) brightness(0.99)' : 'contrast(1.35) brightness(1.05)',
           offsetY: placement.floatShiftY ?? 0,
-          // Shifted layer → feather the edges so atmosphere gradients can't
-          // leave a hard seam where the frame boundary slides into view.
           featherY: Math.abs(placement.floatShiftY ?? 0) > 0.005,
           // Contrast scrim under the blend, centered on the card and
           // following the shift. Multiplied by motionAlpha so the scrim
@@ -206,12 +210,14 @@ const composeMotionLayer = (
                 centerY: FLOAT_CARD_CENTER + (placement.floatShiftY ?? 0),
                 alpha: (placement.scrimAlpha ?? DEFAULT_SCRIM_ALPHA) * motionAlpha,
                 spread: placement.scrimSpread ?? DEFAULT_SCRIM_SPREAD,
+                tone: isLightFloat ? 'light' : 'dark',
               }
             : undefined,
         },
         underlyingBox: FULL_FRAME,
         seamY: null,
       };
+    }
   }
 };
 
@@ -324,13 +330,13 @@ const composeForBlock = (
   // keyword-anchored full-frame motion shows the avatar/take instead of
   // black frames before/after its moment.
   if (placement?.area === 'full' && motionUrl && motionAlpha > 0) {
-    const { motionLayer: ml } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha);
+    const { motionLayer: ml } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha, block.motion?.authoredMode ?? 'dark');
     return { layers: [ml], decorations: [] };
   }
 
   // Motion split: avatar (or take) occupies one half, motion the other.
   if ((placement?.area === 'top-half' || placement?.area === 'bottom-half') && motionUrl) {
-    const { motionLayer: ml, underlyingBox, seamY } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha);
+    const { motionLayer: ml, underlyingBox, seamY } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha, block.motion?.authoredMode ?? 'dark');
     const avatarBox = underlyingBox!;
     const layers: FrameLayer[] = [];
     const clip = block.kind === 'avatar' ? inputs.avatarClips[block.id] : null;
@@ -383,7 +389,7 @@ const composeForBlock = (
   // Motion float — full-frame screen blend over the avatar/take (same
   // compositor as the edit-video pipeline).
   if (placement?.area === 'float' && motionUrl && motionAlpha > 0) {
-    const { motionLayer: ml } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha);
+    const { motionLayer: ml } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha, block.motion?.authoredMode ?? 'dark');
     layers.push(ml);
   }
 
@@ -443,7 +449,7 @@ const frameAtProjectTime = (
           const motionSeek = Math.min(Math.max(0, motionLocalT), elDur - 0.05);
           const alpha = motionLocalT < 0 ? 0 : overrunAlpha(motionLocalT, elDur);
           if (alpha > 0) {
-            const { motionLayer, underlyingBox, seamY } = composeMotionLayer(placement, motionUrl, motionSeek, alpha);
+            const { motionLayer, underlyingBox, seamY } = composeMotionLayer(placement, motionUrl, motionSeek, alpha, el.motion?.authoredMode ?? 'dark');
             // Splits & full: reshape/hide the base video for the duration of
             // this element. (Mutating `base` is safe — one base per frame.)
             if (underlyingBox === null) {
@@ -743,35 +749,68 @@ const loadVideoElement = (url: string): Promise<HTMLVideoElement> =>
     v.onerror = () => reject(new Error(`Failed to load video: ${url}`));
   });
 
-// Hard cap on a single seek. Healthy seeks finish in <50ms. The previous
-// 1.5s ceiling let a single broken clip burn ~18s per crossfade frame
-// (multiple video layers × 1.5s). 400ms keeps us forgiving but kills
-// the "trava 2s no segundo X" pattern fast.
-const SEEK_TIMEOUT_MS = 400;
-/** After this many consecutive timeouts on the SAME video, we mark it
- * broken and short-circuit future seeks (renders last good frame).
- * Prevents one bad HEVC/fragmented MP4 from stalling an entire export. */
-const MAX_TIMEOUTS_BEFORE_GIVEUP = 3;
+// Seek budget: healthy seeks finish in <50ms. The PREVIOUS policy (flat
+// 400ms × 3 strikes → PERMANENTLY broken, silently) was the root cause of
+// Rob's "vídeo congela em partes": a merely-SLOW clip (HeyGen 1080p under
+// I/O pressure) ate its 3 strikes early and every later frame of it
+// rendered frozen on the last good frame — with zero warning. New policy:
+//   1. Progressive timeout per consecutive miss (400 → 800 → 1600ms): a
+//      slow-but-alive clip gets real room to land before being condemned.
+//   2. Block-boundary amnesty: the broken mark is LIFTED at each new block
+//      (fresh chance), unless the same video failed in several blocks
+//      (global strikes) — then it stays broken to protect the export time.
+//   3. Nothing is silent: frozen frames are counted per export and surfaced
+//      in the Export modal as a warning.
+const SEEK_TIMEOUTS_MS = [400, 800, 1600] as const;
+const MAX_TIMEOUTS_BEFORE_GIVEUP = SEEK_TIMEOUTS_MS.length;
+/** A video that got condemned in this many DIFFERENT blocks stays broken
+ *  for the rest of the export (genuinely corrupt file). */
+const MAX_BROKEN_BLOCKS_BEFORE_PERMANENT = 3;
 const brokenVideoUrls = new WeakSet<HTMLVideoElement>();
+const permanentlyBroken = new WeakSet<HTMLVideoElement>();
 const timeoutCount = new WeakMap<HTMLVideoElement, number>();
+const brokenBlockStrikes = new WeakMap<HTMLVideoElement, number>();
+
+/** Per-export freeze accounting — how many frames were drawn while a video
+ *  was marked broken (i.e. potentially frozen on the last good frame). */
+export interface RenderHealth {
+  frozenFrames: number;
+  brokenSources: Set<string>;
+}
+let activeHealth: RenderHealth | null = null;
 
 /** Reset on each new export so a previous broken-clip mark doesn't
  *  poison a retry. Called once at the start of renderMp4. */
 const resetVideoHealth = (videos: HTMLVideoElement[]) => {
   for (const v of videos) {
-    if (brokenVideoUrls.has(v)) {
-      // WeakSet has no delete? — yes it does.
-      brokenVideoUrls.delete(v);
-    }
+    brokenVideoUrls.delete(v);
+    permanentlyBroken.delete(v);
     timeoutCount.delete(v);
+    brokenBlockStrikes.delete(v);
+  }
+};
+
+/** Block-boundary amnesty: give every condemned video a fresh chance in the
+ *  new block — unless it already burned its global strikes. */
+const forgiveBrokenVideos = (videos: HTMLVideoElement[]) => {
+  for (const v of videos) {
+    if (brokenVideoUrls.has(v) && !permanentlyBroken.has(v)) {
+      brokenVideoUrls.delete(v);
+      timeoutCount.delete(v);
+    }
   }
 };
 
 const seekVideo = (v: HTMLVideoElement, t: number, signal?: { cancelled: boolean }): Promise<void> =>
   new Promise((resolve) => {
     // Already known broken — skip the seek entirely. The renderer will
-    // draw whatever the last successfully-seeked frame is.
+    // draw whatever the last successfully-seeked frame is. COUNTED so the
+    // export modal can warn instead of failing silently.
     if (brokenVideoUrls.has(v)) {
+      if (activeHealth) {
+        activeHealth.frozenFrames += 1;
+        activeHealth.brokenSources.add(v.src.slice(0, 120));
+      }
       resolve();
       return;
     }
@@ -792,7 +831,12 @@ const seekVideo = (v: HTMLVideoElement, t: number, signal?: { cancelled: boolean
         timeoutCount.set(v, n);
         if (n >= MAX_TIMEOUTS_BEFORE_GIVEUP) {
           brokenVideoUrls.add(v);
-          console.warn('[render] giving up on broken video after', n, 'timeouts · src=', v.src.slice(0, 80));
+          const strikes = (brokenBlockStrikes.get(v) ?? 0) + 1;
+          brokenBlockStrikes.set(v, strikes);
+          if (strikes >= MAX_BROKEN_BLOCKS_BEFORE_PERMANENT) permanentlyBroken.add(v);
+          console.warn('[render] giving up on slow/broken video after', n, 'timeouts',
+            '· blocoStrikes=', strikes, strikes >= MAX_BROKEN_BLOCKS_BEFORE_PERMANENT ? '(PERMANENTE)' : '(anistia no próximo bloco)',
+            '· src=', v.src.slice(0, 80));
         }
       } else {
         // Reset count on a successful seek — only consecutive misses count.
@@ -801,10 +845,15 @@ const seekVideo = (v: HTMLVideoElement, t: number, signal?: { cancelled: boolean
       resolve();
     };
     const onSeeked = () => finish(false);
+    // Progressive budget: each consecutive miss on the SAME video gets a
+    // longer window — a slow clip lands on the 2nd/3rd try instead of
+    // being condemned.
+    const attempt = Math.min(timeoutCount.get(v) ?? 0, SEEK_TIMEOUTS_MS.length - 1);
+    const budget = SEEK_TIMEOUTS_MS[attempt];
     const timer = setTimeout(() => {
-      console.warn('[render] seek timeout · target=', target, '· dur=', v.duration, '· cur=', v.currentTime);
+      console.warn('[render] seek timeout · budget=', budget, 'ms · target=', target, '· dur=', v.duration, '· cur=', v.currentTime);
       finish(true);
-    }, SEEK_TIMEOUT_MS);
+    }, budget);
     // Poll the cancel flag every 50ms — lets the user-facing Cancel
     // button break out of a seek that's still within budget.
     const cancelPoll = signal
@@ -847,6 +896,12 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
   // through every call site.
   const cancelSignal = { cancelled: false };
   let cancelled = false;
+
+  // Freeze accounting for THIS export — surfaced live via the handle so the
+  // Export modal can warn ("N trechos podem ter congelado") instead of the
+  // old silent freeze.
+  const health: RenderHealth = { frozenFrames: 0, brokenSources: new Set() };
+  activeHealth = health;
 
   const promise = (async (): Promise<Blob> => {
     const { width, height } = dimensionsFor(inputs.aspect, inputs.quality);
@@ -1364,8 +1419,6 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       // "broken video" classification scoped to a single block — a video
       // that timed-out once at a transition is given a fresh budget at the
       // next block instead of being silently skipped for the whole export.
-      // `brokenVideoUrls` is intentionally NOT cleared: a video that hits 3
-      // consecutive timeouts within a single block is genuinely broken.
       const frameHit = hitTest(layout, projT);
       const currentBlockId = frameHit.kind === 'block' ? frameHit.slot.blockId : null;
       // Capture the boundary BEFORE we mutate lastFrameBlockId so the encoder
@@ -1375,6 +1428,10 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       const blockBoundaryNow = currentBlockId !== lastFrameBlockId;
       if (blockBoundaryNow) {
         for (const v of videoMap.values()) timeoutCount.delete(v);
+        // Block-boundary amnesty: condemned-but-not-permanent videos get a
+        // fresh chance (the "frozen rest of the export" came from the old
+        // never-forgive policy).
+        forgiveBrokenVideos(Array.from(videoMap.values()));
         lastFrameBlockId = currentBlockId;
       }
 
@@ -1432,14 +1489,34 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
           const cy = lyr.scrim.centerY * height;
           const spread = height * lyr.scrim.spread;
           const core = spread * 0.36; // full-alpha core scales with the band
-          const g = ctx.createLinearGradient(0, cy - spread, 0, cy + spread);
           const a = Math.min(0.85, lyr.scrim.alpha);
-          g.addColorStop(0, 'rgba(0,0,0,0)');
-          g.addColorStop((spread - core) / (2 * spread), `rgba(0,0,0,${a.toFixed(3)})`);
-          g.addColorStop((spread + core) / (2 * spread), `rgba(0,0,0,${a.toFixed(3)})`);
-          g.addColorStop(1, 'rgba(0,0,0,0)');
+          const light = lyr.scrim.tone === 'light';
+          const rgb = light ? '255,255,255' : '0,0,0';
+          const g = ctx.createLinearGradient(0, cy - spread, 0, cy + spread);
+          g.addColorStop(0, `rgba(${rgb},0)`);
+          g.addColorStop((spread - core) / (2 * spread), `rgba(${rgb},${a.toFixed(3)})`);
+          g.addColorStop((spread + core) / (2 * spread), `rgba(${rgb},${a.toFixed(3)})`);
+          g.addColorStop(1, `rgba(${rgb},0)`);
           ctx.fillStyle = g;
           ctx.fillRect(0, Math.max(0, cy - spread), width, spread * 2);
+          if (light) {
+            // House grid lines inside the light band (44px tile @ 1920-scale),
+            // clipped to the core so they fade with the gradient edges.
+            const tile = Math.max(8, Math.round(height * (44 / 1920)));
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, Math.max(0, cy - core), width, core * 2);
+            ctx.clip();
+            ctx.strokeStyle = `rgba(0,0,0,${(a * 0.12).toFixed(3)})`;
+            ctx.lineWidth = 1;
+            for (let x = 0; x <= width; x += tile) {
+              ctx.beginPath(); ctx.moveTo(x + 0.5, cy - core); ctx.lineTo(x + 0.5, cy + core); ctx.stroke();
+            }
+            for (let y = Math.ceil((cy - core) / tile) * tile; y <= cy + core; y += tile) {
+              ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(width, y + 0.5); ctx.stroke();
+            }
+            ctx.restore();
+          }
         }
         drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0, lyr.offsetX ?? 0, lyr.filter, lyr.rgbSplit, lyr.featherY ?? false);
       }
@@ -1608,6 +1685,10 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       v.load();
     }
 
+    if (health.frozenFrames > 0) {
+      console.warn('[render/health] frames congelados:', health.frozenFrames,
+        '· fontes:', Array.from(health.brokenSources));
+    }
     return blob;
   })();
 
@@ -1617,5 +1698,6 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       cancelled = true;
       cancelSignal.cancelled = true;
     },
+    health,
   };
 };

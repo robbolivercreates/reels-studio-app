@@ -216,6 +216,14 @@ export const resolveMotionPlacement = (block: {
 
 export type MotionRenderStatus = 'draft' | 'generating' | 'ready' | 'rendering' | 'error';
 
+/**
+ * Color mode the motion's MP4 was AUTHORED for. Drives the float compositor:
+ *   dark  → black canvas, SCREEN blend (black = transparent), dark scrim
+ *   light → white canvas, MULTIPLY blend (white = transparent), white scrim
+ * Baked at generation time — switching modes requires regenerating the art.
+ */
+export type MotionAuthoredMode = 'dark' | 'light';
+
 export interface MotionConfig {
   /** Unique id (used as composition-id and as filename in cache). */
   id: string;
@@ -282,6 +290,9 @@ export interface MotionConfig {
    * generated before this field was introduced — badge falls back to "—".
    */
   modelUsed?: string;
+  /** Color mode the art was authored for (drives float blend: dark→screen,
+   *  light→multiply). Undefined on old motions → treated as 'dark'. */
+  authoredMode?: MotionAuthoredMode;
   /** Actual cost in USD for generating this motion. */
   actualCostUSD?: number;
   /** Actual token count metadata. */

@@ -1663,7 +1663,13 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         `  • UI mockups (sidebars, windows, app chrome): must fit entirely within x:0–1080, y:220–1540. Cap height at 1320px max.`,
       ].join('\n');
     }
-    // overlay
+    // overlay — two physical duals by the reel's color mode:
+    //   dark  → black canvas + SCREEN blend (black = transparent, bright content)
+    //   light → white canvas + MULTIPLY blend (white = transparent, dark content)
+    const ovLight = input.motionColorMode === 'light';
+    const ovBg = ovLight ? '#FFFFFF' : '#000000';
+    const ovBlend = ovLight ? 'MULTIPLY' : 'SCREEN';
+    const ovKeep = ovLight ? 'PURE WHITE #FFFFFF' : 'pure black #000000';
     return [
       `╔══════════════════════════════════════════════════════╗`,
       `  CANVAS SLOT — FLOATING OVERLAY (mobile vertical short-form)`,
@@ -1672,20 +1678,24 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       `Think: Submagic-style caption card, Hormozi pop-text, floating data card centered over the lower-mid frame.`,
       `NOT a broadcast TV lower-third (those occupy the bottom 20% — but the bottom 15-20% of mobile vertical`,
       `video is OCCLUDED by platform UI: likes, comments, caption rail, progress bar).`,
-      `Composited with SCREEN blend, so #000000 backgrounds become transparent.`,
+      `Composited with ${ovBlend} blend, so ${ovBg} backgrounds become transparent.`,
       ``,
       `DESIGN RULES — FLOATING OVERLAY:`,
-      `• Background MUST be pure #000000 — dark pixels become transparent under screen blend`,
+      `• Background MUST be ${ovKeep} — those pixels become transparent under ${ovBlend} blend`,
       `• ALL primary content lives in y:1114–1536 (the floating-card zone, 22% height of the canvas)`,
-      `• y:0–1100 (top 57%) MUST be pure black — that's where the presenter's face/chest live; nothing visible there`,
-      `• y:1536–1920 (bottom 20%) MUST be pure black — that's the platform UI occlusion zone, anything there gets hidden by the app chrome on upload`,
-      `• Text: white or bright brand color, bold sans, strong drop shadow so it reads over the moving presenter behind`,
-      `• LIGHT-ON-DARK ONLY — the screen blend can only LIGHTEN: mid-gray or dark fills VANISH over bright`,
-      `  footage. The app composites a soft dark scrim behind this overlay, so design bright content on black:`,
-      `  pure-white / vivid brand colors with a strong glow (text-shadow), never dark card backgrounds as the`,
-      `  primary container (they read on dark preview but disappear over a white wall).`,
+      `• y:0–1100 (top 57%) MUST be ${ovKeep} — that's where the presenter's face/chest live; nothing visible there`,
+      `• y:1536–1920 (bottom 20%) MUST be ${ovKeep} — that's the platform UI occlusion zone, anything there gets hidden by the app chrome on upload`,
+      ovLight
+        ? `• Text: deep graphite #1d1d1f or rich saturated brand colors, bold sans — DARK-ON-LIGHT ONLY: multiply can only DARKEN, so white/pale fills VANISH. The app composites a soft WHITE scrim (with a subtle grid) behind this overlay; design dark content on white. Never light/pastel fills as the primary container.`
+        : `• Text: white or bright brand color, bold sans, strong drop shadow so it reads over the moving presenter behind`,
+      ovLight ? '' : [
+        `• LIGHT-ON-DARK ONLY — the screen blend can only LIGHTEN: mid-gray or dark fills VANISH over bright`,
+        `  footage. The app composites a soft dark scrim behind this overlay, so design bright content on black:`,
+        `  pure-white / vivid brand colors with a strong glow (text-shadow), never dark card backgrounds as the`,
+        `  primary container (they read on dark preview but disappear over a white wall).`,
+      ].join('\n'),
       `• Energy: a single hero element (headline / stat / label) — NOT a dense composition. Mobile = one idea per overlay.`,
-      `• NO atmospheric gradients/glows outside y:1114–1536 — they'd brighten the face or get clipped`,
+      `• NO atmospheric gradients/glows outside y:1114–1536 — they'd ${ovLight ? 'darken' : 'brighten'} the face or get clipped`,
       ``,
       `FACE RULES (from the motion-pack guide — a real person is talking behind this overlay):`,
       `• "If my face is in the video: place graphics in the lower-half ONLY, below my chin."`,
@@ -1697,11 +1707,11 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       ``,
       `📐 SAFE AREA (floating overlay card, 1080×1920):`,
       `  Primary content: x:80–1000, y:1114–1536 (the mobile-safe floating zone)`,
-      `  Black-only zones (KEEP PURE BLACK):`,
+      `  ${ovLight ? 'White-only zones (KEEP PURE WHITE)' : 'Black-only zones (KEEP PURE BLACK)'}:`,
       `    • y:0–1100 (top — presenter zone)`,
       `    • y:1536–1920 (bottom — platform UI occlusion zone)`,
       `  Soft fade buffer: 40px (~y:1080–1120 and ~y:1500–1540) — atmosphere/particles only, no text.`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   })();
 
   // Atmosphere — the WRAPPER owns it now (house style). buildFullHtmlDoc
@@ -1713,11 +1723,13 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     `╔══════════════════════════════════════════════════════╗`,
     `  🎨 ATMOSPHERE — FLOATING OVERLAY: NONE.`,
     `╚══════════════════════════════════════════════════════╝`,
-    `This composition is screen-blended over real footage AND the user can`,
-    `slide it vertically. Any full-frame glow/gradient/vignette/grain creates`,
-    `a VISIBLE SEAM at the frame edge when repositioned, and brightens the`,
-    `speaker's face. Therefore:`,
-    `• Track 0 background: <div style="position:absolute; inset:0; background:#000000;"></div> — pure black, NOTHING else.`,
+    `This composition is blended over real footage AND the user can slide it`,
+    `vertically. Any full-frame glow/gradient/vignette/grain creates a VISIBLE`,
+    `SEAM at the frame edge when repositioned, and tints the speaker's face.`,
+    `Therefore:`,
+    input.motionColorMode === 'light'
+      ? `• Track 0 background: <div style="position:absolute; inset:0; background:#FFFFFF;"></div> — pure white, NOTHING else.`
+      : `• Track 0 background: <div style="position:absolute; inset:0; background:#000000;"></div> — pure black, NOTHING else.`,
     `• NO radial-gradient atmospheres, NO vignette pass, NO dot grids, NO grain.`,
     `• Glow is allowed ONLY as a tight box-shadow/halo hugging the card itself`,
     `  (fully contained inside y:1064–1586) — never reaching the canvas edges.`,
@@ -1794,9 +1806,30 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       ].join('\n')
     : '';
 
-  // Overlay mode: the motion sits OVER a real talking-head video via screen-blend.
-  // Pure black bg + only bright foreground elements = black disappears, elements float.
-  const overlayConstraintSection = input.overlayMode ? [
+  // Overlay mode: the motion sits OVER a real talking-head video via blend.
+  // Dark reel → black bg + SCREEN (bright content floats). Light reel →
+  // white bg + MULTIPLY (dark content floats — the "float claro").
+  const overlayConstraintSection = input.overlayMode ? (input.motionColorMode === 'light' ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  🎬 OVERLAY MODE (CLARO) — multiply-blend over talking-head video`,
+    `╚══════════════════════════════════════════════════════╝`,
+    ``,
+    `OVERLAY CONSTRAINT (OBRIGATÓRIO — não ignorar):`,
+    `• Background: BRANCO PURO #FFFFFF. NENHUM gradiente, partícula, dot-grid,`,
+    `  vinheta ou grain. O track-0 background clip DEVE ser apenas #FFFFFF sólido.`,
+    `• Apenas elementos FOREGROUND em cores ESCURAS/saturadas (grafite #1d1d1f,`,
+    `  azuis/verdes/vermelhos PROFUNDOS): texto, ícones, badges, números, cards`,
+    `  isolados. Nada que preencha >40% da tela.`,
+    `• Por quê: o branco vai SUMIR via multiply-blend no renderer — o vídeo real`,
+    `  fica visível atrás. Elementos escuros flutuam sobre o apresentador, com um`,
+    `  scrim CLARO (faixa branca com grade sutil) composto por trás pelo app.`,
+    `• NUNCA elementos claros/pastel (desaparecem no multiply). Sem text-shadow claro.`,
+    `• Composição parcial: deixe espaço generoso nos lados e topo pro rosto aparecer.`,
+    `• NÃO use: background-color diferente de #FFF, backdrop-filter, opacidade de fundo.`,
+    ``,
+    EDITING_PACING_RULES,
+    ``,
+  ].join('\n') : [
     `╔══════════════════════════════════════════════════════╗`,
     `  🎬 OVERLAY MODE — screen-blend over talking-head video`,
     `╚══════════════════════════════════════════════════════╝`,
@@ -1815,7 +1848,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     ``,
     EDITING_PACING_RULES,
     ``,
-  ].join('\n') : '';
+  ].join('\n')) : '';
 
   // Real-logo token section — only when a known brand is mentioned. The data
   // URI never passes through the model (it would truncate/corrupt it); the
@@ -2169,11 +2202,11 @@ export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '
       *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
         width: 1080px; height: ${canvasH}px; overflow: hidden;
-        /* Base canvas: overlay floats need PURE black (screen-blend
-           transparency); everything else gets the house bg — the actual
-           atmosphere (grid+gradient on light, steel glow on dark) is the
-           injected track-0 div below. */
-        background: ${effLayer === 'overlay' ? '#000' : isLight ? '#FAFAF8' : '#0a0a0c'};
+        /* Base canvas: overlay floats need the PURE blend key (black for
+           screen, WHITE for the light/multiply float); everything else gets
+           the house bg — the actual atmosphere (grid+gradient on light,
+           steel glow on dark) is the injected track-0 div below. */
+        background: ${effLayer === 'overlay' ? (isLight ? '#FFF' : '#000') : isLight ? '#FAFAF8' : '#0a0a0c'};
         font-family: "Inter", system-ui, -apple-system, "Helvetica Neue", sans-serif;
         -webkit-font-smoothing: antialiased;
         -moz-osx-font-smoothing: grayscale;
