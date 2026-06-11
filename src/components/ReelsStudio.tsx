@@ -559,17 +559,20 @@ export const ReelsStudio: React.FC = () => {
     if (targets.length === 0) return;
     setOverlayGenerating(true);
     const colorMode = state.motionColorMode ?? 'dark';
-    const isFloat = placement.area === 'float';
-    // Legacy mode kept in sync for old-renderer compatibility.
-    const legacyMode = placement.area === 'full' ? 'fullscreen'
-      : placement.area === 'top-half' ? 'split-top'
-      : placement.area === 'bottom-half' ? 'split-bottom'
-      : 'overlay';
+
+    // Per-fala role: a block marked 🖥️ B-roll forces full-frame — the motion
+    // IS the content during that segment. 🎥 Vídeo blocks use the Dock's
+    // chosen placement (float/split/full over the footage).
+    const placementForBlock = (block: ScriptBlock): MotionPlacement =>
+      block.kind === 'broll'
+        ? { area: 'full', startOffsetSec: 0, durationSec: block.end - block.start }
+        : placement;
 
     // ── Scene director (same workflow as creation): ONE planning call over
-    // the video's transcription — visual per speech segment + keyword-
-    // anchored window (the overlay enters WHEN the idea is spoken, not at
-    // the segment boundary). Falls back to the per-segment router.
+    // the video's transcription — visual per speech segment. In edit mode
+    // coverage is CONTINUOUS: every fala is covered start-to-end (outside a
+    // motion there's only raw footage = ugly gap); dynamism comes from beats
+    // INSIDE the motion, anchored at the words.
     let ovPlan = new Map<string, DirectorPlanItem>();
     if (visual === 'auto' && targets.length > 1) {
       try {
@@ -577,10 +580,9 @@ export const ReelsStudio: React.FC = () => {
           scriptText: targets.map(t => t.text).join('\n'),
           blocks: targets.map(t => ({
             id: t.id,
-            // kind drives the director's template eligibility: only a
-            // full-frame placement may use templates ('broll' semantics);
-            // float/splits over the person are 'avatar' → freeform art.
-            kind: (placement.area === 'full' ? 'broll' : 'avatar') as 'avatar' | 'broll',
+            // Real per-fala role: 'broll' → full-frame + templates allowed;
+            // 'avatar' (🎥 Vídeo) → freeform art over the person.
+            kind: t.kind,
             text: t.text,
             startSec: t.start,
             durationSec: t.end - t.start,
@@ -591,7 +593,7 @@ export const ReelsStudio: React.FC = () => {
                   .filter(w => w.end > w.start)
               : undefined,
           })),
-          overlayContext: isFloat,
+          continuousCoverage: true,
           outputLanguage: state.audio.words.length > 0 ? 'pt-BR' : undefined,
         });
         console.log('[overlay/director] plano:', ovPlan.size, 'falas planejadas de', targets.length);
@@ -602,14 +604,26 @@ export const ReelsStudio: React.FC = () => {
       const elId = `ovmot_${block.id}`;
       const blockDur = block.end - block.start;
       const plan = ovPlan.get(block.id);
-      // Director timing → the element's OWN absolute window (edit overlays
-      // are gated by startSec/durationSec, so the offset moves startSec and
-      // the stored placement carries no extra offset — no double-shift).
-      const planOffset = plan ? Math.max(0, Math.min(plan.startOffsetSec, blockDur - 1)) : 0;
-      const effectiveDur = plan
-        ? Math.max(1, Math.min(plan.durationSec, blockDur - planOffset))
-        : Math.min(placement.durationSec ?? blockDur, blockDur);
-      const elPlacement: MotionPlacement = { ...placement, startOffsetSec: 0, durationSec: effectiveDur };
+      const blockPlacement = placementForBlock(block);
+      const isFloat = blockPlacement.area === 'float';
+      // Legacy mode kept in sync for old-renderer compatibility.
+      const legacyMode = blockPlacement.area === 'full' ? 'fullscreen'
+        : blockPlacement.area === 'top-half' ? 'split-top'
+        : blockPlacement.area === 'bottom-half' ? 'split-bottom'
+        : 'overlay';
+      // CONTINUOUS COVERAGE: the element spans the whole fala — no window,
+      // no gap of raw footage. The motion's internal beats provide change.
+      const effectiveDur = blockDur;
+      const elPlacement: MotionPlacement = { ...blockPlacement, startOffsetSec: 0, durationSec: effectiveDur };
+      // Block-local word timestamps → beats synced to the speech ("something
+      // changes every 2-4s"). Creation always passed these; edit was missing
+      // them, which is why edit overlays felt static.
+      const blockWords = state.audio.words.length > 0
+        ? state.audio.words
+            .filter(w => w.blockId === block.id)
+            .map(w => ({ word: w.word, start: Math.max(0, w.start - block.start), end: Math.max(0, w.end - block.start) }))
+            .filter(w => w.end > w.start)
+        : undefined;
       try {
         // Resolve the visual per block: director plan → per-block router.
         let presetId: StylePresetId = visual === 'auto' ? 'bold-pop' : visual;
@@ -629,7 +643,7 @@ export const ReelsStudio: React.FC = () => {
             const route = await routeTemplateForBlock({
               blockText: block.text,
               durationSec: effectiveDur,
-              overlayContext: placement.area !== 'full',
+              overlayContext: blockPlacement.area !== 'full',
             });
             if (route) {
               presetId = route.templateId as StylePresetId;
@@ -645,8 +659,8 @@ export const ReelsStudio: React.FC = () => {
         }
         dispatch({ type: 'add-overlay-element', element: {
           id: elId, kind: 'motion', text: block.text.slice(0, 60),
-          startSec: block.start + planOffset, durationSec: effectiveDur,
-          mode: legacyMode, y: placement.y ?? 0.58, overlayH: placement.height ?? 0.22,
+          startSec: block.start, durationSec: effectiveDur,
+          mode: legacyMode, y: blockPlacement.y ?? 0.58, overlayH: blockPlacement.height ?? 0.22,
           placement: elPlacement,
         } });
         const result = await generateMotionHtml({
@@ -655,16 +669,17 @@ export const ReelsStudio: React.FC = () => {
           blockText: block.text,
           durationSec: effectiveDur,
           compositionId: elId,
-          motionLayer: layerOfPlacement(placement),
+          motionLayer: layerOfPlacement(blockPlacement),
           overlayMode: isFloat,
           motionColorMode: colorMode,
+          wordTimestamps: blockWords,
           existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
           outputLanguage: state.audio.words.length > 0 ? 'pt-BR' : undefined,
         });
         const motion: MotionConfig = {
           id: elId,
           presetId,
-          layer: layerOfPlacement(placement),
+          layer: layerOfPlacement(blockPlacement),
           placement: elPlacement,
           intent: block.text.slice(0, 120),
           text: result.text ?? block.text.slice(0, 60),
@@ -734,9 +749,13 @@ export const ReelsStudio: React.FC = () => {
       : 'Rascunho';
 
     // Same default the generation pipeline resolves (defaultPlacementFor) —
-    // what the Dock shows selected IS what generates.
+    // what the Dock shows selected IS what generates. In edit mode, a fala
+    // marked 🖥️ B-roll forces full-frame (the motion IS the content during
+    // that segment) — same product rule as creation b-roll.
     const dockValue = isEdit
-      ? editDockValue
+      ? (b.kind === 'broll'
+          ? { visual: editDockValue.visual, placement: { area: 'full' as const, startOffsetSec: 0, durationSec: blockDur } }
+          : editDockValue)
       : {
           visual: (b.stylePresetOverride as StylePresetId | undefined) ?? 'auto' as const,
           placement: (b.kind === 'broll'
@@ -744,14 +763,12 @@ export const ReelsStudio: React.FC = () => {
             : m?.placement ?? (m ? placementOfMotion(m) : defaultPlacementFor(b.kind, state.projectMode, blockDur))),
         };
 
-    // Placement choices by context (product rule): a creation B-roll block's
-    // motion IS the content → full only (the ② step hides entirely). Avatar
-    // blocks and edit-video speech get the full set.
-    const allowedAreas: MotionPlacement['area'][] = isEdit
-      ? ['float', 'top-half', 'bottom-half', 'full']
-      : b.kind === 'broll'
-        ? ['full']
-        : ['float', 'top-half', 'bottom-half', 'full'];
+    // Placement choices by context (product rule): a b-roll block's motion IS
+    // the content → full only (the ② step hides entirely) — in BOTH modes.
+    // Avatar/Vídeo blocks get the full set.
+    const allowedAreas: MotionPlacement['area'][] = b.kind === 'broll'
+      ? ['full']
+      : ['float', 'top-half', 'bottom-half', 'full'];
 
     const autoTargets = isEdit
       ? blocks.filter(x => (x.end - x.start) >= 1.0)
@@ -921,7 +938,9 @@ export const ReelsStudio: React.FC = () => {
       setEditVideoStatus('Transcrevendo com Whisper… (1ª vez baixa o modelo)');
       const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath });
 
-      const { blocks, words } = importWhisperTranscript(json);
+      // Falas nascem como 'avatar' ("🎥 Vídeo"): a footage é a pessoa falando,
+      // motions flutuam por cima. Toggle pra 'broll' = motion tela cheia.
+      const { blocks, words } = importWhisperTranscript(json, { defaultKind: 'avatar' });
       if (blocks.length === 0) throw new Error('Não encontrei fala transcrita no vídeo.');
 
       // Master audio: the HQ wav (fallback: whisper wav) → peaks + playable URL + export blob.
@@ -5344,11 +5363,13 @@ export const ReelsStudio: React.FC = () => {
               const blockLen = b.end - b.start;
 
               // Edit-video mode: every transcript block is a SPEECH segment of
-              // the user's own continuous video — never a draggable/deletable
-              // "B-roll" clip. Neutral graphite chip, click selects (drives the
-              // Motion Dock context), no drag, no destructive affordances.
+              // the user's own continuous video — never draggable/deletable.
+              // Click selects (drives the Motion Dock context). The chip TONE
+              // shows the fala's role: graphite = 🎥 Vídeo (footage shows),
+              // emerald = 🖥️ B-roll (motion takes the whole frame here).
               if (state.projectMode === 'edit') {
                 const selected = selectedBlockId === b.id;
+                const isBrollRole = b.kind === 'broll';
                 return (
                   <div
                     key={b.id}
@@ -5357,13 +5378,19 @@ export const ReelsStudio: React.FC = () => {
                     className="absolute top-1 bottom-1 rounded-md cursor-pointer overflow-hidden transition-colors"
                     style={{
                       left: `${left}%`, width: `${Math.max(width, 0.5)}%`,
-                      backgroundColor: selected ? 'rgba(96,165,250,0.16)' : 'rgba(255,255,255,0.05)',
-                      border: `1px solid ${selected ? 'rgba(96,165,250,0.6)' : 'rgba(255,255,255,0.10)'}`,
+                      backgroundColor: selected
+                        ? 'rgba(96,165,250,0.16)'
+                        : isBrollRole ? 'rgba(16,185,129,0.14)' : 'rgba(255,255,255,0.05)',
+                      border: `1px solid ${selected
+                        ? 'rgba(96,165,250,0.6)'
+                        : isBrollRole ? 'rgba(16,185,129,0.45)' : 'rgba(255,255,255,0.10)'}`,
                     }}
-                    title={b.text}
+                    title={`${b.text}${isBrollRole ? ' · 🖥️ B-roll: motion tela cheia' : ' · 🎥 Vídeo'}`}
                   >
                     <div className="px-2 py-1 min-w-0">
-                      <div className="text-[9px] truncate" style={{ color: selected ? '#dbeafe' : 'rgba(244,244,245,0.75)' }}>{b.text.slice(0, 48) || '(fala)'}</div>
+                      <div className="text-[9px] truncate" style={{ color: selected ? '#dbeafe' : isBrollRole ? '#a7f3d0' : 'rgba(244,244,245,0.75)' }}>
+                        {isBrollRole ? '🖥️ ' : ''}{b.text.slice(0, 48) || '(fala)'}
+                      </div>
                       <div className="text-[8px] font-mono" style={{ color: 'rgba(161,161,170,0.7)' }}>{blockLen.toFixed(1)}s</div>
                     </div>
                   </div>
@@ -7443,9 +7470,13 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                   className={`flex items-center gap-1.5 text-[11px] font-semibold rounded-md px-2 py-1 transition-colors ${
                     isAvatar ? 'text-amber-300 bg-amber-500/10 hover:bg-amber-500/20' : 'text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20'
                   }`}
-                  title={`Tipo: ${isAvatar ? 'avatar' : 'b-roll'} · clique pra alternar`}
+                  title={editMode
+                    ? `O que aparece durante esta fala: ${isAvatar ? 'seu vídeo (motion flutua por cima)' : 'b-roll — o motion assume a tela inteira'} · clique pra alternar`
+                    : `Tipo: ${isAvatar ? 'avatar' : 'b-roll'} · clique pra alternar`}
                 >
-                  {isAvatar ? '👤 Avatar' : '🖥️ B-roll'}
+                  {editMode
+                    ? (isAvatar ? '🎥 Vídeo' : '🖥️ B-roll')
+                    : (isAvatar ? '👤 Avatar' : '🖥️ B-roll')}
                 </button>
                 {carouselRole && (
                   <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide ${

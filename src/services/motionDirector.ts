@@ -72,6 +72,14 @@ export const planMotionsForScript = async (input: {
   outputLanguage?: string;
   /** Edit-video pipeline: overlays float over real footage — restrict to overlay-safe templates. */
   overlayContext?: boolean;
+  /**
+   * Edit-video rule: every scene covers its block START TO END (no gaps —
+   * outside the window there's only raw footage, which reads as a hole).
+   * The dynamism comes from INSIDE the motion: beats changing every 2-4s
+   * anchored at the words. Creation keeps anchored windows (the avatar
+   * fills the rest there).
+   */
+  continuousCoverage?: boolean;
 }): Promise<Map<string, DirectorPlanItem>> => {
   const empty = new Map<string, DirectorPlanItem>();
   if (input.blocks.length === 0) return empty;
@@ -109,9 +117,15 @@ export const planMotionsForScript = async (input: {
     'Você é o DIRETOR DE CENAS de motion graphics de um Reel. Você recebe o roteiro completo, os blocos com seus tempos e os word-timestamps da narração. Planeje o motion de CADA bloco seguindo as regras do guia:',
     '',
     'REGRAS DO GUIA (obrigatórias):',
-    '• Uma cena por ideia falada — o motion ilustra UMA ideia, não o bloco inteiro.',
-    '• Duração da cena: 3–8s, sincronizada com o trecho falado que ela ilustra.',
-    '• ANCORE cada motion na palavra-chave: startOffsetSec = tempo (local do bloco) onde a palavra-chave é falada. O motion entra QUANDO a ideia é dita, nunca antes.',
+    input.continuousCoverage
+      ? '• COBERTURA CONTÍNUA: cada cena cobre o bloco INTEIRO (startOffsetSec=0, durationSec=duração total do bloco). NUNCA deixe trecho de fala sem motion — fora do motion só existe footage crua e isso lê como buraco. A variação vem de DENTRO: planeje beats internos trocando a cada 2–4s, ancorados nas palavras.'
+      : '• Uma cena por ideia falada — o motion ilustra UMA ideia, não o bloco inteiro.',
+    input.continuousCoverage
+      ? ''
+      : '• Duração da cena: 3–8s, sincronizada com o trecho falado que ela ilustra.',
+    input.continuousCoverage
+      ? ''
+      : '• ANCORE cada motion na palavra-chave: startOffsetSec = tempo (local do bloco) onde a palavra-chave é falada. O motion entra QUANDO a ideia é dita, nunca antes.',
     '• Blocos B-ROLL: o motion É o conteúdo (tela cheia) — startOffsetSec=0 e durationSec = duração total do bloco.',
     '• Blocos AVATAR: o motion flutua sobre o apresentador — janela curta ancorada na palavra. templateId SEMPRE null nesses blocos (templates são designs de tela cheia e cobririam o rosto): escolha um styleHint.',
     '• Varie o visual entre blocos consecutivos (nunca o mesmo template 2× seguidas).',
@@ -171,8 +185,9 @@ export const planMotionsForScript = async (input: {
           : undefined;
         let startOffsetSec: number;
         let durationSec: number;
-        if (block.kind === 'broll' || blockDur < 3) {
-          // B-roll: the motion IS the content. Tiny blocks: no room to anchor.
+        if (input.continuousCoverage || block.kind === 'broll' || blockDur < 3) {
+          // Continuous coverage (edit mode), b-roll (motion IS the content)
+          // and tiny blocks: full span, no window.
           startOffsetSec = 0;
           durationSec = blockDur;
         } else {

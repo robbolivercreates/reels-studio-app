@@ -49,12 +49,19 @@ export interface SegmentOptions {
   maxBlockSec?: number;
   /** Hard cap on words per block before forcing a split. */
   maxWordsPerBlock?: number;
+  /**
+   * Block kind for the segmented blocks. In edit-video mode the footage IS a
+   * person talking → 'avatar' ("🎥 Vídeo": motion floats over it); 'broll'
+   * means the motion takes the whole frame for that segment.
+   */
+  defaultKind?: 'avatar' | 'broll';
 }
 
 const DEFAULTS: Required<SegmentOptions> = {
   silenceGapSec: 0.6,
   maxBlockSec: 8,
   maxWordsPerBlock: 40,
+  defaultKind: 'broll',
 };
 
 const SENTENCE_END = /[.!?…]["')\]]?$/;
@@ -105,7 +112,7 @@ export const segmentWordsIntoBlocks = (
   words: RawWord[],
   opts: SegmentOptions = {},
 ): { blocks: ScriptBlock[]; words: WordTimestamp[] } => {
-  const { silenceGapSec, maxBlockSec, maxWordsPerBlock } = { ...DEFAULTS, ...opts };
+  const { silenceGapSec, maxBlockSec, maxWordsPerBlock, defaultKind } = { ...DEFAULTS, ...opts };
   if (words.length === 0) return { blocks: [], words: [] };
 
   const blocks: ScriptBlock[] = [];
@@ -119,7 +126,7 @@ export const segmentWordsIntoBlocks = (
     if (curWords.length === 0) return;
     blocks.push({
       id: curId,
-      kind: 'broll',
+      kind: defaultKind,
       text: curWords.map(w => w.word).join(' ').replace(/\s+([,.!?…;:])/g, '$1').trim(),
       start: curStart,
       end: endTime,

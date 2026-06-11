@@ -126,10 +126,21 @@ export const buildStateFromSnapshot = async (
     return next;
   });
 
+  // Migrate pre-role edit projects: transcript blocks used to be created as
+  // 'broll' across the board (before kind meant anything in edit mode). Under
+  // the per-fala role semantics, 'broll' now means "motion takes the whole
+  // frame" — an all-broll old project would render every overlay full-screen.
+  // If EVERY block is broll in an edit project, it's the old default → flip
+  // to 'avatar' ("🎥 Vídeo"). Mixed kinds = user already chose; leave alone.
+  const isEditProject = (snapshot.projectMode ?? 'generate') === 'edit';
+  const finalBlocks = isEditProject && migratedBlocks.length > 0 && migratedBlocks.every(b => b.kind === 'broll')
+    ? migratedBlocks.map(b => ({ ...b, kind: 'avatar' as const }))
+    : migratedBlocks;
+
   return {
     activeProjectId,
     projectName: snapshot.projectName,
-    blocks: migratedBlocks,
+    blocks: finalBlocks,
     audio: {
       ...snapshot.audio,
       silenceCut: snapshot.audio.silenceCut ?? false,
