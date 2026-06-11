@@ -3806,9 +3806,16 @@ export const ReelsStudio: React.FC = () => {
                 if (el.kind === 'motion' && el.motion?.status === 'ready') {
                   // AI-generated motion clip — unified placement drives the
                   // preview exactly like the export compositor (float/split/full).
+                  // CRITICAL: this wrapper must NOT have a z-index. A z-index
+                  // here creates a stacking context that ISOLATES the inner
+                  // mix-blend-mode:screen — the blend stops seeing the base
+                  // video (a sibling) and the float's black canvas renders
+                  // OPAQUE over the footage ("flutuar não flutua"). The inner
+                  // MotionLayerOverlay layers (scrim z-25, motion z-30) order
+                  // themselves above the base video (z-5) in the root context.
                   const placement = placementOfElement(el);
                   return (
-                    <div key={el.id} className="absolute inset-0 pointer-events-none" style={{ zIndex: placement.area === 'full' ? 9 : 8 }}>
+                    <div key={el.id} className="absolute inset-0 pointer-events-none">
                       <MotionLayerOverlay
                         motion={el.motion}
                         playing={playing}

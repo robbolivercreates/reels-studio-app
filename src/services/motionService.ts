@@ -1659,11 +1659,12 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   // as __CREATOR_AVATAR__) and we substitute the real image post-generation.
   // Without this, only templates got real logos; the freeform path let
   // Gemini draw a fake geometric "C".
-  const { detectKnownBrand, fetchKnownBrandLogo } = await import('./logoFetchService');
+  const { detectKnownBrand, fetchKnownBrandLogo, getKnownBrandColors } = await import('./logoFetchService');
   const mentionedBrand = detectKnownBrand(input.blockText);
   const brandLogoPromise: Promise<string | null> = mentionedBrand
     ? fetchKnownBrandLogo(mentionedBrand).catch(() => null)
     : Promise.resolve(null);
+  const mentionedBrandColors = mentionedBrand ? getKnownBrandColors(mentionedBrand.name) : null;
 
   const ctx = input.reelContext;
   const recentIntents = [ctx?.prevPrevMotionIntent, ctx?.prevMotionIntent].filter(Boolean) as string[];
@@ -2450,7 +2451,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   // token is substituted in code after generation.
   const brandLogoSection = mentionedBrand ? [
     `╔══════════════════════════════════════════════════════╗`,
-    `  🏷 REAL BRAND LOGO AVAILABLE — ${mentionedBrand.name.toUpperCase()}`,
+    `  🏷 REAL BRAND ASSETS — ${mentionedBrand.name.toUpperCase()}`,
     `╚══════════════════════════════════════════════════════╝`,
     `The runtime has the REAL ${mentionedBrand.name} logo. Wherever the design`,
     `shows the ${mentionedBrand.name} logo/icon, emit EXACTLY:`,
@@ -2459,6 +2460,21 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     `NEVER draw a fake/approximate logo with SVG paths or letters — the real`,
     `asset always wins. Use the token at most ONCE unless the design truly`,
     `needs repeats.`,
+    ``,
+    `🎨 BRAND PALETTE LOCK (MANDATORY — the composition is ABOUT ${mentionedBrand.name}):`,
+    mentionedBrandColors
+      ? [
+          `  Base: black canvas + white/off-white text. Accents: ONLY the official`,
+          `  ${mentionedBrand.name} colors → ${mentionedBrandColors.join(', ')}.`,
+          `  Glows, highlights, buttons, keyword tints, progress fills: pick from`,
+          `  these accents. NO unrelated reds/blues/greens — a random palette next`,
+          `  to the real logo reads off-brand and amateur.`,
+        ].join('\n')
+      : [
+          `  Base: black canvas + white/off-white text + ONE accent color — the`,
+          `  brand's official primary (use the real one you know; if unsure, a`,
+          `  neutral cool accent). Never mix multiple unrelated hues.`,
+        ].join('\n'),
     ``,
   ].join('\n') : '';
 
