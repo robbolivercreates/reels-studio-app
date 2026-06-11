@@ -245,6 +245,12 @@ export interface ScreenTake {
   /** Trim points in seconds. trimEnd defaults to full duration. */
   trimStart: number;
   trimEnd: number;
+  /**
+   * Vertical framing shift, fraction of frame height (-0.4..0.4). Positive
+   * pulls the video DOWN (revealing black at the top — e.g. clearing space
+   * for a floating overlay), negative pulls it up. Edit-mode base video.
+   */
+  offsetY?: number;
   /** Whether to skip silent regions during playback. */
   cutSilence: boolean;
   /** Pre-computed keep segments (post-silence-detection). Empty until detection runs. */
@@ -499,6 +505,8 @@ export type ReelsAction =
   | { type: 'add-take'; take: ScreenTake }
   | { type: 'remove-take'; id: string }
   | { type: 'rename-take'; id: string; name: string }
+  /** Edit-video: vertical framing shift of the base video (fraction of frame height). */
+  | { type: 'set-base-video-offset-y'; offsetY: number }
   | { type: 'update-take'; id: string; patch: Partial<ScreenTake> }
   | { type: 'set-active-take'; id: string | null }
   // Convert the CURRENT project into edit-video mode, reusing the take that's

@@ -420,6 +420,9 @@ const frameAtProjectTime = (
       // keeps the frame alive without being noticeable as an effect.
       filter: 'contrast(1.06) saturate(1.08)',
       zoom: 1 + 0.025 * Math.min(1, t / Math.max(1, inputs.duration)),
+      // User framing shift (↕ Vídeo): positive pulls the footage down,
+      // revealing black at the top — room for floating overlays.
+      offsetY: inputs.baseVideoTake.offsetY ?? 0,
     };
     const layers: FrameLayer[] = [base];
     const decorations: FrameDecoration[] = [];

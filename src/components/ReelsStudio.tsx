@@ -3778,6 +3778,9 @@ export const ReelsStudio: React.FC = () => {
                 : splitArea === 'bottom-half'
                   ? { position: 'absolute', left: 0, right: 0, top: 0, width: '100%', height: '50%' }
                   : { position: 'absolute', inset: 0, width: '100%', height: '100%' };
+              // User framing shift (↕ Vídeo) — same offsetY semantics as the
+              // export compositor (fraction of the video box height).
+              const baseShift = state.baseVideoTake.offsetY ?? 0;
               return (
                 <>
                   <video
@@ -3788,7 +3791,10 @@ export const ReelsStudio: React.FC = () => {
                     playsInline
                     preload="auto"
                     className="z-[5]"
-                    style={{ ...baseStyle, objectFit: 'cover', backgroundColor: 'black', zIndex: 5 }}
+                    style={{
+                      ...baseStyle, objectFit: 'cover', backgroundColor: 'black', zIndex: 5,
+                      transform: baseShift !== 0 ? `translateY(${(baseShift * 100).toFixed(1)}%)` : undefined,
+                    }}
                   />
                   {splitArea && (
                     <div
@@ -4871,6 +4877,23 @@ export const ReelsStudio: React.FC = () => {
             <span className="text-[11px] font-semibold text-zinc-300 shrink-0">📼 Edição de vídeo</span>
             <span className="text-[10px] text-zinc-500 truncate">
               {state.baseVideoTake?.name ?? 'vídeo importado'} · {blocks.length} falas · {overlayMotions.length} overlay{overlayMotions.length === 1 ? '' : 's'}
+            </span>
+            {/* Vertical framing of the base video — live, applies to preview
+                AND export (FrameLayer.offsetY). Positive = video down (black
+                opens at the top for floating overlays). */}
+            <span className="flex items-center gap-1.5 shrink-0 ml-2" title="Desloca o vídeo verticalmente — abre espaço pro overlay (preview e export)">
+              <span className="text-[9.5px] text-zinc-500">↕ Vídeo</span>
+              <input
+                type="range" min={-40} max={40} step={1}
+                value={Math.round((state.baseVideoTake?.offsetY ?? 0) * 100)}
+                onChange={e => dispatch({ type: 'set-base-video-offset-y', offsetY: parseInt(e.target.value, 10) / 100 })}
+                className="w-24" style={{ accentColor: '#60A5FA', height: 3 }}
+              />
+              <button
+                onClick={() => dispatch({ type: 'set-base-video-offset-y', offsetY: 0 })}
+                className="text-[9px] w-9 text-right font-mono text-zinc-400 hover:text-zinc-200"
+                title="Clique pra zerar"
+              >{Math.round((state.baseVideoTake?.offsetY ?? 0) * 100)}%</button>
             </span>
             <button
               onClick={() => { if (!overlayGenerating && editTargets.length > 0) void handleGenerateOverlays(editTargets, 'auto', editDockValue.placement); }}

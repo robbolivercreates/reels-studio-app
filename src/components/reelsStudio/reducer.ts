@@ -876,6 +876,11 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
         takes: state.takes.map(t => t.id === action.id ? { ...t, name: action.name } : t),
       };
 
+    case 'set-base-video-offset-y':
+      return state.baseVideoTake
+        ? { ...state, baseVideoTake: { ...state.baseVideoTake, offsetY: action.offsetY } }
+        : state;
+
     case 'update-take':
       return {
         ...state,
