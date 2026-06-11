@@ -2948,17 +2948,22 @@ export const ReelsStudio: React.FC = () => {
   // Sync preview <video> with playhead.
   // Master clock = the <audio> element. The avatar <video> chases its currentTime.
   //
-  // Pitfall avoided here:
-  // - The effect runs on every playhead tick (~60Hz). Each tick measured the
-  //   gap and force-seeked if > 80ms. But on WebKit/HEVC HeyGen output, a seek
-  //   costs 100-400ms — during which playhead keeps advancing — so the next
-  //   tick saw an even bigger gap and seeked again. Result: constant stutter.
-  // - Fix: only force-seek on discrete events (play start, block change, big
-  //   jumps from a manual scrub). During steady playback we trust the <video>
-  //   to keep its own time once the initial seek lands.
+  // Sync strategy (3rd iteration — see git history for the previous two):
+  // 1. Per-tick force-seek (>80ms) — constant stutter: a WebKit seek costs
+  //    100-400ms, the playhead keeps advancing, every tick re-seeked.
+  // 2. Seek only on discrete events + free-run — no stutter, but two leaks:
+  //    (a) the discrete seek LANDS 100-400ms late (playhead advanced while
+  //        the decoder seeked), so every block started with a built-in lag
+  //        that never got corrected (stayed under the 350ms threshold);
+  //    (b) free-run drift accumulated up to 350ms, then a visible jump.
+  // 3. (current) Hard seek only for play-start / block-change / scrubs;
+  //    a short post-seek CHASE re-aligns once the seek lands; and during
+  //    steady playback an adaptive playbackRate (±12%, video is muted —
+  //    imperceptible) continuously converges the residual gap to zero.
+  //    No per-frame seeks, no jumps, no standing offset.
   const wasPlayingRef = useRef(false);
   const lastSyncedBlockIdRef = useRef<string | null>(null);
-  const lastDiagAtRef = useRef(0); // [DESYNC-DIAG] throttle — REMOVER depois
+  const chaseSyncRef = useRef(0); // pending post-seek re-alignments
   useEffect(() => {
     const v = previewVideoRef.current;
     if (!v || !currentBlock || currentBlock.kind !== 'avatar') return;
@@ -2966,48 +2971,51 @@ export const ReelsStudio: React.FC = () => {
     const slot = slotById.get(currentBlock.id);
     if (!slot) return;
     const target = Math.max(0, playhead - slot.projectStart);
-    const gap = Math.abs(v.currentTime - target);
-    // [DESYNC-DIAG] Fase 0 — log throttled (~3x/s) do gap avatar<>áudio durante o play.
-    // gap crescendo até ~0.35 = deriva do free-run (#4). gap grande já no início do
-    // bloco = offset do clip (#1). REMOVER depois.
-    if (playing) {
-      const now = performance.now();
-      if (now - lastDiagAtRef.current > 333) {
-        lastDiagAtRef.current = now;
-        console.log(
-          '[DESYNC-DIAG/preview] block', currentBlock.id,
-          '· playhead', playhead.toFixed(3),
-          '· projectStart', slot.projectStart.toFixed(3),
-          '· target', target.toFixed(3),
-          '· video.currentTime', v.currentTime.toFixed(3),
-          '· gap', gap.toFixed(3),
-          '· clipDur', Number.isFinite(v.duration) ? v.duration.toFixed(3) : 'n/a',
-          '· blockLen', (slot.projectEnd - slot.projectStart).toFixed(3),
-        );
-      }
-    }
+    const diff = target - v.currentTime; // >0 → vídeo atrasado em relação ao áudio
+    const gap = Math.abs(diff);
 
     const justStartedPlaying = playing && !wasPlayingRef.current;
     const blockChanged = lastSyncedBlockIdRef.current !== currentBlock.id;
-    // BIG jump = user scrubbed the timeline. Anything under 350ms while
-    // playing is treated as natural drift and left alone, so the <video>
-    // can play smoothly without being re-seeked every frame.
-    const bigJump = gap > 0.35;
+    // BIG jump = manual scrub. The adaptive rate below handles anything
+    // smaller without a seek.
+    const bigJump = gap > 0.5;
 
     if (justStartedPlaying || blockChanged || bigJump || !playing) {
       // While paused we ALSO sync at fine granularity so the scrubber updates
-      // the preview frame as the user drags. The expensive seek-loop only
-      // happens during playback — and there we now hold steady.
+      // the preview frame as the user drags.
       if (!playing && gap < 0.05) {
         // already aligned
       } else {
         try { v.currentTime = target; } catch { /* ignore */ }
+        // The seek will land late — schedule up to 2 chase re-alignments.
+        chaseSyncRef.current = playing ? 2 : 0;
       }
+      v.playbackRate = 1;
+    } else if (playing && chaseSyncRef.current > 0) {
+      // Post-seek chase: once the previous seek completed, measure how late
+      // it landed and re-align. Near-target seeks are fast (decoder warm),
+      // so 1-2 chases converge to <60ms at the START of the block instead
+      // of carrying a 100-400ms lag through it.
+      if (!v.seeking) {
+        if (gap > 0.06) {
+          try { v.currentTime = target; } catch { /* ignore */ }
+          chaseSyncRef.current -= 1;
+        } else {
+          chaseSyncRef.current = 0;
+        }
+      }
+    } else if (playing) {
+      // Steady playback: adaptive rate correction. The video is muted, so a
+      // ±12% rate is invisible; it converges a 0.3s drift in ~2.5s and then
+      // hovers at 1.0. This both eliminates accumulated free-run drift AND
+      // any residual post-seek offset — with zero seeks (zero stutter).
+      const rate = gap < 0.02 ? 1 : 1 + Math.max(-0.12, Math.min(0.12, diff * 0.6));
+      if (Math.abs(v.playbackRate - rate) > 0.005) v.playbackRate = rate;
     }
     wasPlayingRef.current = playing;
     lastSyncedBlockIdRef.current = currentBlock.id;
     if (playing && v.paused) v.play().catch(() => {});
-    if (!playing && !v.paused) v.pause();
+    if (!playing && !v.paused) { v.pause(); v.playbackRate = 1; }
   }, [playhead, playing, currentBlock, currentClip, slotById]);
 
   // When the src of the preview <video> swaps (block changed to a different
