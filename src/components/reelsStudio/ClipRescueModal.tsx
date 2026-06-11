@@ -16,6 +16,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { loadAllClipBlobs, renameClipBlob, deleteClipBlob } from './persistence';
 import { useModalChrome } from './modalChrome';
+import { confirmDialog } from './confirmService';
 import type { AppTheme } from './theme';
 import type { ScriptBlock, ReelsAction } from './types';
 
@@ -117,7 +118,7 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
   const handleAssign = async (oldBlockId: string, newBlockId: string, url: string) => {
     // If the target block already has a clip, warn before overwriting.
     if (blocksWithClip.has(newBlockId)) {
-      const ok = confirm(
+      const ok = await confirmDialog(
         'Este bloco já tem um clip atribuído. Reatribuir vai SUBSTITUIR o clip atual.\n\n' +
         'O clip antigo continua salvo no dispositivo e aparece aqui como órfão na próxima vez que abrir.\n\n' +
         'Deseja continuar?'
@@ -147,7 +148,7 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
   };
 
   const handleDelete = async (oldBlockId: string, url: string) => {
-    if (!confirm('Apagar este clip permanentemente do dispositivo?')) return;
+    if (!(await confirmDialog('Apagar este clip permanentemente do dispositivo?'))) return;
     try {
       await deleteClipBlob(oldBlockId);
       try { URL.revokeObjectURL(url); } catch { /* ignore */ }

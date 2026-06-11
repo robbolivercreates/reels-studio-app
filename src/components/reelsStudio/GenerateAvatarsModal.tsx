@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { confirmDialog } from './confirmService';
 import {
   loadAvatarPhotos,
   uploadAvatarPhotoFromFile,
@@ -73,8 +74,8 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
     setPasteName('');
   };
 
-  const handleDelete = (id: string) => {
-    if (!confirm('Remover esta foto?')) return;
+  const handleDelete = async (id: string) => {
+    if (!(await confirmDialog('Remover esta foto?'))) return;
     deleteAvatarPhoto(id);
     refresh();
     if (selectedPhotoId === id) setSelectedPhotoId(null);

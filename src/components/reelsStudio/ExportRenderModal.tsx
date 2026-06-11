@@ -3,6 +3,7 @@ import { renderMp4, type RenderProgress, type RenderHandle } from './mp4Renderer
 import { notifyDone } from './notify';
 import { saveExport, loadAudioBlob, type ExportRecord } from './persistence';
 import { detectExportCapability } from './exportCapability';
+import { confirmDialog } from './confirmService';
 import type { ReelsState, ScriptBlock } from './types';
 import { copyText } from './clipboard';
 import { generateInstagramCaption } from '../../services/captionService';
@@ -461,8 +462,8 @@ export const ExportRenderModal: React.FC<Props> = ({ open, state, audioBlob: aud
     }
   };
 
-  const cancelRender = () => {
-    if (!confirm('Cancelar exportação? O progresso será descartado.')) return;
+  const cancelRender = async () => {
+    if (!(await confirmDialog('Cancelar exportação? O progresso será descartado.', { confirmLabel: 'Cancelar exportação', cancelLabel: 'Continuar' }))) return;
     handleRef.current?.cancel();
   };
 

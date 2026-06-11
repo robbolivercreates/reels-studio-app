@@ -24,6 +24,7 @@ import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
 import { ClipRescueModal } from './reelsStudio/ClipRescueModal';
 import { InspectorPanel } from './reelsStudio/InspectorPanel';
 import { LandingScreen } from './reelsStudio/LandingScreen';
+import { confirmDialog } from './reelsStudio/confirmService';
 import { GuidedWizard, type GuidedExtras } from './reelsStudio/GuidedWizard';
 import { MontarBar } from './reelsStudio/MontarBar';
 import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
@@ -970,16 +971,33 @@ export const ReelsStudio: React.FC = () => {
   };
 
   const handleDeleteNamedProject = async (id: string) => {
-    await deleteNamedProject(id);
-    setSavedProjects(prev => prev.filter(p => p.id !== id));
-    // If the deleted project was the active one → switch to the most recent or create a new empty.
-    if (id === state.activeProjectId) {
-      const list = await listNamedProjects();
-      if (list.length > 0) {
-        await handleLoadNamedProject(list[0].id);
-      } else {
-        await handleNewProject();
+    console.log('[projects/delete] iniciando · id=', id, '· ativo=', id === state.activeProjectId);
+    try {
+      const wasActive = id === state.activeProjectId;
+      // ORDER MATTERS: when deleting the ACTIVE project, switch away FIRST.
+      // The debounced auto-save (120ms) writes the CURRENT state under its
+      // activeProjectId — deleting first and switching after left a window
+      // where the auto-save resurrected the just-deleted record ("clico em
+      // excluir e nada acontece": the project reappeared in the list).
+      if (wasActive) {
+        const list = (await listNamedProjects()).filter(p => p.id !== id);
+        if (list.length > 0) {
+          console.log('[projects/delete] projeto ativo — trocando para', list[0].id, 'antes de apagar');
+          await handleLoadNamedProject(list[0].id);
+        } else {
+          console.log('[projects/delete] projeto ativo e único — criando novo antes de apagar');
+          await handleNewProject();
+        }
       }
+      await deleteNamedProject(id);
+      setSavedProjects(prev => prev.filter(p => p.id !== id));
+      console.log('[projects/delete] apagado · id=', id);
+      // Tombstone: if a stale debounced save (scheduled while the old state
+      // was still mounted) lands after the delete, remove the record again.
+      setTimeout(() => { void deleteNamedProject(id).catch(() => {}); }, 600);
+    } catch (err) {
+      console.error('[projects/delete] falhou:', err);
+      alert('Erro ao excluir projeto: ' + (err instanceof Error ? err.message : String(err)));
     }
   };
 
@@ -4256,7 +4274,7 @@ export const ReelsStudio: React.FC = () => {
                                     {isSelected && <svg className="w-3.5 h-3.5 text-blue-400 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
                                   </button>
                                   <button
-                                    onClick={(e) => { e.stopPropagation(); if (confirm(`Remover a voz "${v.name}"?`)) { deleteClonedVoice(v.id); refreshClonedVoices(); } }}
+                                    onClick={async (e) => { e.stopPropagation(); if (await confirmDialog(`Remover a voz "${v.name}"?`)) { deleteClonedVoice(v.id); refreshClonedVoices(); } }}
                                     className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-red-400 transition-all"
                                     title="Remover"
                                   >

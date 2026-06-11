@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { deleteTakeBlob } from './persistence';
+import { confirmDialog } from './confirmService';
 import type { ScreenTake } from './types';
 
 interface Props {
@@ -106,7 +107,7 @@ export const TakesPanel: React.FC<Props> = ({
   };
 
   const handleDelete = async (take: ScreenTake) => {
-    if (!confirm(`Remover "${take.name}"?`)) return;
+    if (!(await confirmDialog(`Remover "${take.name}"?`))) return;
     await deleteTakeBlob(take.id);
     URL.revokeObjectURL(take.url);
     onRemoveTake(take.id);

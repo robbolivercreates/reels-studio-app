@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { confirmDialog } from './confirmService';
 import {
   ensureProfiles,
   upsertProfile,
@@ -74,9 +75,9 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
     setEditing(fresh);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (profiles.length <= 1) return;
-    if (!confirm('Apagar este perfil?')) return;
+    if (!(await confirmDialog('Apagar este perfil?'))) return;
     const next = deleteProfile(id);
     setProfiles(next);
     refresh();
@@ -252,8 +253,8 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
             </label>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => {
-                  if (editing.voiceDoc.trim().length > 0 && !confirm('Substituir o conteúdo atual pela Voz do Rob?')) return;
+                onClick={async () => {
+                  if (editing.voiceDoc.trim().length > 0 && !(await confirmDialog('Substituir o conteúdo atual pela Voz do Rob?', { danger: false, confirmLabel: 'Substituir' }))) return;
                   setEditing({ ...editing, voiceDoc: VOZ_ROB_BOLIVER });
                 }}
                 className="text-[10px] text-emerald-300 hover:text-emerald-200 underline font-medium"
@@ -262,8 +263,8 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
                 🎤 Voz do Rob
               </button>
               <button
-                onClick={() => {
-                  if (editing.voiceDoc.trim().length > 0 && !confirm('Substituir o conteúdo atual pelo template em branco?')) return;
+                onClick={async () => {
+                  if (editing.voiceDoc.trim().length > 0 && !(await confirmDialog('Substituir o conteúdo atual pelo template em branco?', { danger: false, confirmLabel: 'Substituir' }))) return;
                   setEditing({ ...editing, voiceDoc: VOICE_DOC_TEMPLATE });
                 }}
                 className="text-[10px] text-blue-300 hover:text-blue-200 underline"

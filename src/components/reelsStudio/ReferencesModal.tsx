@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
+import { confirmDialog } from './confirmService';
 import {
   listReferences,
   deleteReference,
@@ -171,7 +172,7 @@ export const ReferencesModal: React.FC<Props> = ({
 
   const handleDeleteFile = async (meta: ReferenceMeta, analysis: PersistedAnalysis | null) => {
     if (busy) return;
-    if (!confirm(`Apagar "${meta.fileName}" do disco?${analysis ? ' A análise será mantida no histórico.' : ''}`)) return;
+    if (!(await confirmDialog(`Apagar "${meta.fileName}" do disco?${analysis ? ' A análise será mantida no histórico.' : ''}`))) return;
     setBusy(meta.fileName);
     try {
       await deleteReference(meta.fileName);
@@ -394,8 +395,8 @@ export const ReferencesModal: React.FC<Props> = ({
                         )}
                         {!meta && analysis && (
                           <button
-                            onClick={() => {
-                              if (confirm('Remover essa análise do histórico?')) onRemoveAnalysis(analysis.createdAt);
+                            onClick={async () => {
+                              if (await confirmDialog('Remover essa análise do histórico?')) onRemoveAnalysis(analysis.createdAt);
                             }}
                             className="p-1.5 rounded-md text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                             title="Remover análise"

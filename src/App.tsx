@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ReelsStudio } from './components/ReelsStudio';
 import { SettingsModal } from './components/SettingsModal';
+import { ConfirmHost } from './components/reelsStudio/confirmService';
 
 export default function App() {
   const [hasRequiredKeys, setHasRequiredKeys] = useState<boolean | null>(null);
@@ -42,6 +43,7 @@ export default function App() {
         {showSettings && (
           <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} onSave={handleKeysSaved} />
         )}
+        <ConfirmHost />
       </div>
     );
   }
@@ -52,6 +54,9 @@ export default function App() {
       {showSettings && (
         <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} onSave={handleKeysSaved} />
       )}
+      {/* Custom confirm dialog host — window.confirm() is unreliable in the
+          Tauri WebView (silently returns false), see CLAUDE.md. */}
+      <ConfirmHost />
     </>
   );
 }

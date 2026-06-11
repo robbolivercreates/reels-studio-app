@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { VoiceProfilesPanel } from './reelsStudio/VoiceProfilesPanel';
+import { confirmDialog } from './reelsStudio/confirmService';
 import type { AppTheme } from './reelsStudio/types';
 import { useModalChrome } from './reelsStudio/modalChrome';
 import {
@@ -204,8 +205,8 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
     setVoiceFormError(null);
   };
 
-  const handleDeleteVoice = (id: string, name: string) => {
-    if (!confirm(`Remover "${name}" da lista?`)) return;
+  const handleDeleteVoice = async (id: string, name: string) => {
+    if (!(await confirmDialog(`Remover "${name}" da lista?`))) return;
     deleteClonedVoice(id);
     refreshClonedVoices();
     onClonedVoicesChange?.();
@@ -289,8 +290,8 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
     }
   };
 
-  const handleClear = (k: KeyConfig) => {
-    if (!confirm(`Remover a chave ${k.label}?`)) return;
+  const handleClear = async (k: KeyConfig) => {
+    if (!(await confirmDialog(`Remover a chave ${k.label}?`))) return;
     patchField(k.storageKey, { value: '', editing: true, validation: 'idle', validationMessage: '' });
   };
 
@@ -299,7 +300,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
       onClick={() => setActiveTab(id)}
       className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-colors ${
         activeTab === id
-          ? 'bg-violet-500/20 border border-violet-500/40 text-violet-100'
+          ? 'bg-blue-500/20 border border-blue-500/40 text-blue-100'
           : 'bg-white/5 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-white/10'
       }`}
     >
@@ -359,7 +360,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                 <div className="shrink-0">
                   <label className="cursor-pointer group">
                     <div
-                      className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 group-hover:border-violet-400 flex items-center justify-center overflow-hidden bg-white/5 transition-colors"
+                      className="w-20 h-20 rounded-full border-2 border-dashed border-white/20 group-hover:border-blue-400 flex items-center justify-center overflow-hidden bg-white/5 transition-colors"
                       title="Clique pra escolher uma foto"
                     >
                       {identity.avatarDataUrl ? (
@@ -394,7 +395,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                       value={identity.displayName}
                       onChange={e => patchIdentity({ displayName: e.target.value })}
                       placeholder="Rob Boliver"
-                      className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-violet-400 focus:outline-none"
+                      className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-blue-400 focus:outline-none"
                     />
                   </div>
                   <div>
@@ -403,7 +404,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                       value={identity.handle}
                       onChange={e => patchIdentity({ handle: e.target.value })}
                       placeholder="robboliver"
-                      className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-violet-400 focus:outline-none font-mono"
+                      className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-blue-400 focus:outline-none font-mono"
                     />
                     <div className="text-[9px] text-zinc-600 mt-1">O "@" é adicionado automaticamente.</div>
                   </div>
@@ -413,7 +414,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                       <select
                         value={identity.primaryPlatform ?? 'instagram'}
                         onChange={e => patchIdentity({ primaryPlatform: e.target.value as UserIdentity['primaryPlatform'] })}
-                        className="w-full px-2 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 focus:border-violet-400 focus:outline-none"
+                        className="w-full px-2 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 focus:border-blue-400 focus:outline-none"
                       >
                         <option value="instagram">Instagram</option>
                         <option value="tiktok">TikTok</option>
@@ -427,7 +428,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                         value={identity.followerCount ?? ''}
                         onChange={e => patchIdentity({ followerCount: e.target.value || undefined })}
                         placeholder="12.4K"
-                        className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-violet-400 focus:outline-none font-mono"
+                        className="w-full px-3 py-1.5 rounded bg-black/30 border border-white/10 text-xs text-zinc-200 placeholder-zinc-600 focus:border-blue-400 focus:outline-none font-mono"
                       />
                     </div>
                   </div>
@@ -443,7 +444,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                 type="checkbox"
                 checked={identity.autoFollowCta ?? true}
                 onChange={e => patchIdentity({ autoFollowCta: e.target.checked })}
-                className="mt-0.5 accent-violet-400"
+                className="mt-0.5 accent-blue-400"
               />
               <div className="flex-1">
                 <div className="text-xs font-medium text-zinc-200">Card "siga @perfil" no final do reel</div>
@@ -491,7 +492,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
             <button onClick={onClose} className="ml-auto py-2.5 px-4 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Fechar</button>
             <button
               onClick={handleIdentitySave}
-              className="py-2.5 px-5 rounded-lg bg-violet-500 hover:bg-violet-400 text-xs font-semibold text-white transition-colors"
+              className="py-2.5 px-5 rounded-lg bg-blue-500 hover:bg-blue-400 text-xs font-semibold text-white transition-colors"
             >
               Salvar
             </button>
@@ -518,7 +519,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                   value={newVoiceName}
                   onChange={e => setNewVoiceName(e.target.value)}
                   placeholder="Ex: Marina narradora"
-                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors"
+                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50 transition-colors"
                 />
               </div>
 
@@ -528,7 +529,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                   value={newVoiceId}
                   onChange={e => setNewVoiceId(e.target.value)}
                   placeholder="custom_voice_xxxxxxxxxxxx"
-                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors font-mono"
+                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50 transition-colors font-mono"
                 />
                 <div className="mt-1 text-[10px] text-zinc-600">
                   O ID que o Minimax retorna ao clonar uma voz. Aceita IDs próprios (do fal.ai) ou IDs públicos do catálogo Minimax.
@@ -540,7 +541,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                 <select
                   value={newVoiceModel}
                   onChange={e => setNewVoiceModel(e.target.value as MinimaxCloneModel)}
-                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50"
+                  className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50"
                 >
                   <option value="speech-02-hd">speech-02-hd · qualidade máxima (recomendado)</option>
                   <option value="speech-02-turbo">speech-02-turbo · mais rápido</option>
@@ -555,7 +556,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
 
               <button
                 onClick={handleAddVoice}
-                className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all"
+                className="w-full py-2 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white transition-all"
               >
                 Salvar voz
               </button>
@@ -575,7 +576,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                 <div className="space-y-1.5 max-h-[280px] overflow-y-auto pr-1">
                   {clonedVoices.map(v => (
                     <div key={v.id} className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-white/[0.03] border border-white/5">
-                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-violet-400 to-violet-600 flex items-center justify-center text-[9px] font-bold text-white shrink-0">
+                      <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-[9px] font-bold text-white shrink-0">
                         {v.name.slice(0, 1).toUpperCase()}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -622,7 +623,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
             <select
               value={motionModel}
               onChange={e => setMotionModel(e.target.value as MotionModelId)}
-              className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors"
+              className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50 transition-colors"
             >
               {MOTION_MODEL_OPTIONS.map(opt => (
                 <option key={opt.id} value={opt.id}>
@@ -638,7 +639,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                 type="checkbox"
                 checked={allowProFallback}
                 onChange={e => setAllowProFallback(e.target.checked)}
-                className="mt-0.5 accent-violet-400 shrink-0"
+                className="mt-0.5 accent-blue-400 shrink-0"
               />
               <div className="flex-1">
                 <div className="text-[11px] font-semibold text-zinc-200">Permitir Fallback para Gemini Pro</div>
@@ -668,7 +669,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                         href={k.helpUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-[9px] text-violet-300 hover:text-violet-200"
+                        className="text-[9px] text-blue-300 hover:text-blue-200"
                       >
                         pegar →
                       </a>
@@ -682,7 +683,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                     value={f.value}
                     onChange={e => patchField(k.storageKey, { value: e.target.value, validation: 'idle', validationMessage: '' })}
                     placeholder={k.placeholder}
-                    className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors font-mono"
+                    className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50 transition-colors font-mono"
                   />
                 ) : (
                   <div className="w-full px-3 py-2 rounded-lg bg-black/20 border border-white/5 text-sm text-zinc-300 font-mono flex items-center justify-between">
@@ -706,7 +707,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                   {!f.editing && f.value && (
                     <button
                       onClick={() => patchField(k.storageKey, { editing: true })}
-                      className="text-[10px] text-violet-300 hover:text-violet-200 transition-colors"
+                      className="text-[10px] text-blue-300 hover:text-blue-200 transition-colors"
                     >
                       editar
                     </button>
@@ -725,7 +726,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
                     <button
                       onClick={() => handleValidate(k)}
                       disabled={f.validation === 'validating'}
-                      className="text-[10px] px-2 py-0.5 rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/30 text-violet-200 transition-colors disabled:opacity-50"
+                      className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30 text-blue-200 transition-colors disabled:opacity-50"
                     >
                       {f.validation === 'validating' ? 'testando…' : 'testar'}
                     </button>
@@ -758,7 +759,7 @@ export const SettingsModal: React.FC<Props> = ({ isOpen, onClose, onSave, initia
           <button
             onClick={handleSave}
             disabled={!canSave}
-            className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+            className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Salvar
           </button>
