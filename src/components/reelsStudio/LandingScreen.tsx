@@ -22,6 +22,8 @@ interface LandingScreenProps {
   onNewProject: () => void;
   /** "Editar vídeo pronto" — upload a finished video, cut silences, add motions. */
   onEditVideo: () => void;
+  /** "Começar com meu áudio" — record/upload a voice that drives the whole reel. */
+  onStartWithAudio: () => void;
   /**
    * Dismiss the landing back to the current editor. Provided when the landing
    * is opened mid-session via the top-bar "Início" button (so the user can
@@ -32,7 +34,7 @@ interface LandingScreenProps {
 
 const VIOLET = '#60A5FA';
 
-export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, onNewProject, onEditVideo, onClose }: LandingScreenProps) {
+export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, onNewProject, onEditVideo, onStartWithAudio, onClose }: LandingScreenProps) {
   // ESC returns to the editor when the landing is dismissible.
   useEffect(() => {
     if (!onClose) return;
@@ -142,6 +144,27 @@ export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, on
           </div>
           <div className="text-xs leading-relaxed" style={{ color: tokens.text.tertiary }}>
             Subir um vídeo pronto, transcrever, cortar silêncios e ilustrar com motions.
+          </div>
+        </button>
+
+        {/* Começar com meu áudio */}
+        <button
+          onClick={onStartWithAudio}
+          className="w-[260px] text-left rounded-2xl p-7 transition-all hover:-translate-y-0.5"
+          style={{
+            backgroundColor: tokens.bg.surface,
+            border: `1px solid ${tokens.border.subtle}`,
+            cursor: 'pointer',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = VIOLET; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = tokens.border.subtle; }}
+        >
+          <div className="text-[32px] mb-3.5 leading-none">🎙</div>
+          <div className="text-[17px] font-bold mb-1.5" style={{ color: tokens.text.primary }}>
+            Começar com meu áudio
+          </div>
+          <div className="text-xs leading-relaxed" style={{ color: tokens.text.tertiary }}>
+            Grave (ou suba) sua voz — ela vira os blocos e o avatar fala com ela.
           </div>
         </button>
       </div>

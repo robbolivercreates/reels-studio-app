@@ -24,6 +24,7 @@ import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
 import { ClipRescueModal } from './reelsStudio/ClipRescueModal';
 import { InspectorPanel } from './reelsStudio/InspectorPanel';
 import { LandingScreen } from './reelsStudio/LandingScreen';
+import { RecordAudioModal } from './reelsStudio/RecordAudioModal';
 import { confirmDialog } from './reelsStudio/confirmService';
 import { GuidedWizard, type GuidedExtras } from './reelsStudio/GuidedWizard';
 import { MontarBar } from './reelsStudio/MontarBar';
@@ -255,6 +256,7 @@ export const ReelsStudio: React.FC = () => {
   const [landingDismissible, setLandingDismissible] = useState(false);
   // The light 3-step guided creation modal (opened from the landing "Novo").
   const [guidedOpen, setGuidedOpen] = useState(false);
+  const [recordAudioOpen, setRecordAudioOpen] = useState(false);
   // Populate the saved-project count so the landing "Abrir" card can show it
   // (without opening the full projects modal). Runs once on mount.
   useEffect(() => {
@@ -978,6 +980,63 @@ export const ReelsStudio: React.FC = () => {
     } catch (e) {
       console.error('[reels/edit-video]', e);
       alert('Erro ao processar o vídeo: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      editVideoProcessingRef.current = false;
+      setEditVideoStatus(null);
+    }
+  };
+
+  /**
+   * "Começar com meu áudio": recorded/uploaded voice → Whisper transcript →
+   * blocks with real timing → creation project whose avatars will lip-sync
+   * THIS audio. Mirrors processEditVideo minus the base video.
+   */
+  const processCreateFromAudio = async (blob: Blob, fileName: string) => {
+    editVideoProcessingRef.current = true;
+    setEditVideoStatus('Salvando o áudio…');
+    try {
+      const bytes = Array.from(new Uint8Array(await blob.arrayBuffer()));
+      // save_imported_video é um gravador de bytes genérico — serve pra áudio.
+      const ref = await invoke<{ absolute_path: string }>('save_imported_video', {
+        bytes, originalName: fileName,
+      });
+
+      setEditVideoStatus('Preparando o áudio…');
+      // ffmpeg lê qualquer container de áudio: 16k mono pro Whisper + 44.1k pro playback.
+      const [wavPath, hqResult] = await Promise.all([
+        invoke<string>('extract_audio', { videoPath: ref.absolute_path }),
+        invoke<string>('extract_audio_playback', { videoPath: ref.absolute_path })
+          .catch((e: unknown) => { console.warn('[reels/audio-import] extração HQ falhou — usando 16k:', e); return null; }),
+      ]);
+
+      setEditVideoStatus('Transcrevendo com Whisper… (1ª vez baixa o modelo)');
+      const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath });
+      const { blocks, words } = importWhisperTranscript(json, { defaultKind: 'avatar' });
+      if (blocks.length === 0) throw new Error('Não encontrei fala no áudio.');
+
+      setEditVideoStatus('Montando a timeline…');
+      const audioUrl = convertFileSrc(hqResult ?? wavPath);
+      const arr = await (await fetch(audioUrl)).arrayBuffer();
+      const ctx = new AudioContext();
+      const buf = await ctx.decodeAudioData(arr.slice(0));
+      const peaks = computePeaks(buf);
+      const duration = buf.duration;
+      ctx.close();
+      // sliceAudioByBlocks/export leem o master daqui.
+      const audioBlob = new Blob([arr], { type: 'audio/wav' });
+      audioBlobRef.current = audioBlob;
+      try { await saveAudioBlob(audioBlob); } catch { /* non-fatal */ }
+
+      revokeStateUrls(state);
+      clearCutSession();
+      try { window.localStorage.removeItem('reels.activeProjectId'); } catch { /* ignore */ }
+      dispatch({ type: 'hydrate', state: { ...INITIAL_STATE, projectName: `Voz · ${fileName.replace(/\.[^.]+$/, '')}`, activeProjectId: null } });
+      dispatch({ type: 'audio-project-loaded', blocks, audioUrl, duration, peaks, words });
+      setRecordAudioOpen(false);
+      setAppView('editor');
+    } catch (e) {
+      console.error('[reels/audio-import]', e);
+      alert('Erro ao processar o áudio: ' + (e instanceof Error ? e.message : String(e)));
     } finally {
       editVideoProcessingRef.current = false;
       setEditVideoStatus(null);
@@ -3251,11 +3310,19 @@ export const ReelsStudio: React.FC = () => {
           onOpenProject={handleOpenProjects}
           onNewProject={() => setGuidedOpen(true)}
           onEditVideo={handleEditVideo}
+          onStartWithAudio={() => setRecordAudioOpen(true)}
           // Dismissible only when opened mid-session via "Início" (not on the
           // first cold-start welcome, where the user must pick an action).
           onClose={landingDismissible ? () => { setLandingDismissible(false); setAppView('editor'); } : undefined}
         />
       )}
+
+      {/* "Começar com meu áudio" — gravar/subir voz que guia o reel */}
+      <RecordAudioModal
+        open={recordAudioOpen}
+        onClose={() => setRecordAudioOpen(false)}
+        onConfirm={(blob, name) => void processCreateFromAudio(blob, name)}
+      />
 
       {/* Hidden picker for "Editar vídeo pronto" */}
       <input
@@ -6777,9 +6844,9 @@ export const ReelsStudio: React.FC = () => {
         // numbers between the two flows.
         const pricePerSec = PRICE_PER_SECOND_BY_MODEL[effectiveModel] ?? PRICE_PER_AVATAR_SECOND;
         const cost = visible * pricePerSec;
+        // Avatar 4 retirado: mesmo custo do V ($0.058/s), qualidade inferior.
         const modelOptions: { id: HeyGenModelChoice; label: string; hint: string }[] = [
-          { id: 'avatar5', label: 'Avatar V',  hint: 'mais realista' },
-          { id: 'avatar4', label: 'Avatar 4', hint: 'recomendado' },
+          { id: 'avatar5', label: 'Avatar V', hint: 'recomendado · mais realista' },
           { id: 'avatar3', label: 'Avatar 3', hint: 'mais barato' },
         ];
         return (

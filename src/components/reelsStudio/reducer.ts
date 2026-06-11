@@ -29,7 +29,7 @@ export const INITIAL_STATE: ReelsState = {
   selectedVoiceId: 'Wise_Woman',
   aspect: '9:16',
   avatarClips: {},
-  avatarModel: 'avatar4',
+  avatarModel: 'avatar5',
   selectedPhotoId: null,
   takes: [],
   activeTakeId: null,
@@ -707,6 +707,31 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
         activeTakeId: action.baseVideoTake.id,
         blocks: action.blocks,
         overlayElements: [],
+        avatarClips: {},
+        audio: {
+          status: 'ready',
+          url: action.audioUrl,
+          duration: action.duration,
+          peaks: action.peaks,
+          words: action.words,
+          voiceId: null,
+          error: null,
+          silenceCut: state.audio.silenceCut,
+          silencePreset: state.audio.silencePreset,
+          keepSegments: [],
+          detectedSilenceSec: 0,
+          detectingSilence: false,
+        },
+      };
+    }
+
+    case 'audio-project-loaded': {
+      // "Começar com meu áudio": the user's own voice is the master audio.
+      // Mirrors edit-video-loaded minus the base video — normal creation
+      // project (avatars will lip-sync this audio per block).
+      return {
+        ...state,
+        blocks: action.blocks,
         avatarClips: {},
         audio: {
           status: 'ready',

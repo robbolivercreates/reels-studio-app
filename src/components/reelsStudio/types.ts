@@ -529,6 +529,17 @@ export type ReelsAction =
       peaks: number[];
       words: WordTimestamp[];
     }
+  | {
+      // "Começar com meu áudio": recorded/uploaded voice becomes the master
+      // audio + Whisper-segmented blocks; avatars are generated FROM it.
+      // Creation-mode sibling of edit-video-loaded (no base video).
+      type: 'audio-project-loaded';
+      blocks: ScriptBlock[];
+      audioUrl: string;
+      duration: number;
+      peaks: number[];
+      words: WordTimestamp[];
+    }
   | { type: 'hydrate'; state: ReelsState };
 
 export const WAVEFORM_BUCKETS = 240;

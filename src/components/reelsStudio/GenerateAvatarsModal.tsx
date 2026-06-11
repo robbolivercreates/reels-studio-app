@@ -35,7 +35,8 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(
     initialPhotoId ?? photos[0]?.id ?? null,
   );
-  const [model, setModel] = useState<HeyGenModelChoice>(initialModel);
+  // avatar4 saiu da UI (mesmo custo do V) — clamp pra não abrir sem seleção.
+  const [model, setModel] = useState<HeyGenModelChoice>(initialModel === 'avatar4' ? 'avatar5' : initialModel);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
@@ -261,27 +262,12 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
                 </div>
                 <div className="text-left flex-1">
                   <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
-                    Avatar V <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 uppercase tracking-wider">Novo</span>
+                    Avatar V <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 uppercase tracking-wider">Recomendado</span>
                   </div>
                   <div className="text-[10px] text-zinc-500 mt-0.5">Mais realista · sem drift em vídeos longos · 1080p · ${PRICE_PER_SECOND.avatar5.toFixed(3)}/s · requer foto compatível</div>
                 </div>
               </button>
-              <button
-                onClick={() => setModel('avatar4')}
-                className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all ${
-                  model === 'avatar4' ? 'bg-blue-500/15 border-blue-400/50' : 'bg-black/20 border-white/10 hover:border-white/20'
-                }`}
-              >
-                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${model === 'avatar4' ? 'border-blue-400 bg-blue-400' : 'border-zinc-500'}`}>
-                  {model === 'avatar4' && <div className="w-1.5 h-1.5 bg-white rounded-full m-auto mt-[3px]"></div>}
-                </div>
-                <div className="text-left flex-1">
-                  <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
-                    Avatar 4 <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 uppercase tracking-wider">Recomendado</span>
-                  </div>
-                  <div className="text-[10px] text-zinc-500 mt-0.5">Mais novo · expressões naturais · 1080p · ${PRICE_PER_SECOND.avatar4.toFixed(3)}/s</div>
-                </div>
-              </button>
+              {/* Avatar 4 retirado: mesmo custo do V ($0.058/s), qualidade inferior. */}
               <button
                 onClick={() => setModel('avatar3')}
                 className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all ${

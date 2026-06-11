@@ -162,7 +162,8 @@ export const buildStateFromSnapshot = async (
     selectedVoiceId: snapshot.selectedVoiceId,
     aspect: snapshot.aspect,
     avatarClips: restoredClips,
-    avatarModel: snapshot.avatarModel,
+    // avatar4 saiu das opções (mesmo custo do 5) — projetos antigos migram pro 5.
+    avatarModel: snapshot.avatarModel === 'avatar4' ? 'avatar5' : snapshot.avatarModel,
     selectedPhotoId: snapshot.selectedPhotoId,
     takes: restoredTakes,
     activeTakeId: snapshot.activeTakeId && restoredTakes.some(t => t.id === snapshot.activeTakeId)
