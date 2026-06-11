@@ -5130,7 +5130,13 @@ export const ReelsStudio: React.FC = () => {
            for overlay generation via the scene director. ── */}
       {aspect !== 'carousel' && state.projectMode === 'edit' && blocks.length > 0 && (() => {
         const overlayMotions = (state.overlayElements ?? []).filter(e => e.kind === 'motion');
-        const editTargets = blocks.filter(x => (x.end - x.start) >= 1.0);
+        const hasReadyOverlay = (blockId: string) =>
+          (state.overlayElements ?? []).some(e => e.id === `ovmot_${blockId}` && e.kind === 'motion' && e.motion?.status === 'ready');
+        const eligible = blocks.filter(x => (x.end - x.start) >= 1.0);
+        // Só as que FALTAM — quem já tem overlay pronto não regenera por aqui
+        // (regerar é por fala, no Dock).
+        const editTargets = eligible.filter(x => !hasReadyOverlay(x.id));
+        const allDone = eligible.length > 0 && editTargets.length === 0;
         return (
           <div className="flex items-center gap-3 px-4 py-2 border-t border-b border-white/5" style={{ backgroundColor: '#111114' }}>
             <span className="text-[11px] font-semibold text-zinc-300 shrink-0">📼 Edição de vídeo</span>
@@ -5158,9 +5164,14 @@ export const ReelsStudio: React.FC = () => {
               onClick={() => { if (!overlayGenerating && editTargets.length > 0) void handleGenerateOverlays(editTargets, 'auto', editDockValue.placement); }}
               disabled={overlayGenerating || editTargets.length === 0}
               className="ml-auto shrink-0 px-3.5 py-1.5 rounded-lg text-[11px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
-              style={{ background: 'linear-gradient(180deg, #60A5FA, #2563EB)', boxShadow: '0 2px 10px rgba(37,99,235,0.35)' }}
+              style={allDone
+                ? { backgroundColor: 'rgba(16,185,129,0.15)', color: '#6ee7b7', border: '1px solid rgba(16,185,129,0.4)' }
+                : { background: 'linear-gradient(180deg, #60A5FA, #2563EB)', boxShadow: '0 2px 10px rgba(37,99,235,0.35)' }}
+              title={allDone ? 'Todas as falas já têm overlay. Pra refazer uma, selecione a fala e use "Gerar pra esta fala" no Dock.' : 'Gera overlay só pras falas que ainda não têm'}
             >
-              {overlayGenerating ? '⏳ Gerando overlays…' : `⚡ Gerar overlays — diretor de cenas (${editTargets.length})`}
+              {overlayGenerating ? '⏳ Gerando overlays…'
+                : allDone ? '✓ Todas geradas'
+                : `⚡ Gerar overlays que faltam (${editTargets.length})`}
             </button>
             {(() => {
               const marked = blocks.filter(x => x.motionSetup);
@@ -5634,6 +5645,14 @@ export const ReelsStudio: React.FC = () => {
               if (state.projectMode === 'edit') {
                 const selected = selectedBlockId === b.id;
                 const isBrollRole = b.kind === 'broll';
+                // Overlay status — a fala "tem cena gerada?" precisa ser legível
+                // de relance: ✓ + faixa azul embaixo = gerado; ⏳ + faixa âmbar
+                // pulsando = gerando; nada = falta gerar.
+                const ovElId = `ovmot_${b.id}`;
+                const ovEl = (state.overlayElements ?? []).find(e => e.id === ovElId && e.kind === 'motion');
+                const ovBusyMsg = overlayBusy[ovElId];
+                const ovStatus: 'ready' | 'busy' | 'missing' =
+                  ovBusyMsg ? 'busy' : ovEl?.motion?.status === 'ready' ? 'ready' : ovEl ? 'busy' : 'missing';
                 return (
                   <div
                     key={b.id}
@@ -5649,14 +5668,23 @@ export const ReelsStudio: React.FC = () => {
                         ? 'rgba(96,165,250,0.6)'
                         : isBrollRole ? 'rgba(16,185,129,0.45)' : 'rgba(255,255,255,0.10)'}`,
                     }}
-                    title={`${b.text}${isBrollRole ? ' · 🖥️ B-roll: motion tela cheia' : ' · 🎥 Vídeo'}`}
+                    title={`${b.text}${isBrollRole ? ' · 🖥️ B-roll: motion tela cheia' : ' · 🎥 Vídeo'} · ${
+                      ovStatus === 'ready' ? '✓ overlay gerado' : ovStatus === 'busy' ? '⏳ gerando overlay…' : '○ sem overlay ainda'}`}
                   >
                     <div className="px-2 py-1 min-w-0">
                       <div className="text-[9px] truncate" style={{ color: selected ? '#dbeafe' : isBrollRole ? '#a7f3d0' : 'rgba(244,244,245,0.75)' }}>
+                        {ovStatus === 'ready' ? <span style={{ color: '#6ee7b7' }}>✓ </span> : ovStatus === 'busy' ? '⏳ ' : ''}
                         {b.motionSetup ? '🏷 ' : ''}{isBrollRole ? '🖥️ ' : ''}{b.text.slice(0, 48) || '(fala)'}
                       </div>
                       <div className="text-[8px] font-mono" style={{ color: 'rgba(161,161,170,0.7)' }}>{blockLen.toFixed(1)}s</div>
                     </div>
+                    {/* Faixa de status no pé do chip — independe da cor do papel (vídeo/b-roll). */}
+                    {ovStatus !== 'missing' && (
+                      <div
+                        className={`absolute bottom-0 left-0 right-0 h-[2.5px] ${ovStatus === 'busy' ? 'animate-pulse' : ''}`}
+                        style={{ backgroundColor: ovStatus === 'ready' ? '#34d399' : '#fbbf24' }}
+                      />
+                    )}
                   </div>
                 );
               }
