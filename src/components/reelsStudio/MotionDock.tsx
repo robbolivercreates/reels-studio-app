@@ -25,7 +25,7 @@ import {
 } from './motionStylePresets';
 import { TEMPLATE_PICKER_IDS, STYLE_PRESET_IDS, isHidden } from './presetCategory';
 import type { MotionPlacement } from './motionLibrary';
-import { FLOAT_SHIFT_TOP, FLOAT_SHIFT_MIDDLE, FLOAT_SHIFT_BOTTOM, DEFAULT_SCRIM_ALPHA } from './motionLibrary';
+import { FLOAT_SHIFT_TOP, FLOAT_SHIFT_MIDDLE, FLOAT_SHIFT_BOTTOM, DEFAULT_SCRIM_ALPHA, DEFAULT_SCRIM_SPREAD } from './motionLibrary';
 import type { MotionColorMode } from './types';
 
 /** Dock palette — graphite/steel, zero lilac. */
@@ -294,6 +294,7 @@ export const MotionDock: React.FC<Props> = ({
       </div>
       {sliderRow('Ajuste fino', -55, 12, 1, Math.round(shift * 100), v => `${v}%`, v => patchPlacement({ floatShiftY: v / 100 }))}
       {sliderRow('Contraste', 0, 80, 5, Math.round((value.placement.scrimAlpha ?? DEFAULT_SCRIM_ALPHA) * 100), v => v === 0 ? 'off' : `${v}%`, v => patchPlacement({ scrimAlpha: v / 100 }))}
+      {sliderRow('Grad. altura', 10, 45, 1, Math.round((value.placement.scrimSpread ?? DEFAULT_SCRIM_SPREAD) * 100), v => `${v}%`, v => patchPlacement({ scrimSpread: v / 100 }))}
     </div>
   );
 

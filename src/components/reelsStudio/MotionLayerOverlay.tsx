@@ -10,7 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { buildFullHtmlDoc } from '../../services/motionService';
 import type { MotionConfig, MotionLayer, MotionPlacement } from './motionLibrary';
-import { layerOfPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA } from './motionLibrary';
+import { layerOfPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA, DEFAULT_SCRIM_SPREAD } from './motionLibrary';
 
 interface Props {
   motion: MotionConfig;
@@ -219,8 +219,8 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer: la
     const a = Math.min(0.85, placement?.scrimAlpha ?? DEFAULT_SCRIM_ALPHA);
     if (a <= 0.005) return null;
     const cy = (FLOAT_CARD_CENTER + (placement?.floatShiftY ?? 0)) * 100; // % of frame
-    const spread = 28; // % — alpha 0 at cy±spread
-    const core = 10;   // % — full alpha at cy±core
+    const spread = (placement?.scrimSpread ?? DEFAULT_SCRIM_SPREAD) * 100; // % — alpha 0 at cy±spread
+    const core = spread * 0.36; // % — full alpha at cy±core (scales with band)
     return (
       <div
         className="pointer-events-none"

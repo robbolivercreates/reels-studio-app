@@ -810,6 +810,7 @@ export const ReelsStudio: React.FC = () => {
                     ...(existingEl.placement ?? v.placement),
                     floatShiftY: v.placement.floatShiftY,
                     scrimAlpha: v.placement.scrimAlpha,
+                    scrimSpread: v.placement.scrimSpread,
                     startOffsetSec: 0,
                     durationSec: dur,
                   },

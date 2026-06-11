@@ -18,7 +18,7 @@
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { ScriptBlock, AvatarClipState, ScreenTake, BlockLayout, BlockTransition, OverlayElement } from './types';
-import { type MotionPlacement, placementOfElement, resolveMotionPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA } from './motionLibrary';
+import { type MotionPlacement, placementOfElement, resolveMotionPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA, DEFAULT_SCRIM_SPREAD } from './motionLibrary';
 import { computeLayout, hitTest } from './timeline';
 import { getLayoutSlots, defaultAvatarZoom, type LayoutBox } from './layouts';
 
@@ -112,7 +112,7 @@ interface FrameLayer {
    * Float overlays need it — screen blend can only lighten, so light text
    * over bright footage washes out without a dark backdrop.
    */
-  scrim?: { centerY: number; alpha: number };
+  scrim?: { centerY: number; alpha: number; spread: number };
 }
 
 interface FrameDecoration {
@@ -205,6 +205,7 @@ const composeMotionLayer = (
             ? {
                 centerY: FLOAT_CARD_CENTER + (placement.floatShiftY ?? 0),
                 alpha: (placement.scrimAlpha ?? DEFAULT_SCRIM_ALPHA) * motionAlpha,
+                spread: placement.scrimSpread ?? DEFAULT_SCRIM_SPREAD,
               }
             : undefined,
         },
@@ -1426,8 +1427,8 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         // decoration) so it lands below the screen-blended motion.
         if (lyr.scrim && lyr.scrim.alpha > 0.005) {
           const cy = lyr.scrim.centerY * height;
-          const spread = height * 0.28;
-          const core = height * 0.10;
+          const spread = height * lyr.scrim.spread;
+          const core = spread * 0.36; // full-alpha core scales with the band
           const g = ctx.createLinearGradient(0, cy - spread, 0, cy + spread);
           const a = Math.min(0.85, lyr.scrim.alpha);
           g.addColorStop(0, 'rgba(0,0,0,0)');

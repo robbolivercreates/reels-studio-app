@@ -81,6 +81,12 @@ export interface MotionPlacement {
    * restores light-on-dark contrast. 0 = off, default 0.5, max 0.8.
    */
   scrimAlpha?: number;
+  /**
+   * float only: half-height of the contrast scrim as a fraction of the frame
+   * (alpha fades to 0 at center ± this). Default 0.28. Smaller = tighter band
+   * hugging the card (e.g. so the gradient never reaches the speaker's head).
+   */
+  scrimSpread?: number;
   /** Seconds into the block/segment before the motion appears. Default 0. */
   startOffsetSec?: number;
   /** Visible duration. Defaults to the full block/segment duration. */
@@ -94,6 +100,7 @@ export const FLOAT_SHIFT_BOTTOM = 0;     // as authored (below the chin)
 /** Normalized vertical center of the authored float card zone ((1114+1536)/2 / 1920). */
 export const FLOAT_CARD_CENTER = 0.69;
 export const DEFAULT_SCRIM_ALPHA = 0.5;
+export const DEFAULT_SCRIM_SPREAD = 0.28;
 
 export const DEFAULT_FLOAT_Y = 0.58;
 export const DEFAULT_FLOAT_HEIGHT = 0.22;
