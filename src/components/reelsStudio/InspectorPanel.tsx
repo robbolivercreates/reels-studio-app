@@ -85,6 +85,10 @@ interface Props {
    *  none attached. Inspector blocks the Gerar/Regerar action and surfaces an
    *  amber "anexe um asset" status so the user fixes the gap before retrying. */
   requiresAsset?: boolean;
+  /** Edit-video mode: Avatar/Layout/Voz tabs are creation machinery (HeyGen
+   *  avatar + media slots) — disabled here; the kind toggle reads 🎥 Vídeo /
+   *  🖥️ B-roll (the per-fala role) instead of the creation labels. */
+  editMode?: boolean;
 }
 
 const STORAGE_KEY_TAB = 'reels.inspector.tab';
@@ -214,6 +218,7 @@ export const InspectorPanel: React.FC<Props> = ({
   brandHasIdentity,
   audioWordCount,
   requiresAsset = false,
+  editMode = false,
 }) => {
   const tokens = getTheme(appTheme ?? 'dark');
   const isLight = (appTheme ?? 'dark') === 'light';
@@ -274,6 +279,9 @@ export const InspectorPanel: React.FC<Props> = ({
   // silently fall back to "motion" so they never see a blank body.
   const effectiveTab: InspectorTab = (() => {
     if (!block) return activeTab;
+    // Edit-video: Avatar/Layout/Voz are creation machinery (HeyGen avatar +
+    // media slots — placement lives in the Motion Dock there). Land on Stats.
+    if (editMode && (activeTab === 'avatar' || activeTab === 'layout' || activeTab === 'voz' || activeTab === 'motion')) return 'stats';
     if ((activeTab === 'avatar' || activeTab === 'voz') && !isAvatar) return 'layout';
     if (activeTab === 'motion') return 'layout'; // legacy sessionStorage value
     return activeTab;
@@ -282,6 +290,7 @@ export const InspectorPanel: React.FC<Props> = ({
   const headerText = (() => {
     if (isMultiSelect) return `${multiSelectCount} blocos selecionados`;
     if (isEmpty) return 'Nenhum bloco selecionado';
+    if (editMode) return `Editando · ${isAvatar ? 'vídeo' : 'b-roll'}`;
     return `Editando · ${isAvatar ? 'avatar' : 'b-roll'}`;
   })();
 
@@ -562,9 +571,9 @@ export const InspectorPanel: React.FC<Props> = ({
 
   // Motion tab removed — its home is the Motion Dock in the right panel.
   const tabs: { id: InspectorTab; label: string; disabled: boolean }[] = [
-    { id: 'avatar', label: 'Avatar', disabled: !block || block.kind !== 'avatar' },
-    { id: 'layout', label: 'Layout', disabled: !block },
-    { id: 'voz',    label: 'Voz',    disabled: !block || block.kind !== 'avatar' },
+    { id: 'avatar', label: 'Avatar', disabled: !block || editMode || block.kind !== 'avatar' },
+    { id: 'layout', label: 'Layout', disabled: !block || editMode },
+    { id: 'voz',    label: 'Voz',    disabled: !block || editMode || block.kind !== 'avatar' },
     { id: 'assets', label: 'Assets', disabled: !block },
     { id: 'stats',  label: 'Stats',  disabled: !block },
   ];
@@ -622,8 +631,10 @@ export const InspectorPanel: React.FC<Props> = ({
                   onClick={e => e.stopPropagation()}
                 >
                   {([
-                    { kind: 'avatar' as const, label: 'Avatar', icon: '👤' },
-                    { kind: 'broll'  as const, label: 'B-roll', icon: '🎞' },
+                    editMode
+                      ? { kind: 'avatar' as const, label: 'Vídeo', icon: '🎥' }
+                      : { kind: 'avatar' as const, label: 'Avatar', icon: '👤' },
+                    { kind: 'broll' as const, label: 'B-roll', icon: editMode ? '🖥️' : '🎞' },
                   ]).map(opt => {
                     const active = (block?.kind ?? 'avatar') === opt.kind;
                     return (
@@ -637,7 +648,9 @@ export const InspectorPanel: React.FC<Props> = ({
                           cursor: active ? 'default' : 'pointer',
                           border: 'none',
                         }}
-                        title={opt.kind === 'avatar' ? 'Bloco com avatar falando' : 'Bloco com B-roll (vídeo de apoio)'}
+                        title={editMode
+                          ? (opt.kind === 'avatar' ? 'Seu vídeo aparece (motion flutua por cima)' : 'B-roll: o motion assume a tela inteira nesta fala')
+                          : (opt.kind === 'avatar' ? 'Bloco com avatar falando' : 'Bloco com B-roll (vídeo de apoio)')}
                       >
                         <span>{opt.icon}</span>
                         <span>{opt.label}</span>

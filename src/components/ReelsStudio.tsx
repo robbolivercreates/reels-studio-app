@@ -4814,6 +4814,7 @@ export const ReelsStudio: React.FC = () => {
           <InspectorPanel
             block={selBlock}
             appTheme={state.appTheme}
+            editMode={state.projectMode === 'edit'}
             multiSelectCount={multiSelectIds.size}
             aspect={state.aspect}
             defaultZoom={selDefaultZoom}
