@@ -1,6 +1,7 @@
 import React, { useReducer, useCallback, useEffect, useRef, useState } from 'react';
 import type { ScriptBlock, BlockKind, ToneOption, LanguageOption, RegenerateContext, ContentMode } from './types';
 import { suggestContentMode } from '../../services/contentMode';
+import { loadSpeechStyleConfig, saveSpeechStyleConfig, type SpeechStyleConfig } from '../../services/speechStyle';
 import {
   generateCarouselScript,
   carouselSlidesToBlocks,
@@ -138,6 +139,8 @@ interface WizardState {
   contentMode: ContentMode;
   /** True until the user changes contentMode manually — lets the auto-suggest update silently. */
   contentModeAuto: boolean;
+  /** Per-generation speech style (Padrão vs Yap + subtipo + vivência). Persisted on generate. */
+  speechStyle: SpeechStyleConfig;
 
   // Interactive preview (replaces the old static generatedBlocks)
   previewBlocks: ScriptBlock[] | null;
@@ -218,6 +221,9 @@ const INITIAL: WizardState = {
   rewriteOverride: null,
   contentMode: 'adapt',
   contentModeAuto: true,
+  // Placeholder — the real last choice is loaded lazily at mount (useReducer
+  // init below) so it reflects changes made elsewhere (e.g. GuidedWizard).
+  speechStyle: { style: 'default' },
   previewBlocks: null,
   previewBusy: undefined,
   previewHeader: {},
@@ -382,6 +388,8 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
       : initialFormat
         ? { ...INITIAL, format: initialFormat, step: 'source' as const }
         : INITIAL,
+    // Lazy init: seed the speech style from the last choice at mount time.
+    (base) => ({ ...base, speechStyle: loadSpeechStyleConfig() }),
   );
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
   const { refs: libraryRefs, folder: libraryFolder, refresh: refreshLibrary } = useReferenceLibrary();
@@ -439,7 +447,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
 
   const activeProfile: VoiceProfile | undefined = profiles.find(p => p.id === ws.voiceProfileId);
 
-  /** Returns a profile clone with rewriteOverride + languageOverride applied. */
+  /** Returns a profile clone with rewriteOverride + languageOverride + speechStyle applied. */
   const profileForCall = useCallback((): VoiceProfile | undefined => {
     if (!activeProfile) return undefined;
     return {
@@ -448,8 +456,9 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
       outputLanguage: ws.languageOverride === 'auto'
         ? activeProfile.outputLanguage
         : (ws.languageOverride as VoiceProfile['outputLanguage']),
+      speechStyle: ws.speechStyle,
     };
-  }, [activeProfile, ws.rewriteOverride, ws.languageOverride]);
+  }, [activeProfile, ws.rewriteOverride, ws.languageOverride, ws.speechStyle]);
 
   // Word count for source 'script'.
   const scriptWordCount = ws.scriptText.trim().split(/\s+/).filter(Boolean).length;
@@ -471,6 +480,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
 
   const handleAnalyseUpload = useCallback(async () => {
     if (!ws.videoFile) return;
+    saveSpeechStyleConfig(ws.speechStyle);
     dispatch({ type: 'start-generate' });
     set('busyMessage', 'Salvando na pasta…');
     set('downloadProgress', null);
@@ -503,6 +513,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
 
   const handleDownloadAndAnalyse = useCallback(async () => {
     if (!ws.videoUrl.trim()) return;
+    saveSpeechStyleConfig(ws.speechStyle);
     dispatch({ type: 'start-generate' });
     set('busyMessage', 'Baixando…');
     set('downloadProgress', null);
@@ -587,6 +598,8 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     // Video source uses dedicated handlers (above) — never reach here.
     if (ws.source === 'video') return;
 
+    // Persist the speech-style choice so timeline/agent regeneration keeps it.
+    saveSpeechStyleConfig(ws.speechStyle);
     dispatch({ type: 'start-generate' });
     try {
       let blocks: ScriptBlock[];
@@ -974,6 +987,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   rewriteOverride={ws.rewriteOverride}
                   contentMode={ws.contentMode}
                   contentModeAuto={ws.contentModeAuto}
+                  speechStyle={ws.speechStyle}
                   disabled={ws.generating}
                   onSelectProfile={(id) => {
                     setActiveProfileId(id);
@@ -985,6 +999,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                     dispatch({ type: 'set-field', key: 'contentMode', value: mode });
                     dispatch({ type: 'set-field', key: 'contentModeAuto', value: false });
                   }}
+                  onChangeSpeechStyle={(cfg) => dispatch({ type: 'set-field', key: 'speechStyle', value: cfg })}
                   onEditProfiles={() => set('profilesPanelOpen', true)}
                 />
               )}

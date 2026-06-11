@@ -25,7 +25,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type { Locale } from './i18n';
 import { labelFor } from './toolLabels';
 import { resolveTextProvider, resolveMotionProvider } from './agentPrefs';
-import { ensureProfiles, buildVoicePromptSection } from '../reelsStudio/voiceProfile';
+import { activeProfileWithSpeechStyle, buildVoicePromptSection } from '../reelsStudio/voiceProfile';
 
 export type ChatRole = 'user' | 'assistant' | 'system' | 'tool' | 'error';
 
@@ -677,8 +677,7 @@ export function useAgentChat(locale: Locale, projectKey: string = '_default') {
         // services directly — different injection point).
         let voicePrompt: string | null = null;
         try {
-          const { profiles, activeId } = ensureProfiles();
-          const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+          const profile = activeProfileWithSpeechStyle();
           if (profile) voicePrompt = buildVoicePromptSection(profile);
         } catch {
           /* voice profile module not initialized yet — skip */

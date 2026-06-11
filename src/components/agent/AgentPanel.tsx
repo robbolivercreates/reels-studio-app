@@ -610,7 +610,9 @@ export const AgentPanel: React.FC<Props> = ({ open, onClose, appTheme, projectKe
 
           <textarea
             value={input}
-            onChange={e => setInput(e.target.value)}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    onChange={e => setInput(e.target.value)}
             onKeyDown={e => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();

@@ -1075,3 +1075,103 @@ App em execução: `npm run tauri dev` rodando, HMR funcionando.
 4. Considerar build de produção (`npm run tauri build`) — foi iniciado antes
    mas matei pra não competir recursos
 
+---
+
+## Stack de referência — feature "Editar vídeo pronto" (2026-05-28)
+
+Pipeline do PDF "Hyperframes — AI edited this video" + análise do repo
+`video-use`. Registro de nomes + endereços pra não perder a fonte.
+
+### Skills / repos / tools
+
+| Nome | Endereço | O que é | Status no nosso app |
+|---|---|---|---|
+| **Hyperframes** | https://github.com/heygen-com/hyperframes | Framework Apache-2.0: HTML+CSS+GSAP → vídeo (headless Chrome + FFmpeg) | ✅ **JÁ usado** — é o `src-tauri/src/motions.rs` + `motionService` |
+| **video-use** | https://github.com/browser-use/video-use | Claude Code skill (Python/`uv`): Transcribe→Pack→LLM→EDL→Render→Self-eval. **Não é lib** (não embute em app) | ❌ não instalado — usamos só as **ideias** (EDL + heurísticas de corte) |
+| **openai-whisper** | https://github.com/openai/whisper | STT local, word-level timestamps (`--word_timestamps True -f json`) | ✅ **instalado na máquina** (v20250625), ainda **não** no app |
+| **ElevenLabs Scribe** | https://elevenlabs.io | STT API com diarização — backend do video-use. Env `ELEVENLABS_API_KEY` | parcial (ElevenLabs já roteia via fal.ai no app) |
+| **FFmpeg** | https://ffmpeg.org | extrai áudio / encode | ✅ instalado (brew) + já shellado no `motions.rs` |
+| Remotion | https://remotion.dev | alternativa de animação (React→vídeo) | não usado |
+| Manim | https://www.manim.community | alternativa de animação (explainer/matemática) | não usado |
+| yt-dlp | https://github.com/yt-dlp/yt-dlp | baixar vídeo de URL (opcional) | não usado |
+
+Comunidade-fonte do PDF (upsell): `whop.com/actionable-ai/standard-3b` — marketing, opcional.
+
+### Instalar (só pro workflow PESSOAL no Claude Code — NÃO entra no app compilado)
+- Hyperframes: `npx skills add heygen-com/hyperframes`
+- video-use: `git clone https://github.com/browser-use/video-use && uv sync && brew install ffmpeg` + setar `ELEVENLABS_API_KEY` no `.env`
+
+### O que o video-use faz (capacidades, da análise do SKILL.md)
+1. Corta **silêncio** + **filler words** ("é…", "uh", falsos começos)
+2. **Multi-take**: escolhe o melhor take entre várias gravações da mesma fala
+3. **EDL** (edit decision list JSON): LLM lê o transcript e marca `{start,end,beat,quote,reason}` por trecho — corte com *motivo*
+4. **Color grade** (ASC CDL, presets tipo `warm_cinematic`)
+5. **Legendas** burn-in (SRT em coordenadas da timeline de saída)
+6. **Overlays de animação** (HyperFrames/Remotion/Manim/PIL como sub-agents paralelos)
+7. **Self-eval**: re-renderiza e valida cada corte (timeline_view ±1.5s), cap 3 passadas
+8. **Reestruturação narrativa** (HOOK→PROBLEM→SOLUTION lendo o transcript)
+
+### Heurísticas de corte do video-use (roubar pro nosso `silenceDetector`)
+- Silêncio **≥400ms** = ponto de corte seguro; 150–400ms só se o visual confirmar
+- **Nunca cortar no meio da palavra** — snap pra fronteira de palavra
+- **Padding 30–200ms** na borda do corte (absorve drift do transcript)
+- **Preservar picos** (risada/punchline) — estende o corte pra pegar a reação
+- Fade de áudio **30ms** em todo corte; legenda aplicada **por último**
+
+### Diferença de arquitetura (importante)
+video-use = editor **FFmpeg offline** (extract lossless + concat). Nosso
+`mp4Renderer` = compositor **canvas frame-a-frame**. → copiamos a
+**inteligência** (EDL) e as **heurísticas**, NÃO a receita FFmpeg dele.
+
+---
+
+## DECISÃO — Wave 2 redefinida: editor de ELEMENTOS overlay (edit-video) (2026-06-01)
+
+Decisão do usuário, importante: no modo edit-video o motion **NÃO é "1 motion
+por bloco"** (modelo do gerativo). É uma **coleção de elementos independentes**
+sobre o vídeo — cada um com tempo, posição, duração próprios — e o usuário
+**escolhe por elemento** se é overlay flutuante (vídeo aparece atrás) ou
+**tela inteira** (corta do rosto pra um gráfico full-frame). Mais perto de um
+editor tipo CapCut do que do reels gerativo.
+
+### NÃO MEXER no que existe (requisito explícito)
+- O gerativo continua: `block.motion` (1 motion/bloco, dono do quadro) +
+  prompt full-frame do `motionService`. **Intocado.**
+- Edit-video entra num caminho **isolado**, só ativo com `projectMode === 'edit'`.
+  O branch que já existe no `mp4Renderer.frameAtProjectTime` (`if (inputs.baseVideoTake)`)
+  já é separado do `composeForBlock` gerativo — os elementos overlay desenham
+  só ali.
+
+### Modelo de dados (novo, só edit mode)
+Nova estrutura project-level (não toca `block.motion`):
+```
+overlayElements: {
+  id, kind: 'caption' | 'icon' | 'callout' | 'badge' | 'number' | 'fullscreen-motion' | …,
+  startSec, durationSec,
+  anchor/position,            // canto, lower-third, livre…
+  mode: 'overlay' | 'fullscreen',  // ← o usuário escolhe por elemento
+  content,                    // texto / asset / spec do motion
+}[]
+```
+Renderer (edit branch): para cada elemento vivo no tempo t → desenha **por cima**
+do base video (overlay) ou **no lugar** dele (fullscreen) na janela do elemento.
+
+### Restrição técnica (do overlay)
+MP4 (h264) **não tem alpha**. Overlays "transparentes" = motion com **fundo
+preto puro** + só elementos claros → composite por **screen-blend** (mecanismo
+que já existe no renderer, hoje confinado num lower-third; estender pra
+posicionável). Fallback futuro p/ fidelidade total: render com alpha
+(VP9/ProRes 4444 ou sequência PNG) — só se screen-blend não bastar.
+
+### Implicação no motionService
+Quando um elemento for um motion-graphic, usar uma **variante de prompt
+"overlay mode"**: fundo preto puro (sem o atmosphere-bake obrigatório da
+[motionService.ts:369](src/services/motionService.ts#L369)), só foreground
+claro, **zonas livres pro rosto**. O prompt full-frame de hoje continua pro
+gerativo e pro elemento `fullscreen-motion`.
+
+### Status
+Decidido, **não implementado**. Wave 1 (import → base video + áudio master +
+preview + export) está em código mas não testada. Wave 1b (corte de silêncio)
+e esta Wave 2 (editor de elementos) são os próximos passos.
+

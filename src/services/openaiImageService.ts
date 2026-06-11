@@ -2,9 +2,10 @@
  * Carousel cover generation via fal-ai/gpt-image-2.
  * Uses FAL_KEY only — no separate OpenAI key needed.
  *
- * Two modes:
- *  - Text-only:  fal-ai/gpt-image-2        (prompt → image)
- *  - Edit mode:  fal-ai/gpt-image-2/edit   (prompt + reference photo → image)
+ * Modes:
+ *  - Text-only:           fal-ai/gpt-image-2        (prompt → image)
+ *  - Photo reference:     fal-ai/gpt-image-2/edit   (prompt + creator photo → image)
+ *  - Photo + brand logo:  fal-ai/gpt-image-2/edit   (prompt + creator photo + logo → image)
  */
 
 import { fal } from '@fal-ai/client';
@@ -22,26 +23,39 @@ export const hasCoverImageKey = (): boolean => !!localStorage.getItem('FAL_KEY')
  * Generate a cover image using GPT Image 2 via fal.ai.
  * Returns a CDN URL or base64 data-URI.
  *
- * @param prompt         Complete Rob Boliver-style prompt.
- * @param referencePhoto Optional base64 or data-URI of the creator's face photo.
+ * @param prompt           Complete Rob Boliver-style prompt.
+ * @param referencePhoto   Optional base64 or data-URI of the creator's face photo.
+ * @param brandLogoDataUri Optional base64 data-URI of the detected brand logo (e.g. Canva, Claude).
+ *                         When provided, both images are sent to the edit endpoint so GPT Image 2
+ *                         can render the real logo photo-realistically as the TOPIC ANCHOR in the scene.
  */
 export const generateCoverImage = async (
   prompt: string,
   referencePhoto?: string,
+  brandLogoDataUri?: string,
 ): Promise<string> => {
   ensureFalConfigured();
 
   let result: any;
 
   if (referencePhoto) {
-    const dataUri = referencePhoto.startsWith('data:')
+    const photoDataUri = referencePhoto.startsWith('data:')
       ? referencePhoto
       : `data:image/jpeg;base64,${referencePhoto}`;
 
+    const imageUrls = brandLogoDataUri
+      ? [photoDataUri, brandLogoDataUri]
+      : [photoDataUri];
+
+    // Tell the model how to use each reference image when a logo is present.
+    const logoInstruction = brandLogoDataUri
+      ? '\n\nREFERENCE IMAGES PROVIDED:\n- Image 1: creator\'s face photo — use for subject facial identity, hair, beard, build.\n- Image 2: brand logo — render it photo-realistically as the TOPIC ANCHOR in the scene (floating UI card, holographic display, or physical object on the desk, lit by the cyan hero light).'
+      : '';
+
     result = await fal.subscribe('fal-ai/gpt-image-2/edit' as any, {
       input: {
-        prompt,
-        image_urls: [dataUri],
+        prompt: prompt + logoInstruction,
+        image_urls: imageUrls,
         quality: 'high',
         output_format: 'png',
         num_images: 1,

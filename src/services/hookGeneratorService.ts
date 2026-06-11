@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
+import { buildYapHooksSystem } from './speechStyle';
 import { logActualCost } from './costPredictor';
 
 /**
@@ -205,8 +206,11 @@ export const generateHooks = async (
 ): Promise<Hook[]> => {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
+  // Yap swaps the copywriting archetypes for natural monologue openings
+  // (same title/type/content shape, so the response schema still applies).
+  const speech = options.voiceProfile?.speechStyle;
   const promptLines: string[] = [];
-  promptLines.push(HOOKS_SYSTEM);
+  promptLines.push(speech?.style === 'yap' ? buildYapHooksSystem(speech) : HOOKS_SYSTEM);
   promptLines.push('');
   promptLines.push('--- BRIEFING ---');
   promptLines.push(`Tema do vídeo: ${topic.trim()}`);

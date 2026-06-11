@@ -20,7 +20,7 @@ import type { MotionConfig } from '../reelsStudio/motionLibrary';
 import type { StylePresetId } from '../reelsStudio/motionStylePresets';
 import { regenerateBlock, generateNewBlock } from '../../services/blockGeneratorService';
 import { generateThumbnail } from '../../services/thumbnailService';
-import { ensureProfiles } from '../reelsStudio/voiceProfile';
+import { ensureProfiles, activeProfileWithSpeechStyle } from '../reelsStudio/voiceProfile';
 import {
   generateReelFromContent,
   fetchArticleFromUrl,
@@ -358,8 +358,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
 
               const prev = state.blocks[idx - 1];
               const next = state.blocks[idx + 1];
-              const { profiles, activeId } = ensureProfiles();
-              const profile = profiles.find(p => p.id === activeId);
+              const profile = activeProfileWithSpeechStyle();
               const updated = await regenerateBlock(
                 block,
                 { prev, next },
@@ -397,8 +396,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               let finalText = passthroughText;
               let provider: 'gemini' | 'claude' = 'claude';
               if (!finalText) {
-                const { profiles, activeId } = ensureProfiles();
-                const profile = profiles.find(p => p.id === activeId);
+                const profile = activeProfileWithSpeechStyle();
                 const created = await generateNewBlock(kind, prompt, { prev, next }, profile);
                 finalText = created.text;
                 finalKind = created.kind;
@@ -796,8 +794,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                 title = title ?? fetched.title;
                 sourceUrl = fetched.sourceUrl;
               }
-              const { profiles, activeId } = ensureProfiles();
-              const profile = profiles.find(p => p.id === activeId);
+              const profile = activeProfileWithSpeechStyle();
               const durationSec = Number(payload.duration_sec ?? 30) as DurationTarget;
               const style = (payload.style ? String(payload.style) : 'viral') as ReelStyle;
               const framework = (payload.framework ? String(payload.framework) : 'auto') as Framework;
@@ -884,8 +881,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                 await reply(call_id, false, null, 'O projeto está vazio — nada pra reescrever.');
                 return;
               }
-              const { profiles, activeId } = ensureProfiles();
-              const profile = profiles.find(p => p.id === activeId);
+              const profile = activeProfileWithSpeechStyle();
               const generated = await generateReelFromContent(
                 { text: currentText, title: state.projectName || undefined },
                 {
@@ -1516,8 +1512,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
                 // so flow stays coherent within the draft.
                 const prev = entry.blocks[idx - 1];
                 const next = entry.blocks[idx + 1];
-                const { profiles, activeId } = ensureProfiles();
-                const profile = profiles.find(p => p.id === activeId);
+                const profile = activeProfileWithSpeechStyle();
                 const result = await regenerateBlock(
                   target,
                   { prev, next },
@@ -1618,8 +1613,7 @@ export function useAgentToolBridge(refs: BridgeRefs): void {
               try {
                 const bytes = await invoke<number[] | Uint8Array>('read_reference_bytes', { fileName });
                 const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes as number[]);
-                const { profiles, activeId } = ensureProfiles();
-                const profile = profiles.find(p => p.id === activeId);
+                const profile = activeProfileWithSpeechStyle();
                 const result = await analyseReferenceFromBytes(arr, undefined, profile);
                 const { draftId, blocks: finalBlocks } = proposeDraftToChat({
                   blocks: result.blocks,

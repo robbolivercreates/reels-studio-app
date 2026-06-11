@@ -1,12 +1,19 @@
 /**
  * CoverSlideEditor — editable cover image panel for carousel wizards.
  *
- * Shows an editable prompt textarea, optional reference photo upload,
+ * Shows an editable prompt textarea, optional reference photo + brand logo,
  * and a "Gerar capa" button that calls GPT Image 2 via fal.ai.
  * Shared between CreationWizard and GuidedWizard.
  */
 
 import React, { useRef } from 'react';
+
+interface DetectedBrandProp {
+  name: string;
+  domain: string;
+  /** base64 data-URI fetched from Clearbit — null while loading, false if fetch failed */
+  logoDataUri: string | null | false;
+}
 
 interface Props {
   editedPrompt: string;
@@ -15,6 +22,8 @@ interface Props {
   generating: boolean;
   error: string | null;
   hasKey: boolean;
+  /** Brand detected from the topic (e.g. Canva, Claude). Shows logo + status. */
+  detectedBrand?: DetectedBrandProp | null;
   onPromptChange: (v: string) => void;
   onReferencePhotoChange: (v: string | null) => void;
   onGenerate: () => void;
@@ -27,6 +36,7 @@ export const CoverSlideEditor: React.FC<Props> = ({
   generating,
   error,
   hasKey,
+  detectedBrand,
   onPromptChange,
   onReferencePhotoChange,
   onGenerate,
@@ -42,7 +52,6 @@ export const CoverSlideEditor: React.FC<Props> = ({
       if (typeof result === 'string') onReferencePhotoChange(result);
     };
     reader.readAsDataURL(file);
-    // Reset input so same file can be re-uploaded
     e.target.value = '';
   };
 
@@ -86,15 +95,17 @@ export const CoverSlideEditor: React.FC<Props> = ({
           </div>
           <textarea
             value={editedPrompt}
-            onChange={e => onPromptChange(e.target.value)}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    onChange={e => onPromptChange(e.target.value)}
             rows={5}
             className="w-full bg-white/[0.03] border border-white/10 rounded-lg px-2.5 py-2 text-[10px] text-zinc-300 placeholder-zinc-600 resize-y focus:outline-none focus:border-cyan-500/40 transition-colors leading-relaxed"
             placeholder="Descreva a capa aqui — ou aguarde a geração automática…"
           />
         </div>
 
-        {/* Reference photo */}
-        <div className="flex items-center gap-2">
+        {/* Reference assets row: photo + brand logo */}
+        <div className="flex items-start gap-2 flex-wrap">
           <input
             ref={fileInputRef}
             type="file"
@@ -102,6 +113,8 @@ export const CoverSlideEditor: React.FC<Props> = ({
             className="hidden"
             onChange={handlePhotoUpload}
           />
+
+          {/* Creator reference photo */}
           {referencePhoto ? (
             <div className="flex items-center gap-2 flex-1 min-w-0">
               <img
@@ -109,7 +122,7 @@ export const CoverSlideEditor: React.FC<Props> = ({
                 alt="Foto de referência"
                 className="w-8 h-8 rounded-md object-cover shrink-0 border border-cyan-500/30"
               />
-              <span className="text-[10px] text-zinc-400 truncate flex-1">Foto de referência adicionada</span>
+              <span className="text-[10px] text-zinc-400 truncate flex-1">Foto de referência</span>
               <button
                 onClick={() => onReferencePhotoChange(null)}
                 className="text-[10px] text-zinc-600 hover:text-red-400 transition-colors shrink-0"
@@ -127,6 +140,30 @@ export const CoverSlideEditor: React.FC<Props> = ({
               </svg>
               Adicionar foto de referência
             </button>
+          )}
+
+          {/* Brand logo badge */}
+          {detectedBrand && (
+            <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-cyan-500/20 bg-cyan-500/5">
+              {detectedBrand.logoDataUri === null ? (
+                // Loading
+                <div className="w-4 h-4 border border-cyan-500/40 border-t-transparent rounded-full animate-spin" />
+              ) : detectedBrand.logoDataUri === false ? (
+                // Failed — show icon placeholder
+                <div className="w-4 h-4 rounded bg-white/10 flex items-center justify-center text-[8px] text-zinc-500">?</div>
+              ) : (
+                // Loaded
+                <img
+                  src={detectedBrand.logoDataUri}
+                  alt={`${detectedBrand.name} logo`}
+                  className="w-4 h-4 rounded object-contain bg-white"
+                />
+              )}
+              <span className="text-[9px] text-cyan-400">{detectedBrand.name}</span>
+              {typeof detectedBrand.logoDataUri === 'string' && (
+                <span className="text-[8px] text-zinc-600">logo detectado</span>
+              )}
+            </div>
           )}
         </div>
 

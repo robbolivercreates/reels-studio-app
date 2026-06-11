@@ -178,29 +178,35 @@ fn parse_yt_dlp_percent(line: &str) -> Option<f32> {
     rest[start..pct_idx].parse::<f32>().ok()
 }
 
-/// Download a video from any URL supported by yt-dlp (Instagram, TikTok, YouTube, Facebook, X…).
-/// Saves to the references folder and emits "reference://download-progress" events.
-/// Requires yt-dlp on PATH (system binary). Will be replaced by sidecar binary later.
-#[tauri::command]
-pub async fn download_video(app: AppHandle, url: String) -> Result<ReferenceMeta, String> {
-    let dir = ensure_references_dir()?;
+/// Returns true when the yt-dlp stderr output indicates a login/cookie problem.
+fn needs_cookies(stderr_lines: &[String]) -> bool {
+    let joined = stderr_lines.join(" ").to_lowercase();
+    joined.contains("login") || joined.contains("cookies") || joined.contains("rate-limit")
+        || joined.contains("not available") || joined.contains("private")
+        || joined.contains("authentication")
+}
 
-    let _ = app.emit("reference://download-progress", DownloadProgress {
-        stage: "starting".into(),
-        message: "Iniciando yt-dlp…".into(),
-        percent: None,
-    });
-
+/// Run yt-dlp once with the given extra args (e.g. cookies flag).
+/// Returns (success, stderr_lines, output_path).
+async fn run_ytdlp_once(
+    app: &AppHandle,
+    url: &str,
+    dir: &std::path::Path,
+    extra_args: &[&str],
+) -> Result<(bool, Vec<String>, Option<PathBuf>), String> {
     let mut cmd = Command::new("yt-dlp");
     cmd.arg("--no-playlist")
         .arg("--no-warnings")
         .arg("--restrict-filenames")
         .arg("--merge-output-format").arg("mp4")
         .arg("-f").arg("bv*+ba/b")
-        .arg("-P").arg(&dir)
+        .arg("-P").arg(dir)
         .arg("-o").arg("%(title).80B [%(id)s].%(ext)s")
-        .arg("--print").arg("after_move:filepath")
-        .arg(&url)
+        .arg("--print").arg("after_move:filepath");
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    cmd.arg(url)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -211,21 +217,24 @@ pub async fn download_video(app: AppHandle, url: String) -> Result<ReferenceMeta
     let stdout = child.stdout.take().ok_or_else(|| "yt-dlp sem stdout".to_string())?;
     let stderr = child.stderr.take().ok_or_else(|| "yt-dlp sem stderr".to_string())?;
 
-    let app_for_stderr = app.clone();
-    let stderr_handle = tokio::spawn(async move {
+    let app_clone = app.clone();
+    let stderr_handle: tokio::task::JoinHandle<Vec<String>> = tokio::spawn(async move {
+        let mut lines: Vec<String> = Vec::new();
         let mut reader = BufReader::new(stderr).lines();
         while let Ok(Some(line)) = reader.next_line().await {
             let percent = parse_yt_dlp_percent(&line);
             let stage = if percent.is_some() { "downloading" } else { "info" };
-            let _ = app_for_stderr.emit("reference://download-progress", DownloadProgress {
+            let _ = app_clone.emit("reference://download-progress", DownloadProgress {
                 stage: stage.into(),
-                message: line,
+                message: line.clone(),
                 percent,
             });
+            lines.push(line);
         }
+        lines
     });
 
-    let app_for_stdout = app.clone();
+    let app_clone2 = app.clone();
     let stdout_handle: tokio::task::JoinHandle<Option<PathBuf>> = tokio::spawn(async move {
         let mut found: Option<PathBuf> = None;
         let mut reader = BufReader::new(stdout).lines();
@@ -234,7 +243,7 @@ pub async fn download_video(app: AppHandle, url: String) -> Result<ReferenceMeta
             if trimmed.is_empty() { continue; }
             let percent = parse_yt_dlp_percent(trimmed);
             if let Some(p) = percent {
-                let _ = app_for_stdout.emit("reference://download-progress", DownloadProgress {
+                let _ = app_clone2.emit("reference://download-progress", DownloadProgress {
                     stage: "downloading".into(),
                     message: trimmed.into(),
                     percent: Some(p),
@@ -248,32 +257,128 @@ pub async fn download_video(app: AppHandle, url: String) -> Result<ReferenceMeta
     });
 
     let status = child.wait().await.map_err(|e| format!("yt-dlp travou: {e}"))?;
-    let _ = stderr_handle.await;
+    let stderr_lines = stderr_handle.await.unwrap_or_default();
     let final_path = stdout_handle.await.unwrap_or(None);
 
-    if !status.success() {
+    Ok((status.success(), stderr_lines, final_path))
+}
+
+/// Download a video from any URL supported by yt-dlp (Instagram, TikTok, YouTube, Facebook, X…).
+/// Auto-retries with browser cookies when Instagram/TikTok requires authentication.
+#[tauri::command]
+pub async fn download_video(app: AppHandle, url: String) -> Result<ReferenceMeta, String> {
+    let dir = ensure_references_dir()?;
+
+    // Attempt order: no cookies → Chrome cookies → Safari cookies
+    let attempts: &[(&str, &[&str])] = &[
+        ("Baixando…",                        &[]),
+        ("Tentando com cookies do Chrome…",  &["--cookies-from-browser", "chrome"]),
+        ("Tentando com cookies do Safari…",  &["--cookies-from-browser", "safari"]),
+    ];
+
+    let mut last_error = String::from("yt-dlp falhou.");
+
+    for (label, extra_args) in attempts {
         let _ = app.emit("reference://download-progress", DownloadProgress {
-            stage: "error".into(),
-            message: format!("yt-dlp saiu com código {:?}", status.code()),
+            stage: "starting".into(),
+            message: label.to_string(),
             percent: None,
         });
-        return Err(format!(
-            "yt-dlp falhou (exit {:?}). Verifique se o link é público e se yt-dlp está atualizado.",
-            status.code()
-        ));
+
+        match run_ytdlp_once(&app, &url, &dir, extra_args).await {
+            Err(e) => return Err(e), // spawn failure (yt-dlp not found) — stop immediately
+            Ok((true, _, Some(path))) => {
+                let meta = meta_for(&path, "url", Some(&url))?;
+                let _ = app.emit("reference://download-progress", DownloadProgress {
+                    stage: "done".into(),
+                    message: meta.file_name.clone(),
+                    percent: Some(100.0),
+                });
+                return Ok(meta);
+            }
+            Ok((true, _, None)) => {
+                // yt-dlp exited 0 but no file path found — treat as failure
+                last_error = "yt-dlp não retornou o caminho do arquivo.".into();
+                break;
+            }
+            Ok((false, stderr_lines, _)) => {
+                let error_detail: String = stderr_lines.iter()
+                    .filter(|l| !l.trim().is_empty() && !l.contains("[download]") && !l.contains("[info]"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                last_error = if error_detail.is_empty() {
+                    stderr_lines.last().cloned().unwrap_or_else(|| "erro desconhecido".into())
+                } else {
+                    error_detail
+                };
+
+                // Only retry with cookies if the error looks like an auth problem
+                if !needs_cookies(&stderr_lines) {
+                    break;
+                }
+                // Otherwise: loop continues to next attempt with cookies
+            }
+        }
     }
 
-    let path = final_path.ok_or_else(|| "yt-dlp não retornou caminho do arquivo.".to_string())?;
-    let _ = dir;
-    let meta = meta_for(&path, "url", Some(&url))?;
-
     let _ = app.emit("reference://download-progress", DownloadProgress {
-        stage: "done".into(),
-        message: meta.file_name.clone(),
-        percent: Some(100.0),
+        stage: "error".into(),
+        message: last_error.clone(),
+        percent: None,
     });
+    Err(last_error)
+}
 
-    Ok(meta)
+/// Fetch video metadata from a URL without downloading the video.
+/// Runs `yt-dlp --no-download --dump-json URL` and returns key social stats.
+#[tauri::command]
+pub async fn fetch_video_info(url: String) -> Result<VideoInfo, String> {
+    let output = Command::new("yt-dlp")
+        .arg("--no-playlist")
+        .arg("--no-warnings")
+        .arg("--dump-json")
+        .arg("--no-download")
+        .arg(&url)
+        .output()
+        .await
+        .map_err(|e| format!("yt-dlp não encontrado ({e}). Instale com: brew install yt-dlp"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(format!("yt-dlp falhou: {stderr}"));
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(raw.trim())
+        .map_err(|e| format!("JSON inválido do yt-dlp: {e}"))?;
+
+    Ok(VideoInfo {
+        title: json["title"].as_str().unwrap_or("").to_string(),
+        uploader: json["uploader"].as_str()
+            .or_else(|| json["channel"].as_str())
+            .unwrap_or("").to_string(),
+        view_count: json["view_count"].as_u64(),
+        like_count: json["like_count"].as_u64(),
+        duration_sec: json["duration"].as_f64().unwrap_or(0.0),
+        upload_date: json["upload_date"].as_str().unwrap_or("").to_string(),
+        description: json["description"].as_str().unwrap_or("").chars().take(500).collect(),
+        platform: json["extractor_key"].as_str().unwrap_or("").to_string(),
+        webpage_url: json["webpage_url"].as_str().unwrap_or(&url).to_string(),
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct VideoInfo {
+    pub title: String,
+    pub uploader: String,
+    pub view_count: Option<u64>,
+    pub like_count: Option<u64>,
+    pub duration_sec: f64,
+    pub upload_date: String,   // "YYYYMMDD"
+    pub description: String,
+    pub platform: String,
+    pub webpage_url: String,
 }
 
 /// Open the references folder in Finder/Explorer using `open` (mac) / `xdg-open` (linux) / `explorer` (win).

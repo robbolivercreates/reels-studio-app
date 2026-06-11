@@ -3,6 +3,7 @@ import type { ScriptBlock, BlockKind, RegenerateContext } from './types';
 import { buildRegenPromptSection } from '../../services/regenPrompt';
 import { buildContentModeSection } from '../../services/contentMode';
 import { buildVoicePromptSection, type VoiceProfile } from './voiceProfile';
+import { buildSpeechStyleStructureSection } from '../../services/speechStyle';
 
 const uid = () => `b_${Math.random().toString(36).slice(2, 9)}`;
 
@@ -118,6 +119,8 @@ export const importScriptWithAI = async (
   if (voiceProfile) {
     parts.push({ text: '\n\n' + buildVoicePromptSection(voiceProfile) });
   }
+  const yapFlow = buildSpeechStyleStructureSection(voiceProfile?.speechStyle);
+  if (yapFlow) parts.push({ text: '\n\n' + yapFlow });
   const regenSection = buildRegenPromptSection(regen);
   if (regenSection) parts.push({ text: regenSection });
   const modeSection = buildContentModeSection(regen?.contentMode);

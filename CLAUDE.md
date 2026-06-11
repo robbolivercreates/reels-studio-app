@@ -24,6 +24,8 @@ DevTools are enabled via the `devtools` feature on the `tauri` crate (`src-tauri
 
 No test suite. No lint script — type-checking via `tsc -b` is the only static gate.
 
+**External binaries on PATH** (Tauri does not inherit the login-shell PATH, so each Rust module hard-codes a candidate-path list — see `CHILD_PATH` in `transcription.rs`): `cargo` (build), `ffmpeg` (MP4 mux + audio extraction), `yt-dlp` (reference downloads), and `openai-whisper` (the "Editar vídeo pronto" transcription step). Missing any of these degrades only the feature that uses it.
+
 ## Architecture
 
 Reels Studio is a **Tauri 2 desktop app** (Mac/Windows) for producing short-form vertical videos (Reels/TikTok/Shorts) via a script→audio→avatar→B-roll→export pipeline. The frontend is React 19 + TypeScript + Vite 8; the shell is Rust.
@@ -38,6 +40,7 @@ This repo was forked from the web-only `avatar-studio` project once the web wave
 - `assets.rs` — per-project asset directory (`ensure_assets_dir`, `list_project_assets`, `write_asset_bytes`, `append_asset_chunk`, `reveal_assets_dir`). Chunked writes for large files.
 - `capcut.rs` — native CapCut draft writer (`save_capcut_draft`, `capcut_draft_dir_for`, `open_capcut_app`, plus the legacy project/folder helpers). Writes directly into CapCut's drafts directory so the project opens natively, no FCPXML import step.
 - `save_dialog.rs` — native save dialogs, file IO, and **ffmpeg muxing** (`mux_video_audio_ffmpeg`). ffmpeg is expected on PATH for the final video+audio mux step in MP4 export.
+- `transcription.rs` — the "Editar vídeo pronto" pipeline (`extract_audio`, `transcribe_whisper`). Shells out to ffmpeg (video → 16kHz mono WAV) then the `openai-whisper` CLI (WAV → word-level JSON). Work files live under `~/Reels Studio/EditVideo/<file-stem>/` — deliberately inside the Tauri asset-protocol scope so the frontend can `convertFileSrc` the WAV for both the `<audio>` master and waveform-peak decoding. Frontend parser is `transcriptImport.ts`.
 - `agent/` — Claude Code agent integration (see "Agent integration" below).
 
 `tauri.conf.json` is the source of truth for window size (1400×900, min 1100×720), bundle identifier (`com.robboliver.reelsstudio`), and CSP (currently `null` — relaxed for dev).
@@ -52,6 +55,17 @@ Key state contracts (full list in `types.ts`):
 - `ReelsState.avatarClips` — keyed by blockId, tracks HeyGen render lifecycle.
 - `ReelsState.takes` — uploaded/recorded B-roll clips, with per-take trim + silence cut.
 - `ReelsState.lastAnalysis` / `ReelsState.analyses` — current + history (capped at 20) of `PersistedAnalysis` from video-reference imports. Deduped by `sourceFileName` so re-importing the same video replaces the old entry instead of stacking.
+
+### Creation flows (entry points)
+
+`LandingScreen.tsx` is the hub; from it the app branches into several distinct producers that all eventually drop `ScriptBlock[]` onto the same timeline (or open a separate output):
+
+- **Novo Reel** → `GuidedWizard.tsx`, the *light* 3-step modal (conteúdo → roteiro & avatar → voz). It only collects cheap global decisions (script, avatar identity, voice) and reuses existing import services — it does **not** generate audio, pick per-block style, or embed the agent (those live on the timeline). `CreationWizard.tsx` is the heavier full video-reference flow it delegates to for the "vídeo" source. Don't duplicate timeline-level logic into the wizard.
+- **Editar vídeo pronto** → upload a finished video; `transcription.rs` extracts audio + Whisper-transcribes it, `transcriptImport.ts` segments REAL word timing (pause ≥ gap / sentence punctuation / size caps) into blocks. These blocks are time-anchors over the base video — no avatar/TTS — and reuse the same timeline, silence-cut, and export pipeline as the generative flow.
+- **Carrossel** → `carouselScriptService.ts` (Gemini generates slides + detects the topic brand) → `CoverSlideEditor.tsx` renders a GPT-Image-2 cover (via `openaiImageService.ts`, `fal-ai/gpt-image-2`) optionally compositing the creator photo + a brand logo (`logoFetchService.ts`, Clearbit) → `carouselCaptionService.ts` writes the IG caption. Slides become blocks via `carouselSlidesToBlocks`.
+- **Viral breakdown** → `viralBreakdownService.ts` (Gemini) analyses a reference video into timestamped `ViralMoment[]` / `ReconstructionScene[]` across accumulative modes (`script | visual | full | reconstruct`), surfaced in `ViralBreakdownModal.tsx` / `BreakdownDirectModal.tsx`. Results cache in localStorage via `viralBreakdownHistory.ts` (`reels-breakdown-history`) so re-review costs no credits.
+
+**Content modes** (`contentMode.ts`, `ContentMode = 'adapt' | 'compress' | 'trailer'`) parameterize how Gemini transforms a source into a script: `adapt` (default, legacy rules, empty prompt section), `compress` (keep wording verbatim, just trim), `trailer` (promise + glimpse + CTA-bait for long sources). `suggestContentMode` picks a default from source length; callers can override.
 
 ### UI architecture: Inspector pattern
 
@@ -101,7 +115,7 @@ The handler reads from a `shortcutRefs` mirror that's updated each render — th
 
 ### API keys
 
-Stored in `localStorage`, gated at startup in `App.tsx`. Required: `FAL_KEY` (Minimax TTS, fal.ai upload), `HEYGEN_API_KEY` (Avatar 4 clips). Optional: `GOOGLE_API_KEY` (Gemini script import + video analysis). Configured via `SettingsModal`.
+Stored in `localStorage`, gated at startup in `App.tsx` (only `FAL_KEY` + `HEYGEN_API_KEY` block startup). Required: `FAL_KEY` (Minimax TTS, voice cloning, GPT-Image-2 covers, fal.ai upload), `HEYGEN_API_KEY` (Avatar clips). `GOOGLE_API_KEY` is nominally "optional" but the carousel, viral-breakdown, content-mode, and script-import flows all hard-fail without it. Configured via `SettingsModal`. Note GPT-Image-2 covers go through fal.ai (`FAL_KEY`) — there is **no** separate OpenAI key despite the `openaiImageService` name.
 
 ### Confirm dialogs
 
@@ -110,6 +124,10 @@ Stored in `localStorage`, gated at startup in `App.tsx`. Required: `FAL_KEY` (Mi
 ### Voice & tone (PT-BR content)
 
 The `voice-docs/voz-rob-boliver.md` file is the spec for any AI-assisted script/caption generation in this app. It is **not** developer documentation — it's domain content describing how the end user (Rob) talks in his videos. Anything that generates Portuguese script text (Gemini imports, scene plans, caption suggestions) should respect those constraints (no "olá pessoal hoje", always close with "até logo, tchau tchau", verbatim CTAs, banned words list, etc.).
+
+That doc is now also the **seed** of a multi-profile system (`voiceProfile.ts`): users maintain several named "voice presets" (doc + rewrite level + output language + simplicity) in localStorage (`reels_voice_profiles_v1`, active id at `reels_voice_profile_active_v1`), managed via `VoiceProfilesPanel.tsx` and surfaced in wizards through `wizard/VoiceProfileBar.tsx`. `VOZ_ROB_BOLIVER` (the in-code default profile) mirrors the `.md` file — keep them in sync. The active profile's doc is injected into every script-generation prompt.
+
+**Two unrelated "voice" concepts — don't conflate them:** (1) the *written-style* voice profiles above, and (2) Minimax **TTS voices** — the curated preset list in `voices.ts` plus user-**cloned** voices. `minimaxService.cloneVoiceFromAudio` (fal `fal-ai/minimax/voice-clone`) returns a `custom_voice_id` stored in localStorage (`cloned_voices_v1`) with a **7-day expiry** that `touchClonedVoice` refreshes on each successful TTS call. Cloning UI is `SaveVoiceModal.tsx`; management is `VoiceProfilesPanel.tsx`. This is the active work on `feat/wizard-cloned-voices`.
 
 ### Styling
 
