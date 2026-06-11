@@ -81,12 +81,12 @@ export const VideoNewSourceForm: React.FC<Props> = ({
           onChange={e => onChangeUrl(e.target.value)}
           placeholder="https://www.instagram.com/reel/..."
           disabled={!!busyMessage}
-          className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-500/50 transition-colors disabled:opacity-50"
+          className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 transition-colors disabled:opacity-50"
         />
         <button
           onClick={onSubmitUrl}
           disabled={!url.trim() || !!busyMessage}
-          className="w-full mt-2 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(10,132,255,0.4)]"
+          className="w-full mt-2 py-2 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(10,132,255,0.4)]"
         >
           {busyMessage ? busyMessage : 'Baixar e analisar'}
         </button>
@@ -104,7 +104,7 @@ export const VideoNewSourceForm: React.FC<Props> = ({
           {typeof progress.percent === 'number' && (
             <div className="h-1 bg-white/5 rounded-full overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-violet-500 to-violet-400 transition-all"
+                className="h-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all"
                 style={{ width: `${progress.percent}%` }}
               />
             </div>
@@ -136,7 +136,7 @@ export const VideoNewSourceForm: React.FC<Props> = ({
           onDragOver={e => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onClick={() => fileInputRef.current?.click()}
-          className={`py-8 rounded-lg border-2 border-dashed transition-colors cursor-pointer flex flex-col items-center justify-center gap-2 ${dragOver ? 'border-violet-500/60 bg-violet-500/10' : 'border-white/10 hover:border-white/20 bg-white/[0.02]'}`}
+          className={`py-8 rounded-lg border-2 border-dashed transition-colors cursor-pointer flex flex-col items-center justify-center gap-2 ${dragOver ? 'border-blue-500/60 bg-blue-500/10' : 'border-white/10 hover:border-white/20 bg-white/[0.02]'}`}
         >
           <span className="text-2xl">🎬</span>
           <div className="text-center">
@@ -166,7 +166,7 @@ export const VideoNewSourceForm: React.FC<Props> = ({
           <button
             onClick={onSubmitFile}
             disabled={!!busyMessage}
-            className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(10,132,255,0.4)]"
+            className="w-full py-2 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_0_20px_rgba(10,132,255,0.4)]"
           >
             {busyMessage ? busyMessage : 'Salvar na pasta e analisar'}
           </button>

@@ -1,13 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import {
   listReferences,
   deleteReference,
   revealReferencesDir,
   referencesDir,
+  readReferenceBytes,
   type ReferenceMeta,
 } from './referenceVideoStore';
 import type { PersistedAnalysis, AppTheme } from './types';
 import { useModalChrome } from './modalChrome';
+import { generateViralBreakdown, type ViralBreakdown, type BreakdownStatus } from '../../services/viralBreakdownService';
+import { ViralBreakdownModal } from './ViralBreakdownModal';
+import { BreakdownDirectModal } from './BreakdownDirectModal';
 
 interface Props {
   analyses: PersistedAnalysis[];
@@ -16,6 +21,10 @@ interface Props {
   onRemoveAnalysis: (createdAt: number) => void;
   /** Trigger re-analysis of an existing reference file via the script preview pipeline. */
   onReanalyze?: (meta: ReferenceMeta) => void;
+  /** Called when user taps "Criar Reel baseado nisso" inside the breakdown modal. */
+  onCreateReelFromBreakdown?: (prompt: string) => void;
+  /** Called with updated analysis when a breakdown is generated (to persist the cache). */
+  onUpdateAnalysis?: (analysis: PersistedAnalysis) => void;
   appTheme?: AppTheme;
 }
 
@@ -39,13 +48,78 @@ interface Row {
   key: string;
 }
 
-export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan, onRemoveAnalysis, onReanalyze, appTheme }) => {
+export const ReferencesModal: React.FC<Props> = ({
+  analyses,
+  onClose,
+  onOpenPlan,
+  onRemoveAnalysis,
+  onReanalyze,
+  onCreateReelFromBreakdown,
+  onUpdateAnalysis,
+  appTheme,
+}) => {
   const chrome = useModalChrome(appTheme);
   const [refs, setRefs] = useState<ReferenceMeta[]>([]);
   const [folder, setFolder] = useState<string>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [previewMeta, setPreviewMeta] = useState<ReferenceMeta | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  const [breakdownDirectOpen, setBreakdownDirectOpen] = useState(false);
+
+  // Viral breakdown state
+  const [breakdownBusy, setBreakdownBusy] = useState<string | null>(null);
+  const [breakdownStatus, setBreakdownStatus] = useState<BreakdownStatus | null>(null);
+  const [breakdownResult, setBreakdownResult] = useState<{
+    meta: ReferenceMeta;
+    analysis: PersistedAnalysis | null;
+    breakdown: ViralBreakdown;
+  } | null>(null);
+
+  const handleBreakdown = async (meta: ReferenceMeta, analysis: PersistedAnalysis | null) => {
+    if (breakdownBusy) return;
+
+    // Use cached breakdown if available
+    if (analysis?.viralBreakdown) {
+      setBreakdownResult({ meta, analysis, breakdown: analysis.viralBreakdown });
+      return;
+    }
+
+    setBreakdownBusy(meta.fileName);
+    setBreakdownStatus({ stage: 'analyzing' });
+    try {
+      const bytes = await readReferenceBytes(meta.fileName);
+      const breakdown = await generateViralBreakdown(bytes, undefined, s => setBreakdownStatus(s));
+
+      // Cache onto the existing analysis if we have one
+      if (analysis && onUpdateAnalysis) {
+        onUpdateAnalysis({ ...analysis, viralBreakdown: breakdown });
+      }
+
+      setBreakdownResult({ meta, analysis, breakdown });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Falha no breakdown viral');
+    } finally {
+      setBreakdownBusy(null);
+      setBreakdownStatus(null);
+    }
+  };
+
+  const breakdownStatusLabel = (() => {
+    if (!breakdownStatus) return null;
+    if (breakdownStatus.stage === 'uploading') return `Enviando ${breakdownStatus.megabytes}MB…`;
+    if (breakdownStatus.stage === 'processing-upload') return 'Processando upload…';
+    return 'Analisando vídeo…';
+  })();
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !previewMeta) return;
+    v.src = convertFileSrc(previewMeta.absolutePath);
+    v.load();
+  }, [previewMeta]);
 
   const refresh = async () => {
     setLoading(true);
@@ -67,7 +141,7 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
   }, []);
 
   // Cross videos (on disk) with analyses (in memory) by sourceFileName.
-  // Show analyses without a file (file deleted) with a "arquivo removido" tag.
+  // Sort: most recent first (by meta.createdAt, or analysis.createdAt for orphans).
   const rows: Row[] = (() => {
     const byFile = new Map<string, PersistedAnalysis>();
     for (const a of analyses) {
@@ -87,7 +161,12 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
         out.push({ meta: null, analysis: a, key: `noref-${a.createdAt}` });
       }
     }
-    return out;
+    // Most recent first
+    return out.sort((a, b) => {
+      const ta = a.meta?.createdAt ?? a.analysis?.createdAt ?? 0;
+      const tb = b.meta?.createdAt ?? b.analysis?.createdAt ?? 0;
+      return tb - ta;
+    });
   })();
 
   const handleDeleteFile = async (meta: ReferenceMeta, analysis: PersistedAnalysis | null) => {
@@ -127,6 +206,13 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
             )}
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
+            <button
+              onClick={() => setBreakdownDirectOpen(true)}
+              className="px-3 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-[11px] font-semibold text-rose-200 transition-colors flex items-center gap-1.5"
+              title="Breakdown viral direto de link"
+            >
+              🔬 Breakdown de link
+            </button>
             <button
               onClick={handleRevealFolder}
               className="px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-[11px] font-semibold text-emerald-200 transition-colors flex items-center gap-1.5"
@@ -180,7 +266,7 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
                   {/* Icon */}
                   <div className={`shrink-0 w-10 h-10 rounded-lg flex items-center justify-center ${
                     meta?.source === 'url'
-                      ? 'bg-violet-500/15 text-violet-300'
+                      ? 'bg-blue-500/15 text-blue-300'
                       : meta?.source === 'upload'
                       ? 'bg-emerald-500/15 text-emerald-300'
                       : 'bg-zinc-700/40 text-zinc-400'
@@ -220,7 +306,7 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
                                     href={meta.sourceUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="text-violet-300 hover:text-violet-200 truncate max-w-[260px]"
+                                    className="text-blue-300 hover:text-blue-200 truncate max-w-[260px]"
                                     title={meta.sourceUrl}
                                   >
                                     {meta.sourceUrl}
@@ -240,6 +326,25 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
                       </div>
 
                       <div className="flex items-center gap-1 shrink-0">
+                        {/* Preview toggle */}
+                        {meta && (
+                          <button
+                            onClick={() => setPreviewMeta(previewMeta?.fileName === meta.fileName ? null : meta)}
+                            className={`p-1.5 rounded-md transition-colors ${previewMeta?.fileName === meta.fileName ? 'text-cyan-400 bg-cyan-500/10' : 'text-zinc-500 hover:text-zinc-200 hover:bg-white/5'}`}
+                            title="Ver vídeo"
+                          >
+                            {previewMeta?.fileName === meta.fileName ? (
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                              </svg>
+                            ) : (
+                              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            )}
+                          </button>
+                        )}
                         {analysis && (
                           <button
                             onClick={() => onOpenPlan(analysis)}
@@ -252,10 +357,27 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
                         {meta && onReanalyze && (
                           <button
                             onClick={() => onReanalyze(meta)}
-                            className="px-2.5 py-1 rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/30 text-[10.5px] font-semibold text-violet-200 transition-colors flex items-center gap-1"
+                            className="px-2.5 py-1 rounded-md bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30 text-[10.5px] font-semibold text-blue-200 transition-colors flex items-center gap-1"
                             title="Re-analisar com revisão"
                           >
                             🔄 Re-analisar
+                          </button>
+                        )}
+                        {meta && (
+                          <button
+                            onClick={() => handleBreakdown(meta, analysis)}
+                            disabled={!!breakdownBusy}
+                            className="px-2.5 py-1 rounded-md bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-[10.5px] font-semibold text-rose-200 transition-colors flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                            title="Autopsia viral segundo a segundo"
+                          >
+                            {breakdownBusy === meta.fileName ? (
+                              <>
+                                <div className="w-2.5 h-2.5 border border-rose-300 border-t-transparent rounded-full animate-spin" />
+                                {breakdownStatusLabel ?? 'Analisando…'}
+                              </>
+                            ) : (
+                              <>🔬 Breakdown</>
+                            )}
                           </button>
                         )}
                         {meta && (
@@ -289,7 +411,7 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
                     {/* Analysis summary */}
                     {analysis && (
                       <div className="mt-2.5 text-[10.5px] text-zinc-400 flex items-center gap-2 flex-wrap">
-                        <span className="px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-200 font-medium">
+                        <span className="px-1.5 py-0.5 rounded bg-blue-500/15 text-blue-200 font-medium">
                           {analysis.format}
                         </span>
                         <span className="text-zinc-500">{analysis.hookStyle}</span>
@@ -302,6 +424,20 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
                     {!analysis && meta && (
                       <div className="mt-2.5 text-[10.5px] text-zinc-600 italic">
                         Sem análise ainda — abra "Importar de vídeo" pra rodar a IA.
+                      </div>
+                    )}
+
+                    {/* Inline video player */}
+                    {meta && previewMeta?.fileName === meta.fileName && (
+                      <div className="mt-3">
+                        <video
+                          ref={videoRef}
+                          controls
+                          playsInline
+                          preload="auto"
+                          className="w-full rounded-lg bg-black"
+                          style={{ maxHeight: 280, objectFit: 'contain', display: 'block' }}
+                        />
                       </div>
                     )}
                   </div>
@@ -319,6 +455,26 @@ export const ReferencesModal: React.FC<Props> = ({ analyses, onClose, onOpenPlan
           </button>
         </div>
       </div>
+
+      {/* Viral Breakdown Modal — from existing reference */}
+      {breakdownResult && (
+        <ViralBreakdownModal
+          breakdown={breakdownResult.breakdown}
+          fileName={breakdownResult.meta.fileName}
+          onClose={() => setBreakdownResult(null)}
+          onCreateReel={onCreateReelFromBreakdown}
+          appTheme={appTheme}
+        />
+      )}
+
+      {/* Breakdown Direct Modal — from a fresh URL */}
+      {breakdownDirectOpen && (
+        <BreakdownDirectModal
+          onClose={() => setBreakdownDirectOpen(false)}
+          onCreateReel={onCreateReelFromBreakdown}
+          appTheme={appTheme}
+        />
+      )}
     </div>
   );
 };

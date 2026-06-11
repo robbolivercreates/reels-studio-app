@@ -161,7 +161,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
     >
       <div
         className={`w-full max-w-3xl max-h-[80vh] bg-[#0F0F11] border rounded-2xl shadow-2xl flex flex-col transition-all relative ${
-          dragOver ? 'border-violet-400 ring-4 ring-violet-400/30' : 'border-white/10'
+          dragOver ? 'border-blue-400 ring-4 ring-blue-400/30' : 'border-white/10'
         }`}
         onClick={(e) => e.stopPropagation()}
         onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -173,14 +173,14 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
         onDrop={handleDrop}
       >
         {dragOver && (
-          <div className="absolute inset-0 bg-violet-500/10 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center pointer-events-none z-10">
-            <div className="w-16 h-16 rounded-2xl bg-violet-500/30 border-2 border-violet-300 border-dashed flex items-center justify-center mb-3">
-              <svg className="w-8 h-8 text-violet-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <div className="absolute inset-0 bg-blue-500/10 backdrop-blur-sm rounded-2xl flex flex-col items-center justify-center pointer-events-none z-10">
+            <div className="w-16 h-16 rounded-2xl bg-blue-500/30 border-2 border-blue-300 border-dashed flex items-center justify-center mb-3">
+              <svg className="w-8 h-8 text-blue-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
             </div>
-            <div className="text-sm font-semibold text-violet-100">Solte os arquivos aqui</div>
-            <div className="text-[11px] text-violet-200/70 mt-1">PNG · JPG · WebP · GIF · MP4 · MOV · WebM</div>
+            <div className="text-sm font-semibold text-blue-100">Solte os arquivos aqui</div>
+            <div className="text-[11px] text-blue-200/70 mt-1">PNG · JPG · WebP · GIF · MP4 · MOV · WebM</div>
           </div>
         )}
         <div className="flex items-center justify-between px-5 py-4 border-b border-white/5">
@@ -209,7 +209,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
             <button
               onClick={() => fileInputRef.current?.click()}
               disabled={!!importing}
-              className="px-2.5 py-1 text-[11px] rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-400/40 text-violet-100 transition-colors disabled:opacity-50"
+              className="px-2.5 py-1 text-[11px] rounded-md bg-blue-500/15 hover:bg-blue-500/25 border border-blue-400/40 text-blue-100 transition-colors disabled:opacity-50"
               title="Selecionar arquivo do disco"
             >
               + Importar
@@ -240,13 +240,13 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
         </div>
 
         {importing && (
-          <div className="px-5 py-2 border-b border-white/5 bg-violet-500/[0.06]">
-            <div className="flex items-center justify-between text-[11px] text-violet-200 mb-1">
+          <div className="px-5 py-2 border-b border-white/5 bg-blue-500/[0.06]">
+            <div className="flex items-center justify-between text-[11px] text-blue-200 mb-1">
               <span className="truncate">Importando: {importing.name}</span>
               <span className="font-mono">{importing.pct}%</span>
             </div>
             <div className="h-1 bg-white/5 rounded-full overflow-hidden">
-              <div className="h-full bg-violet-400 transition-all" style={{ width: `${importing.pct}%` }}></div>
+              <div className="h-full bg-blue-400 transition-all" style={{ width: `${importing.pct}%` }}></div>
             </div>
           </div>
         )}
@@ -260,13 +260,13 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
           )}
           {!loading && !error && assets.length === 0 && (
             <div className="text-center py-12">
-              <div className="w-14 h-14 rounded-2xl bg-violet-500/10 border-2 border-violet-400/30 border-dashed flex items-center justify-center mx-auto mb-3">
-                <svg className="w-6 h-6 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <div className="w-14 h-14 rounded-2xl bg-blue-500/10 border-2 border-blue-400/30 border-dashed flex items-center justify-center mx-auto mb-3">
+                <svg className="w-6 h-6 text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
               </div>
               <div className="text-sm font-medium text-zinc-300 mb-1">Nenhum asset por enquanto</div>
-              <div className="text-[11px] text-zinc-500">Arraste arquivos aqui ou clica em <span className="text-violet-300">+ Importar</span>.</div>
+              <div className="text-[11px] text-zinc-500">Arraste arquivos aqui ou clica em <span className="text-blue-300">+ Importar</span>.</div>
             </div>
           )}
           {!loading && !error && assets.length > 0 && (
@@ -289,7 +289,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
                     disabled={!isAttached && atCap}
                     className={`group relative rounded-lg overflow-hidden border transition-all ${
                       isAttached
-                        ? 'border-violet-400 ring-2 ring-violet-400/40 shadow-[0_0_16px_rgba(10,132,255,0.35)]'
+                        ? 'border-blue-400 ring-2 ring-blue-400/40 shadow-[0_0_16px_rgba(10,132,255,0.35)]'
                         : atCap
                           ? 'border-white/5 opacity-40 cursor-not-allowed'
                           : 'border-white/10 hover:border-white/30'
@@ -313,7 +313,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
                       <div className="text-[9px] text-zinc-500 uppercase">{a.kind} · {a.ext}</div>
                     </div>
                     {isAttached && (
-                      <div className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-violet-500 text-white text-[11px] font-bold flex items-center justify-center shadow-lg">
+                      <div className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-blue-500 text-white text-[11px] font-bold flex items-center justify-center shadow-lg">
                         {carouselIdx! + 1}
                       </div>
                     )}
@@ -356,7 +356,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
                       setReorderingIndex(-1);
                     }}
                     className={`shrink-0 relative w-20 rounded-md border bg-zinc-900 overflow-hidden cursor-move transition-all ${
-                      isDragging ? 'opacity-40 scale-95' : 'border-violet-400/40 hover:border-violet-300'
+                      isDragging ? 'opacity-40 scale-95' : 'border-blue-400/40 hover:border-blue-300'
                     }`}
                     title={`Slot ${idx + 1}: ${asset.name}`}
                   >
@@ -367,7 +367,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
                         <video src={url} className="w-full h-full object-cover" muted playsInline preload="metadata" />
                       )}
                     </div>
-                    <div className="absolute top-1 left-1 w-5 h-5 rounded-full bg-violet-500 text-white text-[10px] font-bold flex items-center justify-center">
+                    <div className="absolute top-1 left-1 w-5 h-5 rounded-full bg-blue-500 text-white text-[10px] font-bold flex items-center justify-center">
                       {idx + 1}
                     </div>
                     <button
@@ -405,7 +405,7 @@ export const AssetPickerModal: React.FC<Props> = ({ projectName, currentAssets, 
             )}
             <button
               onClick={onClose}
-              className="px-3 py-1.5 text-[11px] rounded-md bg-violet-500 hover:bg-violet-400 text-white font-semibold transition-colors"
+              className="px-3 py-1.5 text-[11px] rounded-md bg-blue-500 hover:bg-blue-400 text-white font-semibold transition-colors"
             >
               Concluído
             </button>

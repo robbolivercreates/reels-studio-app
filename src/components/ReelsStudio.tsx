@@ -2,7 +2,9 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { flushSync } from 'react-dom';
 import { reducer, INITIAL_STATE } from './reelsStudio/reducer';
 import { useHistoryReducer } from './reelsStudio/useHistoryReducer';
-import { generateProjectAudio, estimateScriptDuration } from './reelsStudio/audioEngine';
+import { generateProjectAudio, estimateScriptDuration, computePeaks } from './reelsStudio/audioEngine';
+import { createTakeFromFile } from './reelsStudio/uploadTake';
+import { importWhisperTranscript } from './reelsStudio/transcriptImport';
 import { notifyDone } from './reelsStudio/notify';
 import { saveAudioBlob, saveClipBlob, saveNamedProject, listNamedProjects, loadNamedProject, deleteNamedProject, renameNamedProject, loadAudioBlob, loadAllClipBlobs, loadAllTakeBlobs, type NamedProjectMeta } from './reelsStudio/persistence';
 import { buildStateFromSnapshot } from './reelsStudio/useReelsPersistence';
@@ -16,6 +18,7 @@ import {
 } from '../services/minimaxService';
 import { SaveVoiceModal } from './reelsStudio/SaveVoiceModal';
 import { ReferencesModal } from './reelsStudio/ReferencesModal';
+import { BreakdownDirectModal } from './reelsStudio/BreakdownDirectModal';
 import type { PersistedAnalysis } from './reelsStudio/types';
 import { ProductionPlanModal } from './reelsStudio/ProductionPlanModal';
 import { ClipRescueModal } from './reelsStudio/ClipRescueModal';
@@ -26,15 +29,18 @@ import { MontarBar } from './reelsStudio/MontarBar';
 import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
 import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
-import { createMotionFromBlock, isMotionAssetsStale, type MotionConfig } from './reelsStudio/motionLibrary';
+import { MotionDock } from './reelsStudio/MotionDock';
+import { createMotionFromBlock, isMotionAssetsStale, placementOfElement, placementOfMotion, layerOfPlacement, defaultPlacementFor, resolveMotionPlacement, type MotionConfig, type MotionPlacement } from './reelsStudio/motionLibrary';
 import { requiresAssetAttachment } from './reelsStudio/motionGating';
 import { STYLE_PRESETS, type StylePresetId, findStylePreset } from './reelsStudio/motionStylePresets';
 import { isHidden } from './reelsStudio/presetCategory';
-import { generateMotionHtml, buildFullHtmlDoc } from '../services/motionService';
+import { generateMotionHtml, buildFullHtmlDoc, routeTemplateForBlock, getActiveMotionModel, getMotionModelLabel, MOTION_MODEL_OPTIONS } from '../services/motionService';
+import { planMotionsForScript, type DirectorPlanItem } from '../services/motionDirector';
+import { OVERLAY_SAFE_TEMPLATE_IDS } from '../services/motionTemplates';
 import { generateInstagramCaption } from '../services/captionService';
 import { calculateActualCost } from '../services/costPredictor';
 import { copyText } from './reelsStudio/clipboard';
-import { invoke } from '@tauri-apps/api/core';
+import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { GenerateAvatarsModal } from './reelsStudio/GenerateAvatarsModal';
 import { SilenceWarningModal } from './reelsStudio/SilenceWarningModal';
 import { ClipPreviewLightbox } from './reelsStudio/ClipPreviewLightbox';
@@ -148,6 +154,7 @@ export const ReelsStudio: React.FC = () => {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [saveVoiceModalOpen, setSaveVoiceModalOpen] = useState(false);
   const [referencesModalOpen, setReferencesModalOpen] = useState(false);
+  const [breakdownDirectOpen, setBreakdownDirectOpen] = useState(false);
   const [reanalyzeMeta, setReanalyzeMeta] = useState<import('./reelsStudio/referenceVideoStore').ReferenceMeta | null>(null);
   /**
    * Last per-generation language override set by the preview panel. When set,
@@ -241,6 +248,10 @@ export const ReelsStudio: React.FC = () => {
     try { return window.localStorage.getItem('reels.activeProjectId') ? 'editor' : 'landing'; }
     catch { return 'landing'; }
   });
+  // True when the landing was opened mid-session (via the top-bar "Início"
+  // button) — then it's closeable (✕ / Esc) back to the editor. False on the
+  // first cold-start welcome, where the user must pick an action.
+  const [landingDismissible, setLandingDismissible] = useState(false);
   // The light 3-step guided creation modal (opened from the landing "Novo").
   const [guidedOpen, setGuidedOpen] = useState(false);
   // Populate the saved-project count so the landing "Abrir" card can show it
@@ -516,6 +527,421 @@ export const ReelsStudio: React.FC = () => {
       alert('Erro ao abrir projeto: ' + (err instanceof Error ? err.message : String(err)));
     } finally {
       setLoadingProjectId(null);
+    }
+  };
+
+  // ─── "Editar vídeo pronto" — upload → extract audio → Whisper → blocks ──
+  const editVideoInputRef = useRef<HTMLInputElement | null>(null);
+  const editVideoProcessingRef = useRef(false);
+  const [editVideoStatus, setEditVideoStatus] = useState<string | null>(null);
+  // Selected overlay element (edit-video) for highlight in the elements panel.
+  const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+  // Overlay generation state — driven by the Motion Dock (unified surface).
+  const [editDockValue, setEditDockValue] = useState<import('./reelsStudio/MotionDock').MotionDockValue>({
+    visual: 'auto',
+    placement: { area: 'float', y: 0.58, height: 0.22, startOffsetSec: 0 },
+  });
+  const [overlayGenerating, setOverlayGenerating] = useState(false);
+  const [overlayBusy, setOverlayBusy] = useState<Record<string, string>>({});
+
+  /**
+   * Generate motion overlays for the given transcript blocks using the Motion
+   * Dock's current visual + placement. 'auto' visual routes each block through
+   * the LLM template router (overlay-safe catalog when floating); a concrete
+   * preset id applies to every target. Same unified pipeline as creation.
+   */
+  const handleGenerateOverlays = async (
+    targets: ScriptBlock[],
+    visual: 'auto' | StylePresetId,
+    placement: MotionPlacement,
+  ) => {
+    if (targets.length === 0) return;
+    setOverlayGenerating(true);
+    const colorMode = state.motionColorMode ?? 'dark';
+    const isFloat = placement.area === 'float';
+    // Legacy mode kept in sync for old-renderer compatibility.
+    const legacyMode = placement.area === 'full' ? 'fullscreen'
+      : placement.area === 'top-half' ? 'split-top'
+      : placement.area === 'bottom-half' ? 'split-bottom'
+      : 'overlay';
+
+    // ── Scene director (same workflow as creation): ONE planning call over
+    // the video's transcription — visual per speech segment + keyword-
+    // anchored window (the overlay enters WHEN the idea is spoken, not at
+    // the segment boundary). Falls back to the per-segment router.
+    let ovPlan = new Map<string, DirectorPlanItem>();
+    if (visual === 'auto' && targets.length > 1) {
+      try {
+        ovPlan = await planMotionsForScript({
+          scriptText: targets.map(t => t.text).join('\n'),
+          blocks: targets.map(t => ({
+            id: t.id,
+            // kind drives the director's template eligibility: only a
+            // full-frame placement may use templates ('broll' semantics);
+            // float/splits over the person are 'avatar' → freeform art.
+            kind: (placement.area === 'full' ? 'broll' : 'avatar') as 'avatar' | 'broll',
+            text: t.text,
+            startSec: t.start,
+            durationSec: t.end - t.start,
+            words: state.audio.words.length > 0
+              ? state.audio.words
+                  .filter(w => w.blockId === t.id)
+                  .map(w => ({ word: w.word, start: Math.max(0, w.start - t.start), end: Math.max(0, w.end - t.start) }))
+                  .filter(w => w.end > w.start)
+              : undefined,
+          })),
+          overlayContext: isFloat,
+          outputLanguage: state.audio.words.length > 0 ? 'pt-BR' : undefined,
+        });
+        console.log('[overlay/director] plano:', ovPlan.size, 'falas planejadas de', targets.length);
+      } catch (e) { console.warn('[overlay/director] planejamento pulado:', e); }
+    }
+
+    for (const block of targets) {
+      const elId = `ovmot_${block.id}`;
+      const blockDur = block.end - block.start;
+      const plan = ovPlan.get(block.id);
+      // Director timing → the element's OWN absolute window (edit overlays
+      // are gated by startSec/durationSec, so the offset moves startSec and
+      // the stored placement carries no extra offset — no double-shift).
+      const planOffset = plan ? Math.max(0, Math.min(plan.startOffsetSec, blockDur - 1)) : 0;
+      const effectiveDur = plan
+        ? Math.max(1, Math.min(plan.durationSec, blockDur - planOffset))
+        : Math.min(placement.durationSec ?? blockDur, blockDur);
+      const elPlacement: MotionPlacement = { ...placement, startOffsetSec: 0, durationSec: effectiveDur };
+      try {
+        // Resolve the visual per block: director plan → per-block router.
+        let presetId: StylePresetId = visual === 'auto' ? 'bold-pop' : visual;
+        let templateVars: Record<string, string> | undefined;
+        if (visual === 'auto' && plan) {
+          if (plan.templateId) {
+            presetId = plan.templateId as StylePresetId;
+            templateVars = plan.variables;
+            console.log('[overlay/director] template:', plan.templateId, '·', plan.rationale);
+          } else if (plan.styleHint) {
+            presetId = plan.styleHint as StylePresetId;
+            console.log('[overlay/director] estilo:', plan.styleHint, '·', plan.rationale);
+          }
+        } else if (visual === 'auto') {
+          setOverlayBusy(prev => ({ ...prev, [elId]: 'Escolhendo template…' }));
+          try {
+            const route = await routeTemplateForBlock({
+              blockText: block.text,
+              durationSec: effectiveDur,
+              overlayContext: placement.area !== 'full',
+            });
+            if (route) {
+              presetId = route.templateId as StylePresetId;
+              templateVars = route.vars;
+              console.log('[overlay/router] template hit:', route.templateId, '·', route.rationale);
+            }
+          } catch (e) { console.warn('[overlay/router] routing skipped:', e); }
+        }
+        setOverlayBusy(prev => ({ ...prev, [elId]: 'Gerando…' }));
+        // Remove existing overlay for this block if any, then placeholder.
+        if ((state.overlayElements ?? []).some(e => e.id === elId)) {
+          dispatch({ type: 'remove-overlay-element', id: elId });
+        }
+        dispatch({ type: 'add-overlay-element', element: {
+          id: elId, kind: 'motion', text: block.text.slice(0, 60),
+          startSec: block.start + planOffset, durationSec: effectiveDur,
+          mode: legacyMode, y: placement.y ?? 0.58, overlayH: placement.height ?? 0.22,
+          placement: elPlacement,
+        } });
+        const result = await generateMotionHtml({
+          presetId,
+          templateVars,
+          blockText: block.text,
+          durationSec: effectiveDur,
+          compositionId: elId,
+          motionLayer: layerOfPlacement(placement),
+          overlayMode: isFloat,
+          motionColorMode: colorMode,
+          existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
+          outputLanguage: state.audio.words.length > 0 ? 'pt-BR' : undefined,
+        });
+        const motion: MotionConfig = {
+          id: elId,
+          presetId,
+          layer: layerOfPlacement(placement),
+          placement: elPlacement,
+          intent: block.text.slice(0, 120),
+          text: result.text ?? block.text.slice(0, 60),
+          durationSec: effectiveDur,
+          html: (result as unknown as { htmlBody?: string }).htmlBody ?? '',
+          status: 'rendering',
+          createdAt: Date.now(),
+          canvasAspect: '9:16',
+          modelUsed: result.modelUsed,
+        };
+        const fullHtml = buildFullHtmlDoc(motion, '9:16', colorMode);
+        await invoke('save_motion_html', { motionId: elId, html: fullHtml });
+        setOverlayBusy(prev => ({ ...prev, [elId]: 'Renderizando…' }));
+        const rendered = await invoke<{ mp4_path: string; size_bytes: number }>('render_motion', { motionId: elId });
+        motion.videoPath = rendered.mp4_path;
+        motion.status = 'ready';
+        motion.renderedAt = Date.now();
+        dispatch({ type: 'set-overlay-motion', id: elId, motion });
+        setOverlayBusy(prev => { const n = { ...prev }; delete n[elId]; return n; });
+      } catch (err) {
+        console.error('[overlay-gen] failed for block', block.id, err);
+        setOverlayBusy(prev => ({ ...prev, [elId]: '❌ Erro' }));
+      }
+    }
+    setOverlayGenerating(false);
+  };
+
+  // Live progress from the Rust pipeline (ffmpeg + whisper stderr). Subscribe
+  // once; only reflect messages while a process is actually running.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<{ stage: string; message: string }>('transcription://progress', (e) => {
+        if (editVideoProcessingRef.current) setEditVideoStatus(e.payload.message || 'Processando…');
+      }).then(fn => { unlisten = fn; });
+    });
+    return () => { if (unlisten) unlisten(); };
+  }, []);
+
+  /**
+   * Motion Dock section for the RIGHT panel (Script column) — the single home
+   * of motion configuration in BOTH modes, exactly like the approved mockup
+   * (preview stays big in the center; the dock lives in the right column).
+   *
+   * Creation: operates on the selected block via the auto pipeline.
+   * Edit-video: operates on the selected speech segment via overlays, and
+   * includes the generated-elements list below the dock.
+   */
+  const renderMotionDockSection = (b: ScriptBlock) => {
+    const isEdit = state.projectMode === 'edit';
+    const busyMsg = isEdit
+      ? (overlayGenerating ? 'Gerando…' : null)
+      : (motionBusyByBlock[b.id] ?? null);
+    const isBusy = !!busyMsg || (isEdit && overlayGenerating);
+    const requiresAsset = isEdit ? false : requiresAssetAttachment(b, projectAssetsCount);
+    const blockDur = Math.max(1, b.end - b.start);
+    const m = b.motion;
+    const statusLabel = busyMsg
+      ? busyMsg
+      : requiresAsset ? '⚠ Anexe um asset antes de gerar'
+      : isEdit ? ''
+      : !m ? 'Sem motion · pronto pra gerar'
+      : m.status === 'ready' ? 'Motion pronto'
+      : m.status === 'generating' ? 'Gerando…'
+      : m.status === 'rendering' ? 'Renderizando…'
+      : m.status === 'error' ? 'Erro · veja no avançado'
+      : 'Rascunho';
+
+    // Same default the generation pipeline resolves (defaultPlacementFor) —
+    // what the Dock shows selected IS what generates.
+    const dockValue = isEdit
+      ? editDockValue
+      : {
+          visual: (b.stylePresetOverride as StylePresetId | undefined) ?? 'auto' as const,
+          placement: (b.kind === 'broll'
+            ? defaultPlacementFor('broll', state.projectMode, blockDur)
+            : m?.placement ?? (m ? placementOfMotion(m) : defaultPlacementFor(b.kind, state.projectMode, blockDur))),
+        };
+
+    // Placement choices by context (product rule): a creation B-roll block's
+    // motion IS the content → full only (the ② step hides entirely). Avatar
+    // blocks and edit-video speech get the full set.
+    const allowedAreas: MotionPlacement['area'][] = isEdit
+      ? ['float', 'top-half', 'bottom-half', 'full']
+      : b.kind === 'broll'
+        ? ['full']
+        : ['float', 'top-half', 'bottom-half', 'full'];
+
+    const autoTargets = isEdit
+      ? blocks.filter(x => (x.end - x.start) >= 1.0)
+      : blocks.filter(x => !x.motion?.html && !requiresAssetAttachment(x, projectAssetsCount));
+
+    return (
+      <div className="mx-0 my-2 rounded-xl p-3" style={{ border: '1px solid rgba(255,255,255,0.09)', backgroundColor: 'rgba(0,0,0,0.25)' }}>
+        {/* Status line: label + model picker */}
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-[9px] uppercase tracking-[0.15em] font-bold text-zinc-500 shrink-0">Motion</span>
+          <span className="text-[10px] truncate" style={{ color: requiresAsset ? 'rgb(252,211,77)' : 'rgba(161,161,170,0.9)' }}>
+            {statusLabel}
+          </span>
+          {!isEdit && m?.html && (
+            <span
+              className="shrink-0 text-[8.5px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
+              style={{ backgroundColor: 'rgba(16,185,129,0.15)', color: 'rgb(110,231,183)', border: '1px solid rgba(16,185,129,0.35)' }}
+            >{getMotionModelLabel(m.modelUsed)}</span>
+          )}
+          {!isEdit && (
+            <select
+              value={b.motionModelOverride ?? ''}
+              onChange={e => dispatch({ type: 'set-block-motion-model', id: b.id, model: e.target.value || undefined })}
+              className="ml-auto shrink-0 bg-transparent text-[9.5px] px-1 py-0.5 rounded outline-none"
+              style={{ color: b.motionModelOverride ? '#60A5FA' : 'rgba(113,113,122,1)', border: `1px solid ${b.motionModelOverride ? 'rgba(96,165,250,0.4)' : 'rgba(255,255,255,0.09)'}` }}
+              title="Modelo de IA deste bloco"
+            >
+              <option value="">🤖 {getActiveMotionModel().label} (global)</option>
+              {MOTION_MODEL_OPTIONS.map(opt => (
+                <option key={opt.id} value={opt.id}>🤖 {opt.label}</option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <MotionDock
+          layout="vertical"
+          value={dockValue}
+          onChange={v => {
+            if (isEdit) {
+              setEditDockValue(v);
+              // Live-apply position + timing to this segment's EXISTING
+              // overlay: floatShiftY is a pure compositor translate and the
+              // window is element gating — both update instantly, no regen.
+              // Area/visual changes only affect the next generation (the
+              // art is baked into the MP4 for those).
+              const elId = `ovmot_${b.id}`;
+              const existingEl = (state.overlayElements ?? []).find(e => e.id === elId);
+              if (existingEl) {
+                const off = v.placement.startOffsetSec ?? 0;
+                const dur = Math.max(1, Math.min(v.placement.durationSec ?? blockDur, blockDur - off));
+                dispatch({ type: 'update-overlay-element', id: elId, patch: {
+                  startSec: b.start + off,
+                  durationSec: dur,
+                  placement: {
+                    ...(existingEl.placement ?? v.placement),
+                    floatShiftY: v.placement.floatShiftY,
+                    scrimAlpha: v.placement.scrimAlpha,
+                    startOffsetSec: 0,
+                    durationSec: dur,
+                  },
+                } });
+              }
+              return;
+            }
+            const nextVisual = v.visual === 'auto' ? undefined : v.visual;
+            if (nextVisual !== b.stylePresetOverride) dispatch({ type: 'set-block-style-preset', id: b.id, preset: nextVisual });
+            const existing = b.motion;
+            const draft = existing ?? createMotionFromBlock(b);
+            dispatch({ type: 'set-block-motion', id: b.id, motion: { ...draft, placement: v.placement } });
+          }}
+          segmentDurationSec={blockDur}
+          motionColorMode={state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')}
+          onSetMotionColorMode={(mode) => dispatch({ type: 'set-motion-color-mode', mode })}
+          allowedAreas={allowedAreas}
+          overlayContext={isEdit && editDockValue.placement.area === 'float'}
+          overlaySafeIds={isEdit ? OVERLAY_SAFE_TEMPLATE_IDS : undefined}
+          onGenerate={() => {
+            if (isEdit) { void handleGenerateOverlays([b], editDockValue.visual, editDockValue.placement); return; }
+            if (requiresAsset) { setAssetPickerBlockId(b.id); return; }
+            void handleAutoMotion(b.id);
+          }}
+          generateLabel={isEdit
+            ? '✨ Gerar pra esta fala'
+            : requiresAsset ? '📎 Anexar asset'
+            : m?.status === 'ready' ? '↻ Regerar motion' : '✨ Gerar motion'}
+          busy={isBusy}
+          secondaryAction={isEdit ? {
+            label: `⚡ Gerar TODOS automaticamente (${autoTargets.length} falas)`,
+            onClick: () => void handleGenerateOverlays(autoTargets, 'auto', editDockValue.placement),
+            disabled: autoTargets.length === 0,
+          } : autoTargets.length > 1 ? {
+            label: `⚡ Gerar TODOS os blocos (${autoTargets.length})`,
+            onClick: () => void handleAutoMotionMany(autoTargets.map(x => x.id)),
+            disabled: autoTargets.length === 0,
+          } : undefined}
+          onOpenAdvanced={isEdit ? undefined : () => setMotionPickerBlockId(b.id)}
+        />
+
+        {/* Edit mode: generated overlays list lives right below the dock */}
+        {isEdit && (state.overlayElements ?? []).length > 0 && (
+          <div className="mt-2 pt-2 flex flex-col gap-1.5" style={{ borderTop: '1px solid rgba(255,255,255,0.09)' }}>
+            <span className="text-[9px] uppercase tracking-[0.15em] font-bold text-zinc-500">Gerados · {(state.overlayElements ?? []).length}</span>
+            {(state.overlayElements ?? []).map(el => {
+              const busy = overlayBusy[el.id];
+              const isMotion = el.kind === 'motion';
+              const elPlacement = isMotion ? placementOfElement(el) : null;
+              const areaLabel = elPlacement
+                ? (elPlacement.area === 'float' ? '▭ Flutuar'
+                  : elPlacement.area === 'top-half' ? '◱ Metade ↑'
+                  : elPlacement.area === 'bottom-half' ? '◰ Metade ↓'
+                  : '▣ Tela cheia')
+                : null;
+              return (
+                <div key={el.id} className="rounded-lg px-2 py-1.5 flex items-center gap-1.5" style={{ backgroundColor: 'rgba(255,255,255,0.05)' }}>
+                  <span className="text-[10px] text-zinc-500">{isMotion ? '🎬' : '📝'}</span>
+                  <span className="flex-1 text-[10.5px] truncate text-zinc-300">
+                    {busy ? <span className="animate-pulse">{busy}</span>
+                      : el.motion?.status === 'ready' ? '✅ ' + (el.text.slice(0, 26) || 'motion')
+                      : el.text.slice(0, 26) || 'motion'}
+                  </span>
+                  {areaLabel && (
+                    <span className="shrink-0 text-[8.5px] px-1.5 py-0.5 rounded font-semibold" style={{ backgroundColor: 'rgba(96,165,250,0.12)', color: '#93c5fd' }}>{areaLabel}</span>
+                  )}
+                  <button
+                    onClick={() => dispatch({ type: 'remove-overlay-element', id: el.id })}
+                    className="shrink-0 px-1 rounded text-[10px]" style={{ color: '#f87171' }} title="Remover"
+                  >✕</button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const handleEditVideo = () => editVideoInputRef.current?.click();
+
+  const processEditVideo = async (file: File) => {
+    if (!file.type.startsWith('video/')) {
+      alert('Selecione um arquivo de vídeo (MP4, MOV ou WebM).');
+      return;
+    }
+    editVideoProcessingRef.current = true;
+    setEditVideoStatus('Preparando o vídeo…');
+    try {
+      // Base take (IndexedDB blob URL — drives preview + export visuals).
+      const { take } = await createTakeFromFile(file);
+      // Persist the video to disk so the Rust pipeline can read it.
+      const bytes = Array.from(new Uint8Array(await file.arrayBuffer()));
+      const ref = await invoke<{ absolute_path: string }>('save_imported_video', {
+        bytes, originalName: file.name,
+      });
+
+      setEditVideoStatus('Extraindo áudio…');
+      const wavPath = await invoke<string>('extract_audio', { videoPath: ref.absolute_path });
+
+      setEditVideoStatus('Transcrevendo com Whisper… (1ª vez baixa o modelo)');
+      const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath });
+
+      const { blocks, words } = importWhisperTranscript(json);
+      if (blocks.length === 0) throw new Error('Não encontrei fala transcrita no vídeo.');
+
+      // Master audio: the extracted wav (in asset scope) → peaks + playable URL + export blob.
+      setEditVideoStatus('Montando a timeline…');
+      const audioUrl = convertFileSrc(wavPath);
+      const arr = await (await fetch(audioUrl)).arrayBuffer();
+      const ctx = new AudioContext();
+      const buf = await ctx.decodeAudioData(arr.slice(0));
+      const peaks = computePeaks(buf);
+      const duration = buf.duration;
+      ctx.close();
+      // Keep export happy — it reads the audio blob from this ref / IndexedDB.
+      const audioBlob = new Blob([arr], { type: 'audio/wav' });
+      audioBlobRef.current = audioBlob;
+      try { await saveAudioBlob(audioBlob); } catch { /* non-fatal */ }
+
+      // Fresh project, then load the edit payload.
+      revokeStateUrls(state);
+      clearCutSession();
+      try { window.localStorage.removeItem('reels.activeProjectId'); } catch { /* ignore */ }
+      dispatch({ type: 'hydrate', state: { ...INITIAL_STATE, projectName: `Edição · ${file.name.replace(/\.[^.]+$/, '')}`, activeProjectId: null } });
+      dispatch({ type: 'edit-video-loaded', baseVideoTake: take, blocks, audioUrl, duration, peaks, words });
+      setAppView('editor');
+    } catch (e) {
+      console.error('[reels/edit-video]', e);
+      alert('Erro ao processar o vídeo: ' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      editVideoProcessingRef.current = false;
+      setEditVideoStatus(null);
     }
   };
 
@@ -927,6 +1353,8 @@ export const ReelsStudio: React.FC = () => {
   const timelineRef = useRef<HTMLDivElement>(null);
   const timelineScrollRef = useRef<HTMLDivElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+  // Edit-video mode: the full-frame base video that chases the master audio.
+  const baseVideoRef = useRef<HTMLVideoElement | null>(null);
   // Refs that the playback tick reads — kept up-to-date via effect below.
   const silenceCutRef = useRef<boolean>(false);
   const keepSegmentsRef = useRef<{ start: number; end: number }[]>([]);
@@ -1070,7 +1498,7 @@ export const ReelsStudio: React.FC = () => {
   // Apple-style one-shot: click "Motion" on a block → Gemini decides everything,
   // generates HTML, HyperFrames renders MP4, the result lands on the timeline.
   // No modal involved. The user can later open the modal to fine-tune.
-  const handleAutoMotion = useCallback(async (blockId: string) => {
+  const handleAutoMotion = useCallback(async (blockId: string, plan?: DirectorPlanItem) => {
     const block = blocks.find(b => b.id === blockId);
     if (!block) return;
     if (motionBusyByBlock[blockId]) return; // already running
@@ -1104,9 +1532,35 @@ export const ReelsStudio: React.FC = () => {
     // Per-block style preset override: if the user picked a vibe in the
     // inline chip on the card, use it. Otherwise stick with the seed default
     // (which is now informed by the deterministic effect detector).
-    const seed = block.stylePresetOverride
-      ? { ...seedBase, presetId: block.stylePresetOverride }
-      : seedBase;
+    // Placement: ALWAYS resolved — explicit Dock choice wins, otherwise the
+    // SAME default the Dock displays (defaultPlacementFor). This guarantees
+    // "what you see selected is what generates" — previously an untouched
+    // Dock showed Flutuar while generation fell back to full-frame.
+    // Product rule: a creation B-roll block's motion IS the content — always
+    // full-frame, even if an older draft carried a float placement.
+    const basePlacement = (block.kind === 'broll' && state.projectMode !== 'edit')
+      ? defaultPlacementFor('broll', state.projectMode, block.end - block.start)
+      : block.motion?.placement
+        ?? defaultPlacementFor(block.kind, state.projectMode, block.end - block.start);
+    // Director plan (batch generation): keyword-anchored timing lands on the
+    // placement so compositor + preview window-gate the motion. The director's
+    // client-side validation already forces b-roll to full span.
+    const effectivePlacement = plan
+      ? { ...basePlacement, startOffsetSec: plan.startOffsetSec, durationSec: plan.durationSec }
+      : basePlacement;
+    const blockDurSec = block.end - block.start;
+    const windowStart = effectivePlacement.startOffsetSec ?? 0;
+    const windowDur = Math.max(1, Math.min(
+      effectivePlacement.durationSec ?? (blockDurSec - windowStart),
+      blockDurSec - windowStart,
+    ));
+    const seed = {
+      ...(block.stylePresetOverride ? { ...seedBase, presetId: block.stylePresetOverride } : seedBase),
+      placement: effectivePlacement,
+      // The rendered MP4 covers exactly the visible window (not the whole
+      // block) — the compositor only draws inside it.
+      durationSec: Math.max(2, Math.min(12, windowDur)),
+    };
     try {
       setBusy('Pensando…');
       dispatch({ type: 'set-block-motion', id: blockId, motion: { ...seed, status: 'generating' } });
@@ -1166,13 +1620,13 @@ export const ReelsStudio: React.FC = () => {
 
       // Carousel slides have no avatar — always use 'replace' (full-frame motion).
       // Reel blocks: split-top when assets attached (assets top, avatar bottom);
-      // broll replace; otherwise seed default.
+      // otherwise the resolved placement (seed.placement is ALWAYS set now).
       const isCarousel = aspect === 'carousel';
       const effectiveLayer = isCarousel
         ? 'replace'
         : hasPinnedAssets
           ? (block.kind === 'broll' ? 'replace' : 'split-top')
-          : seed.layer;
+          : layerOfPlacement(seed.placement);
       const canvasAspect: '9:16' | '4:5' = isCarousel ? '4:5' : '9:16';
 
       // Universal asset list: only forward it to Gemini if NO block in the reel
@@ -1186,22 +1640,70 @@ export const ReelsStudio: React.FC = () => {
       // known — otherwise word-sync presets fall back gracefully to staggered
       // reveals based on durationSec.
       const blockSlot = slotById.get(blockId);
+      // Rebase to MOTION-local time (block-local minus the visibility window
+      // offset) and keep only words inside the window — word-sync presets
+      // must align to when the motion is actually on screen.
       const blockWordTimestamps = (blockSlot && state.audio.words.length > 0)
         ? state.audio.words
             .filter(w => w.blockId === blockId)
             .map(w => ({
               word: w.word,
-              start: Math.max(0, w.start - blockSlot.projectStart),
-              end: Math.max(0, w.end - blockSlot.projectStart),
+              start: Math.max(0, w.start - blockSlot.projectStart - windowStart),
+              end: Math.max(0, w.end - blockSlot.projectStart - windowStart),
             }))
-            .filter(w => w.end > w.start)
+            .filter(w => w.end > w.start && w.start < seed.durationSec)
         : undefined;
 
+      // ── Template router: when the user didn't pick a preset explicitly and
+      // the block has no pinned assets, ask the LLM whether a motion-pack
+      // template fits this block perfectly (selection + variable fill in one
+      // small call). A hit replaces the seed preset; null falls through to
+      // the freeform pipeline untouched. Explicit user choice always wins.
+      let routedPresetId = seed.presetId;
+      let routedTemplateVars: Record<string, string> | undefined;
+      if (plan && !block.stylePresetOverride && !hasPinnedAssets && !isCarousel) {
+        // Director already routed this block in the single batch call — no
+        // per-block router round-trip needed.
+        if (plan.templateId) {
+          routedPresetId = plan.templateId as typeof seed.presetId;
+          routedTemplateVars = plan.variables;
+          console.log('[motion/director] template:', plan.templateId, '·', plan.rationale);
+        } else if (plan.styleHint) {
+          routedPresetId = plan.styleHint as typeof seed.presetId;
+          console.log('[motion/director] estilo:', plan.styleHint, '·', plan.rationale);
+        }
+      } else if (!block.stylePresetOverride && !hasPinnedAssets && !isCarousel) {
+        try {
+          setBusy('Escolhendo template…');
+          const route = await routeTemplateForBlock({
+            blockText: block.text,
+            durationSec: seed.durationSec,
+            preferredModel: block.motionModelOverride,
+            // Templates only when the motion owns the whole frame — float
+            // and splits get freeform art authored inside the safe zone.
+            overlayContext: effectiveLayer !== 'replace',
+          });
+          if (route) {
+            routedPresetId = route.templateId as typeof seed.presetId;
+            routedTemplateVars = route.vars;
+            console.log('[motion/router] template hit:', route.templateId, '·', route.rationale);
+          }
+        } catch (e) {
+          console.warn('[motion/router] routing skipped:', e);
+        }
+        setBusy('Pensando…');
+      }
+
       const result = await generateMotionHtml({
-        presetId: seed.presetId,
+        presetId: routedPresetId,
+        templateVars: routedTemplateVars,
         blockText: block.text,
         durationSec: seed.durationSec,
         compositionId: seed.id,
+        // Float = screen-blend over avatar/footage → the HTML must be authored
+        // as a pure-black-bg overlay. Without this the blend washes the motion
+        // out entirely (light mode) or leaves a faint veil (ink bg).
+        overlayMode: effectiveLayer === 'overlay',
         preferredModel: block.motionModelOverride,
         motionLayer: effectiveLayer,
         canvasAspect,
@@ -1249,6 +1751,12 @@ export const ReelsStudio: React.FC = () => {
       );
       const generated: MotionConfig = {
         ...seed,
+        // Sync the legacy layer with the RESOLVED placement — the doc wrapper
+        // and renderer must agree on the canvas the HTML was authored for.
+        layer: effectiveLayer,
+        // Carry the router's choice so the badge/chips reflect the template
+        // that actually generated this motion, not the pre-routing seed.
+        presetId: routedPresetId,
         intent: result.intent || seed.intent,
         text: result.text || seed.text,
         html: sanitizedHtml,
@@ -1268,17 +1776,67 @@ export const ReelsStudio: React.FC = () => {
       dispatch({ type: 'set-block-motion', id: blockId, motion: generated });
 
       setBusy('Renderizando…');
-      const fullHtml = buildFullHtmlDoc(generated, canvasAspect, (state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')));
-      await invoke('save_motion_html', { motionId: generated.id, html: fullHtml });
-      const rendered = await invoke<{ mp4_path: string; size_bytes: number }>(
-        'render_motion', { motionId: generated.id },
-      );
+      let activeGenerated = generated;
+      let renderResult: { mp4_path: string; size_bytes: number } | null = null;
+
+      // Self-correction loop: if HyperFrames lint rejects the HTML, feed the
+      // exact lint errors back to Gemini for one corrective attempt. Only
+      // lint failures trigger a retry — all other errors propagate immediately.
+      for (let attempt = 0; attempt <= 1; attempt++) {
+        try {
+          const fullHtml = buildFullHtmlDoc(activeGenerated, canvasAspect,
+            effectiveLayer === 'overlay' ? 'dark' : (state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark')));
+          await invoke('save_motion_html', { motionId: activeGenerated.id, html: fullHtml });
+          renderResult = await invoke<{ mp4_path: string; size_bytes: number }>(
+            'render_motion', { motionId: activeGenerated.id },
+          );
+          break; // success — exit retry loop
+        } catch (renderErr) {
+          const renderMsg = renderErr instanceof Error ? renderErr.message : String(renderErr);
+          const isLintError = renderMsg.includes('Lint do HyperFrames reprovou') || renderMsg.includes('overlapping_clips') || renderMsg.includes('missing_timeline');
+          if (attempt === 0 && isLintError) {
+            // One self-correction attempt: re-generate with the lint errors as context.
+            setBusy('Corrigindo HTML (lint falhou)…');
+            const colorMode = state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark');
+            const correctedResult = await generateMotionHtml({
+              presetId: seed.presetId,
+              blockText: block.text,
+              durationSec: seed.durationSec,
+              compositionId: seed.id,
+              preferredModel: block.motionModelOverride,
+              motionLayer: effectiveLayer,
+              canvasAspect,
+              existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
+              motionColorMode: colorMode,
+              motionEnergy: state.motionEnergy ?? 'energetic',
+              userIdentity: loadUserIdentity(),
+              lintError: renderMsg,
+            });
+            const correctedHtml = correctedResult.htmlBody.replace(
+              /repeat\s*:\s*-1/g,
+              () => `repeat: Math.floor(${seed.durationSec} / 0.8) - 1`,
+            );
+            activeGenerated = {
+              ...activeGenerated,
+              html: correctedHtml,
+              generatedAt: Date.now(),
+              modelUsed: correctedResult.modelUsed,
+            };
+            dispatch({ type: 'set-block-motion', id: blockId, motion: { ...activeGenerated, status: 'rendering' } });
+            setBusy('Renderizando (tentativa corrigida)…');
+            continue; // retry render with corrected HTML
+          }
+          // Non-lint error or second failure → propagate
+          throw renderErr;
+        }
+      }
+
       dispatch({
         type: 'set-block-motion',
         id: blockId,
         motion: {
-          ...generated,
-          videoPath: rendered.mp4_path,
+          ...activeGenerated,
+          videoPath: renderResult!.mp4_path,
           status: 'ready',
           renderedAt: Date.now(),
           errorMessage: undefined,
@@ -1377,6 +1935,51 @@ export const ReelsStudio: React.FC = () => {
       const total = ids.length;
       console.log('[batch-motion] starting', total, 'blocks:', ids);
 
+      // ── Scene director (motion-pack guide workflow): ONE planning call for
+      // the whole batch — picks the visual per block AND anchors each motion
+      // at the keyword's word-timestamp (3–8s window) instead of spanning the
+      // block. Carousel, pinned-asset blocks and already-generated blocks are
+      // excluded; on failure the loop falls back to the per-block router.
+      let planByBlock = new Map<string, DirectorPlanItem>();
+      const directorEligible = ids.filter(id => {
+        const b = blocks.find(x => x.id === id);
+        return !!b && !b.motion?.html && !(b.attachedAssets?.length)
+          && !requiresAssetAttachment(b, projectAssetsCount);
+      });
+      if (aspect !== 'carousel' && directorEligible.length > 1) {
+        try {
+          setBatchMotionProgress({ current: 0, total, blockId: '' });
+          const { profiles, activeId } = ensureProfiles();
+          const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+          planByBlock = await planMotionsForScript({
+            scriptText: blocks.map(b => b.text).join('\n'),
+            blocks: directorEligible.flatMap(id => {
+              const b = blocks.find(x => x.id === id);
+              const slot = b ? slotById.get(b.id) : undefined;
+              if (!b) return [];
+              const projectStart = slot?.projectStart ?? b.start;
+              return [{
+                id: b.id,
+                kind: b.kind,
+                text: b.text,
+                startSec: projectStart,
+                durationSec: b.end - b.start,
+                words: state.audio.words.length > 0
+                  ? state.audio.words
+                      .filter(w => w.blockId === b.id)
+                      .map(w => ({ word: w.word, start: Math.max(0, w.start - projectStart), end: Math.max(0, w.end - projectStart) }))
+                      .filter(w => w.end > w.start)
+                  : undefined,
+              }];
+            }),
+            outputLanguage: ttsLanguageOverride ?? profile?.outputLanguage,
+          });
+          console.log('[motion/director] plano:', planByBlock.size, 'blocos planejados de', directorEligible.length);
+        } catch (e) {
+          console.warn('[motion/director] planejamento pulado:', e);
+        }
+      }
+
       try {
         for (let i = 0; i < ids.length; i++) {
           const id = ids[i];
@@ -1412,7 +2015,7 @@ export const ReelsStudio: React.FC = () => {
             if (target.motion?.html) {
               await handleRenderMotionMp4(id);
             } else {
-              await handleAutoMotion(id);
+              await handleAutoMotion(id, planByBlock.get(id));
             }
             ok += 1;
             console.log('[batch-motion] iteration', i + 1, '/', total, '· blockId=', id, '· DONE');
@@ -1430,7 +2033,7 @@ export const ReelsStudio: React.FC = () => {
       }
       return { ok, failed, failedIds };
     },
-    [blocks, motionBusyByBlock, projectAssetsCount, handleAutoMotion, handleRenderMotionMp4],
+    [blocks, motionBusyByBlock, projectAssetsCount, handleAutoMotion, handleRenderMotionMp4, aspect, slotById, state.audio.words, ttsLanguageOverride],
   );
 
   // Core clip generation. Reads the *current* audio.url (which is the
@@ -1975,8 +2578,13 @@ export const ReelsStudio: React.FC = () => {
   // exactly the block being edited (avatarZoom, layout, etc.).
   const selectAndSeekBlock = (blockId: string) => {
     setSelectedBlockId(blockId);
+    // Only snap the playhead when it's OUTSIDE the block — if the user
+    // already scrubbed to the moment they want to inspect, selecting the
+    // block (chip/card click) must not teleport them back to its start.
     const slot = slotById.get(blockId);
-    if (slot) seekTo(slot.projectStart);
+    if (slot && (playhead < slot.projectStart || playhead >= slot.projectEnd)) {
+      seekTo(slot.projectStart);
+    }
   };
 
   // Scrub by dragging on empty timeline space. Elements that should not trigger
@@ -1995,7 +2603,10 @@ export const ReelsStudio: React.FC = () => {
       seekTo(sourceT);
     };
     seekToClientX(e.clientX);
-    setSelectedBlockId(null);
+    // Scrubbing does NOT clear the block selection — positioning the
+    // playhead while the Dock is open is the core editing loop ("click the
+    // chip, scrub to the moment, tweak"). Deselect via Esc or "mostrar
+    // todos"; clicking another block's chip switches selection.
     const onMove = (ev: PointerEvent) => seekToClientX(ev.clientX);
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
@@ -2135,13 +2746,26 @@ export const ReelsStudio: React.FC = () => {
     ? (slotById.get(currentBlock.id)?.projectStart ?? 0) + currentBlock.avatarVisibleSec
     : Infinity;
   const avatarStillVisible = playhead < avatarVisibilityCutoff;
+  // Unified motion placement for the current block — THE same resolution the
+  // export compositor uses (resolveMotionPlacement), so the preview can never
+  // show a different composition than the rendered MP4.
+  const currentMotionPlacement = currentBlock?.motion ? resolveMotionPlacement(currentBlock) : null;
   // Resolve layout boxes for the current block. B-roll blocks always use 'media-only'.
-  const currentLayout: BlockLayout = currentBlock?.kind === 'avatar' ? (currentBlock.layout ?? 'avatar-only') : 'media-only';
+  // A split motion placement overrides the layout: the export squeezes the
+  // avatar into the complementary half for the whole block, so the preview
+  // must do the same (placement wins over block.layout).
+  const currentLayout: BlockLayout =
+    currentMotionPlacement?.area === 'bottom-half' ? 'avatar-top'
+    : currentMotionPlacement?.area === 'top-half' ? 'media-top'
+    : currentBlock?.kind === 'avatar' ? (currentBlock.layout ?? 'avatar-only') : 'media-only';
   const layoutSlots = getLayoutSlots(currentLayout);
   const avatarBoxStyle = layoutSlots.avatar
     ? { left: `${layoutSlots.avatar.x * 100}%`, top: `${layoutSlots.avatar.y * 100}%`, width: `${layoutSlots.avatar.w * 100}%`, height: `${layoutSlots.avatar.h * 100}%` }
     : null;
-  const mediaBoxStyle = layoutSlots.media
+  // When a split motion placement is active, the motion owns its half — the
+  // export draws no media take there, so the preview must not either.
+  const motionOwnsHalf = currentMotionPlacement?.area === 'top-half' || currentMotionPlacement?.area === 'bottom-half';
+  const mediaBoxStyle = !motionOwnsHalf && layoutSlots.media
     ? { left: `${layoutSlots.media.x * 100}%`, top: `${layoutSlots.media.y * 100}%`, width: `${layoutSlots.media.w * 100}%`, height: `${layoutSlots.media.h * 100}%` }
     : null;
   const showAvatarVideo = currentBlock?.kind === 'avatar' && currentClip?.status === 'ready' && !!currentClip?.videoUrl && avatarStillVisible && layoutSlots.avatar !== null;
@@ -2420,6 +3044,28 @@ export const ReelsStudio: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentClip?.videoUrl, currentBlock?.id]);
 
+  // ─── Edit-video mode: base <video> chases the master audio (project time) ──
+  // Same discrete-seek discipline as the avatar chase: force-seek only on play
+  // start / big scrub jumps; trust the element to keep its own time during
+  // steady playback so WebKit doesn't stutter re-seeking every frame.
+  const baseWasPlayingRef = useRef(false);
+  useEffect(() => {
+    const v = baseVideoRef.current;
+    if (!v || state.projectMode !== 'edit' || !state.baseVideoTake) return;
+    const target = Math.max(0, playhead); // base video maps 1:1 to project time (no cut yet)
+    const gap = Math.abs(v.currentTime - target);
+    const justStarted = playing && !baseWasPlayingRef.current;
+    const bigJump = gap > 0.35;
+    if (justStarted || bigJump || !playing) {
+      if (!(!playing && gap < 0.05)) {
+        try { v.currentTime = target; } catch { /* ignore */ }
+      }
+    }
+    baseWasPlayingRef.current = playing;
+    if (playing && v.paused) v.play().catch(() => {});
+    if (!playing && !v.paused) v.pause();
+  }, [playhead, playing, state.projectMode, state.baseVideoTake]);
+
   const statusPill = (() => {
     if (audio.status === 'generating') return { dotColor: 'warn' as const, pulse: true, text: 'Gerando áudio...' };
     if (audio.status === 'ready') {
@@ -2463,7 +3109,34 @@ export const ReelsStudio: React.FC = () => {
           projectCount={savedProjects.length}
           onOpenProject={handleOpenProjects}
           onNewProject={() => setGuidedOpen(true)}
+          onEditVideo={handleEditVideo}
+          // Dismissible only when opened mid-session via "Início" (not on the
+          // first cold-start welcome, where the user must pick an action).
+          onClose={landingDismissible ? () => { setLandingDismissible(false); setAppView('editor'); } : undefined}
         />
+      )}
+
+      {/* Hidden picker for "Editar vídeo pronto" */}
+      <input
+        ref={editVideoInputRef}
+        type="file"
+        accept="video/mp4,video/quicktime,video/webm,video/*"
+        style={{ display: 'none' }}
+        onChange={e => {
+          const f = e.target.files?.[0];
+          e.currentTarget.value = ''; // allow re-picking the same file
+          if (f) void processEditVideo(f);
+        }}
+      />
+
+      {/* Progress overlay while the edit-video pipeline runs */}
+      {editVideoStatus !== null && (
+        <div className="fixed inset-0 z-[120] flex flex-col items-center justify-center gap-4"
+          style={{ backgroundColor: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(4px)' }}>
+          <div className="w-10 h-10 rounded-full border-2 border-white/20 border-t-white animate-spin" />
+          <div className="text-white text-sm font-medium max-w-sm text-center px-6">{editVideoStatus}</div>
+          <div className="text-white/50 text-[11px]">Editar vídeo · transcrição local com Whisper</div>
+        </div>
       )}
 
       {/* Main editor column — shrinks when the agent panel opens. */}
@@ -2478,6 +3151,20 @@ export const ReelsStudio: React.FC = () => {
       >
         {/* Left: project name + save indicator */}
         <div className="flex items-center min-w-0 gap-1.5">
+          {/* Início — opens the landing hub (Abrir / Novo / Editar vídeo) over
+              the current project. Closeable via ✕ or Esc. */}
+          <button
+            onClick={() => { setLandingDismissible(true); setAppView('landing'); }}
+            title="Tela inicial (Abrir · Novo · Editar vídeo)"
+            className="shrink-0 mr-0.5 p-1.5 rounded-md transition-colors"
+            style={{ color: tokens.text.secondary }}
+            onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+            onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l9-9 9 9M5 10v10a1 1 0 001 1h4v-6h4v6h4a1 1 0 001-1V10" />
+            </svg>
+          </button>
           <input
             value={projectName}
             onChange={e => dispatch({ type: 'set-name', name: e.target.value })}
@@ -2579,6 +3266,18 @@ export const ReelsStudio: React.FC = () => {
             )}
           </div>
 
+          {/* Viral Breakdown — direct access button */}
+          <button
+            onClick={() => setBreakdownDirectOpen(true)}
+            className="h-9 px-2.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            style={{ color: '#fb7185', backgroundColor: 'rgba(251,113,133,0.08)', border: '1px solid rgba(251,113,133,0.2)' }}
+            onMouseEnter={e => { e.currentTarget.style.backgroundColor = 'rgba(251,113,133,0.15)'; }}
+            onMouseLeave={e => { e.currentTarget.style.backgroundColor = 'rgba(251,113,133,0.08)'; }}
+            title="Breakdown viral — analisa qualquer vídeo por link"
+          >
+            🔬 Breakdown
+          </button>
+
           {/* Overflow menu (···) — consolidates Salvar / Projetos / Novo / Referências / Importar / Tema / Settings / Limpar */}
           <div className="relative">
             <button
@@ -2635,6 +3334,37 @@ export const ReelsStudio: React.FC = () => {
                   <span>Novo projeto</span>
                 </button>
                 <button
+                  onClick={() => { setOverflowMenuOpen(false); handleEditVideo(); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: tokens.text.primary }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                  title="Subir um vídeo pronto, transcrever e editar (cortar silêncios, motions)"
+                >
+                  <svg className="w-3.5 h-3.5" style={{ color: tokens.text.secondary }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                  <span>Editar vídeo pronto</span>
+                </button>
+                {/* Convert the CURRENT loaded project to edit mode (reuse its
+                    video as base) — no re-import. Shown when there's a take to use
+                    and we're not already in edit mode. */}
+                {state.projectMode !== 'edit' && state.takes.length > 0 && (
+                  <button
+                    onClick={() => { setOverflowMenuOpen(false); dispatch({ type: 'enter-edit-mode' }); }}
+                    className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                    style={{ color: tokens.text.primary }}
+                    onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                    onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                    title="Ativar overlays (texto/elementos) sobre o vídeo que já está neste projeto — sem re-importar"
+                  >
+                    <svg className="w-3.5 h-3.5" style={{ color: '#60A5FA' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                    </svg>
+                    <span>Ativar overlays neste vídeo</span>
+                  </button>
+                )}
+                <button
                   onClick={() => { setOverflowMenuOpen(false); setClipRescueOpen(true); }}
                   className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
                   style={{ color: tokens.text.primary }}
@@ -2666,6 +3396,16 @@ export const ReelsStudio: React.FC = () => {
                   {state.analyses.length > 0 && (
                     <span className="text-[10px] tabular-nums" style={{ color: tokens.text.tertiary }}>{state.analyses.length}</span>
                   )}
+                </button>
+                <button
+                  onClick={() => { setOverflowMenuOpen(false); setBreakdownDirectOpen(true); }}
+                  className="w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors"
+                  style={{ color: '#fb7185' }}
+                  onMouseEnter={e => e.currentTarget.style.backgroundColor = tokens.bg.hover}
+                  onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}
+                >
+                  <span>🔬</span>
+                  <span>Breakdown viral de link</span>
                 </button>
                 <button
                   onClick={() => { setOverflowMenuOpen(false); setWizardInitialFormat(undefined); setWizardInitialVideoUrl(undefined); setWizardOpen(true); }}
@@ -2931,7 +3671,10 @@ export const ReelsStudio: React.FC = () => {
       )}
 
       {/* ─── PREVIEW + SCRIPT ───────────────────────────────────────────── */}
-      <div className="flex flex-1 overflow-hidden">
+      {/* minHeight guarantees the phone preview NEVER collapses to zero when
+          the lower panels (inspector/montar/timeline) stack up — the user must
+          always see the video they're editing. */}
+      <div className="flex flex-1 overflow-hidden" style={{ minHeight: 260 }}>
         <div
           className="flex-1 flex flex-col items-center justify-center p-6 overflow-hidden relative"
           style={{ backgroundColor: tokens.bg.canvas }}
@@ -2947,6 +3690,9 @@ export const ReelsStudio: React.FC = () => {
             }
           }}
         >
+          {/* Edit-video motion config moved to the right panel (Motion Dock
+              under the selected speech card) — same anatomy as creation. */}
+
           <div
             className={`relative ${aspectClass} bg-black rounded-2xl overflow-hidden`}
             style={{
@@ -2955,6 +3701,9 @@ export const ReelsStudio: React.FC = () => {
               transform: `scale(${previewZoom})`,
               transformOrigin: 'center center',
               transition: 'transform 120ms cubic-bezier(0.2, 0, 0.2, 1)',
+              // Container for cqh units so edit-video overlay text scales to the
+              // preview box height (matches the renderer's height*0.05 sizing).
+              containerType: 'size',
             }}
           >
             {aspect === 'carousel' ? (
@@ -2975,8 +3724,63 @@ export const ReelsStudio: React.FC = () => {
             {/* Black background — fills the whole canvas (any unfilled layout area stays black). */}
             <div className="absolute inset-0 bg-black z-0" />
 
+            {/* Edit-video mode: full-frame base video chasing the master audio.
+                Muted (the <audio> element is the master); covers the canvas. */}
+            {state.projectMode === 'edit' && state.baseVideoTake && (
+              <video
+                ref={baseVideoRef}
+                key={`base-${state.baseVideoTake.id}`}
+                src={state.baseVideoTake.url}
+                muted
+                playsInline
+                preload="auto"
+                className="absolute inset-0 w-full h-full z-[5]"
+                style={{ objectFit: 'cover', backgroundColor: 'black' }}
+              />
+            )}
+
+            {/* Edit-video overlay elements alive at the playhead (text + motion). */}
+            {state.projectMode === 'edit' && (state.overlayElements ?? [])
+              .filter(el => playhead >= el.startSec && playhead < el.startSec + el.durationSec)
+              .map(el => {
+                if (el.kind === 'motion' && el.motion?.status === 'ready') {
+                  // AI-generated motion clip — unified placement drives the
+                  // preview exactly like the export compositor (float/split/full).
+                  const placement = placementOfElement(el);
+                  return (
+                    <div key={el.id} className="absolute inset-0 pointer-events-none" style={{ zIndex: placement.area === 'full' ? 9 : 8 }}>
+                      <MotionLayerOverlay
+                        motion={el.motion}
+                        playing={playing}
+                        layer={el.mode === 'fullscreen' ? 'replace' : 'overlay'}
+                        placement={placement}
+                        localTime={Math.max(0, playhead - el.startSec - (placement.startOffsetSec ?? 0))}
+                      />
+                    </div>
+                  );
+                }
+                // Text caption element.
+                return el.mode === 'fullscreen' ? (
+                  <div
+                    key={el.id}
+                    className="absolute inset-0 z-[8] flex items-center justify-center px-[7%] text-center"
+                    style={{ background: 'linear-gradient(135deg,#0a0a0c,#16161a)' }}
+                  >
+                    <span style={{ color: el.color || '#fff', fontWeight: 800, fontSize: `${5 * (el.fontScale || 1)}cqh`, lineHeight: 1.2, textShadow: '0 2px 14px rgba(0,0,0,0.65)' }}>{el.text}</span>
+                  </div>
+                ) : (
+                  <div
+                    key={el.id}
+                    className="absolute z-[8] left-0 right-0 flex items-center justify-center px-[7%] text-center pointer-events-none"
+                    style={{ top: `${el.y * 100}%`, transform: 'translateY(-50%)' }}
+                  >
+                    <span style={{ color: el.color || '#fff', fontWeight: 800, fontSize: `${5 * (el.fontScale || 1)}cqh`, lineHeight: 1.2, textShadow: '0 2px 14px rgba(0,0,0,0.65)' }}>{el.text}</span>
+                  </div>
+                );
+              })}
+
             {/* Media layer (B-roll) — draws below the avatar layer. Renders if layout has media slot AND a take is available. */}
-            {mediaBoxStyle && activeTake && (
+            {state.projectMode !== 'edit' && mediaBoxStyle && activeTake && (
               <div className="absolute z-10 overflow-hidden bg-black" style={{ ...(mediaBoxStyle as React.CSSProperties), opacity: blockFadeOpacity }}>
                 <TakeVideoPlayer key={`media-${currentBlock?.id}-${activeTake.id}`} take={activeTake} />
               </div>
@@ -3046,7 +3850,7 @@ export const ReelsStudio: React.FC = () => {
                 <div className="text-[10px] text-zinc-500 text-center font-mono break-all max-w-xs">{previewVideoError}</div>
                 <button
                   onClick={() => window.open(currentClip.videoUrl, '_blank', 'noopener,noreferrer')}
-                  className="px-4 py-2 rounded-lg bg-violet-500 hover:bg-violet-400 text-xs font-semibold text-white transition-colors flex items-center gap-2"
+                  className="px-4 py-2 rounded-lg bg-blue-500 hover:bg-blue-400 text-xs font-semibold text-white transition-colors flex items-center gap-2"
                 >
                   Abrir vídeo em nova aba
                   <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -3080,7 +3884,7 @@ export const ReelsStudio: React.FC = () => {
                   </div>
                   <div className="text-[10px] uppercase tracking-widest text-zinc-500">Preview · sem avatar ainda</div>
                   {state.avatarClips[currentBlock.id] && state.avatarClips[currentBlock.id].status !== 'ready' && (
-                    <div className="mt-3 text-[11px] text-violet-300">⏳ {state.avatarClips[currentBlock.id].message ?? state.avatarClips[currentBlock.id].status}</div>
+                    <div className="mt-3 text-[11px] text-blue-300">⏳ {state.avatarClips[currentBlock.id].message ?? state.avatarClips[currentBlock.id].status}</div>
                   )}
                 </div>
               </div>
@@ -3104,44 +3908,35 @@ export const ReelsStudio: React.FC = () => {
                 from motion.layer (which reflects the Gemini prompt canvas, not
                 the live preview layout). This keeps motion and avatar in sync
                 when the user changes layout after generating the motion. */}
-            {currentBlock?.motion && (() => {
+            {currentBlock?.motion && currentMotionPlacement && (() => {
               const motion = currentBlock.motion;
-              // Derive display layer from current block layout so the preview
-              // always matches the compositor output regardless of when the
-              // motion was generated.
-              const displayLayer = ((): typeof motion.layer => {
-                if (currentBlock.kind === 'broll') return motion.layer;
-                switch (currentBlock.layout) {
-                  case 'avatar-only': return 'overlay';   // motion blends over full avatar
-                  case 'avatar-top':  return 'split-bottom'; // avatar top, motion bottom
-                  case 'media-top':   return 'split-top';    // media top, motion fills top (avatar bottom)
-                  case 'media-only':  return 'replace';   // no avatar, motion fills frame
-                  default:            return 'overlay';
-                }
-              })();
-              // Overlay used to early-return here (the assumption was that
-              // when the avatar <video> exists, screen-blend renders the motion
-              // on top of it as a sibling). But before the avatar clip is
-              // generated, that path skipped the motion entirely — leaving the
-              // user staring at the avatar placeholder with no preview of
-              // their motion. Now we always render; the placeholder behind
-              // doubles as a "what this could look like" mockup.
-              // Map the project playhead into "seconds since this block
-              // started", so MotionLayerOverlay can keep its <video>
-              // element seeked to the right frame even when the
-              // user-perceived block is the last in the reel. Without
-              // this the overlay element gets reused across block
-              // switches and drifts out of sync with the audio.
+              // THE same placement resolution as the export compositor
+              // (resolveMotionPlacement) — placement chosen in the Dock wins;
+              // legacy motions derive from the block's current layout. The
+              // preview can never show a different composition than the MP4.
+              const placement = currentMotionPlacement;
+              // Visibility window (director / "Quando" sliders): outside
+              // [offset, offset+duration) the motion is simply not mounted —
+              // the avatar/take underneath shows through, mirroring the
+              // compositor's window gating.
               const slot = slotById.get(currentBlock.id);
-              const localTime = slot ? Math.max(0, playhead - slot.projectStart) : undefined;
+              const blockLocalT = slot ? Math.max(0, playhead - slot.projectStart) : 0;
+              const blockDur = slot ? slot.projectEnd - slot.projectStart : (currentBlock.end - currentBlock.start);
+              const startOffset = placement.startOffsetSec ?? 0;
+              const visibleDur = Math.max(0, Math.min(placement.durationSec ?? (blockDur - startOffset), blockDur - startOffset));
+              if (blockLocalT < startOffset || blockLocalT >= startOffset + visibleDur) return null;
+              // The motion renders even before the avatar clip exists — the
+              // placeholder behind doubles as a "what this could look like"
+              // mockup (screen-blend reads fine over the grey silhouette).
               return (
                 <div className="absolute inset-0" style={{ opacity: blockFadeOpacity, pointerEvents: 'none' }}>
                   <MotionLayerOverlay
                     key={`motion-${motion.id}-${motion.renderedAt ?? 0}`}
                     motion={motion}
                     playing={playing}
-                    layer={displayLayer}
-                    localTime={localTime}
+                    layer={layerOfPlacement(placement)}
+                    placement={placement}
+                    localTime={blockLocalT - startOffset}
                   />
                 </div>
               );
@@ -3162,7 +3957,7 @@ export const ReelsStudio: React.FC = () => {
                 : isReady ? 'bg-emerald-500/30 border-emerald-400/40 text-emerald-100'
                 : isGenerating ? 'bg-amber-500/30 border-amber-400/40 text-amber-100'
                 : isRendering ? 'bg-cyan-500/30 border-cyan-400/40 text-cyan-100'
-                : 'bg-fuchsia-500/30 border-fuchsia-400/40 text-fuchsia-100';
+                : 'bg-blue-500/25 border-blue-400/40 text-blue-100';
               const label = isError ? '🎨 Motion · erro'
                 : isReady ? '🎨 Motion · pronto'
                 : isGenerating ? '🎨 Motion · gerando IA…'
@@ -3262,7 +4057,7 @@ export const ReelsStudio: React.FC = () => {
                 <button
                   onClick={() => dispatch({ type: 'split-block', id: currentBlock.id, atSec: slot.sourceStart + localT })}
                   disabled={!canSplit}
-                  className="ml-2 px-3 py-2 rounded-lg bg-violet-500/15 hover:bg-violet-500/25 border border-violet-400/40 text-[11px] font-semibold text-violet-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
+                  className="ml-2 px-3 py-2 rounded-lg bg-blue-500/15 hover:bg-blue-500/25 border border-blue-400/40 text-[11px] font-semibold text-blue-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5"
                   title={canSplit ? `Dividir bloco em ${localT.toFixed(1)}s (S)` : 'Aproxime o playhead do meio do bloco pra dividir (S)'}
                 >
                   <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -3329,7 +4124,7 @@ export const ReelsStudio: React.FC = () => {
                       if (pendingIds.length === 0) return;
                       void handleAutoMotionMany(pendingIds);
                     }}
-                    className="text-[11px] px-2 py-1 rounded-md bg-fuchsia-500/15 hover:bg-fuchsia-500/25 text-fuchsia-300 border border-fuchsia-500/30 transition-colors flex items-center gap-1"
+                    className="text-[11px] px-2 py-1 rounded-md bg-blue-500/15 hover:bg-blue-500/25 text-blue-300 border border-blue-500/30 transition-colors flex items-center gap-1"
                     title="Gerar motion para todos os slides que ainda não têm"
                   >
                     <span>🎨</span> Gerar todos
@@ -3358,8 +4153,9 @@ export const ReelsStudio: React.FC = () => {
               </div>
             </div>
 
-            {/* Voice + Vibe — reel mode only, not needed for carousel */}
-            {aspect !== 'carousel' && (() => {
+            {/* Voice + Vibe — creation only: in edit-video mode the voice IS
+                the user's own recording, so the TTS voice/vibe picker is noise. */}
+            {aspect !== 'carousel' && state.projectMode !== 'edit' && (() => {
               const VIBE_OPTS = [
                 { id: 'neutral',   emoji: '😐', label: 'Neutro' },
                 { id: 'happy',     emoji: '😊', label: 'Animado' },
@@ -3382,12 +4178,12 @@ export const ReelsStudio: React.FC = () => {
                     className="w-full px-4 py-2.5 flex items-center gap-2 text-left group hover:bg-white/[0.02] transition-colors"
                     title={isOpen ? 'Recolher' : 'Expandir voz e vibe'}
                   >
-                    <div className={`w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-violet-400 to-violet-600' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
+                    <div className={`w-5 h-5 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-blue-400 to-blue-600' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
                       {selectedVoiceLabel.label.slice(0, 1).toUpperCase()}
                     </div>
                     <span className="text-[11px] font-medium text-zinc-200 truncate max-w-[90px]">{selectedVoiceLabel.label}</span>
                     {selectedVoiceLabel.isCustom && (
-                      <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 uppercase tracking-wider shrink-0">Sua</span>
+                      <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300 uppercase tracking-wider shrink-0">Sua</span>
                     )}
                     <span className="text-zinc-600 shrink-0">·</span>
                     <span className="text-[11px] text-zinc-400 flex items-center gap-1 shrink-0">
@@ -3414,13 +4210,13 @@ export const ReelsStudio: React.FC = () => {
                         className="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-white/[0.03] hover:bg-white/5 border border-white/10 transition-colors"
                       >
                         <div className="flex items-center gap-2.5">
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-violet-400 to-violet-600 ring-2 ring-violet-300/40' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
+                          <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${selectedVoiceLabel.isCustom ? 'bg-gradient-to-br from-blue-400 to-blue-600 ring-2 ring-blue-300/40' : 'bg-gradient-to-br from-zinc-500 to-zinc-700'}`}>
                             {selectedVoiceLabel.label.slice(0, 1).toUpperCase()}
                           </div>
                           <div className="text-left">
                             <div className="text-xs font-medium text-zinc-200 flex items-center gap-1.5">
                               {selectedVoiceLabel.label}
-                              {selectedVoiceLabel.isCustom && <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-300 uppercase tracking-wider">Sua</span>}
+                              {selectedVoiceLabel.isCustom && <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-300 uppercase tracking-wider">Sua</span>}
                             </div>
                             <div className="text-[10px] text-zinc-500">{selectedVoiceLabel.hint}</div>
                           </div>
@@ -3430,7 +4226,7 @@ export const ReelsStudio: React.FC = () => {
                       {voicePickerOpen && (
                         <div className="mt-1 max-h-[300px] overflow-y-auto rounded-lg bg-[#0A0A0B] border border-white/10">
                           {/* MINHAS VOZES */}
-                          <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider text-violet-300/60 font-semibold">Minhas vozes</div>
+                          <div className="px-3 pt-2 pb-1 text-[9px] uppercase tracking-wider text-blue-300/60 font-semibold">Minhas vozes</div>
                           {clonedVoices.length === 0 ? (
                             <div className="px-3 pb-2 text-[10px] text-zinc-600 italic">Nenhuma voz salva ainda.</div>
                           ) : (
@@ -3438,9 +4234,9 @@ export const ReelsStudio: React.FC = () => {
                               const daysLeft = Math.max(0, Math.floor((v.expiresAt - Date.now()) / (24 * 60 * 60 * 1000)));
                               const isSelected = selectedVoiceId === v.voiceId;
                               return (
-                                <div key={v.id} className={`group flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors ${isSelected ? 'bg-violet-500/10' : ''}`}>
+                                <div key={v.id} className={`group flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors ${isSelected ? 'bg-blue-500/10' : ''}`}>
                                   <button onClick={() => { dispatch({ type: 'set-voice', voiceId: v.voiceId }); setVoicePickerOpen(false); }} className="flex items-center gap-2.5 flex-1 text-left">
-                                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-violet-400 to-violet-600 flex items-center justify-center text-[9px] font-bold text-white ring-2 ring-violet-300/30">
+                                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-[9px] font-bold text-white ring-2 ring-blue-300/30">
                                       {v.name.slice(0, 1).toUpperCase()}
                                     </div>
                                     <div className="flex-1 min-w-0">
@@ -3449,7 +4245,7 @@ export const ReelsStudio: React.FC = () => {
                                         {daysLeft > 1 ? `Expira em ${daysLeft} dias` : daysLeft === 1 ? 'Expira amanhã' : 'Expira hoje'} · {v.model}
                                       </div>
                                     </div>
-                                    {isSelected && <svg className="w-3.5 h-3.5 text-violet-400 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
+                                    {isSelected && <svg className="w-3.5 h-3.5 text-blue-400 shrink-0" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
                                   </button>
                                   <button
                                     onClick={(e) => { e.stopPropagation(); if (confirm(`Remover a voz "${v.name}"?`)) { deleteClonedVoice(v.id); refreshClonedVoices(); } }}
@@ -3464,19 +4260,19 @@ export const ReelsStudio: React.FC = () => {
                           )}
                           <button
                             onClick={() => { setSaveVoiceModalOpen(true); setVoicePickerOpen(false); }}
-                            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-violet-500/10 transition-colors text-left border-y border-white/5 mt-1"
+                            className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-blue-500/10 transition-colors text-left border-y border-white/5 mt-1"
                           >
-                            <div className="w-6 h-6 rounded-full bg-violet-500/20 border border-dashed border-violet-400/40 flex items-center justify-center text-violet-300">
+                            <div className="w-6 h-6 rounded-full bg-blue-500/20 border border-dashed border-blue-400/40 flex items-center justify-center text-blue-300">
                               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
                             </div>
                             <div className="flex-1">
-                              <div className="text-[11px] font-medium text-violet-200">Salvar voice_id do Minimax</div>
+                              <div className="text-[11px] font-medium text-blue-200">Salvar voice_id do Minimax</div>
                               <div className="text-[9px] text-zinc-500">Cole o ID que você já tem</div>
                             </div>
                           </button>
                           <div className="px-3 pt-3 pb-1 text-[9px] uppercase tracking-wider text-zinc-500 font-semibold">Vozes padrão</div>
                           {VOICE_OPTIONS.map(v => (
-                            <button key={v.id} onClick={() => { dispatch({ type: 'set-voice', voiceId: v.id }); setVoicePickerOpen(false); }} className={`w-full flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors text-left ${v.id === selectedVoiceId ? 'bg-violet-500/10' : ''}`}>
+                            <button key={v.id} onClick={() => { dispatch({ type: 'set-voice', voiceId: v.id }); setVoicePickerOpen(false); }} className={`w-full flex items-center gap-2.5 px-3 py-2 hover:bg-white/5 transition-colors text-left ${v.id === selectedVoiceId ? 'bg-blue-500/10' : ''}`}>
                               <div className={`w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold text-white ${v.gender === 'female' ? 'bg-gradient-to-br from-pink-400 to-rose-600' : 'bg-gradient-to-br from-cyan-400 to-blue-600'}`}>
                                 {v.label.slice(0, 1)}
                               </div>
@@ -3484,7 +4280,7 @@ export const ReelsStudio: React.FC = () => {
                                 <div className="text-[11px] font-medium text-zinc-200">{v.label}</div>
                                 <div className="text-[9px] text-zinc-500">{v.hint}</div>
                               </div>
-                              {v.id === selectedVoiceId && <svg className="w-3.5 h-3.5 text-violet-400" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
+                              {v.id === selectedVoiceId && <svg className="w-3.5 h-3.5 text-blue-400" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>}
                             </button>
                           ))}
                         </div>
@@ -3498,7 +4294,7 @@ export const ReelsStudio: React.FC = () => {
                             onClick={() => dispatch({ type: 'set-emotion', emotion: opt.id })}
                             className={`px-2.5 py-1 rounded-full text-[10.5px] font-medium border transition-colors flex items-center gap-1 ${
                               emotion === opt.id
-                                ? 'bg-violet-500/20 border-violet-400/50 text-violet-100'
+                                ? 'bg-blue-500/20 border-blue-400/50 text-blue-100'
                                 : 'bg-white/[0.03] border-white/10 text-zinc-400 hover:text-zinc-200 hover:border-white/20'
                             }`}
                           >
@@ -3516,14 +4312,14 @@ export const ReelsStudio: React.FC = () => {
                           step={0.05}
                           value={voiceSpeed}
                           onChange={e => dispatch({ type: 'set-voice-speed', speed: parseFloat(e.target.value) })}
-                          className="flex-1 accent-violet-400"
+                          className="flex-1 accent-blue-400"
                         />
                         <span className="text-[11px] text-zinc-300 font-mono tabular-nums w-10 text-right">{voiceSpeed.toFixed(2)}×</span>
                       </div>
                       {audio.status === 'ready' && (
                         <button
                           onClick={() => setConfirmOpen(true)}
-                          className="w-full py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(10,132,255,0.35)] transition-all flex items-center justify-center gap-1.5"
+                          className="w-full py-2 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-[11px] font-semibold text-white shadow-[0_0_15px_rgba(10,132,255,0.35)] transition-all flex items-center justify-center gap-1.5"
                           title="Refaz o áudio com a emoção e ritmo escolhidos"
                         >
                           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -3533,7 +4329,7 @@ export const ReelsStudio: React.FC = () => {
                         </button>
                       )}
                       {audio.status === 'generating' && (
-                        <div className="text-[10px] text-violet-300 flex items-center gap-1.5 justify-center">
+                        <div className="text-[10px] text-blue-300 flex items-center gap-1.5 justify-center">
                           <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
                             <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -3753,8 +4549,11 @@ export const ReelsStudio: React.FC = () => {
                     onSetStylePreset: (preset: StylePresetId | undefined) => dispatch({ type: 'set-block-style-preset-cascade', id: b.id, preset }),
                     onDuplicate: () => dispatch({ type: 'duplicate-block', id: b.id }),
                     motionBusyMessage: motionBusyByBlock[b.id] ?? null,
-                    requiresAsset: requiresAssetAttachment(b, projectAssetsCount),
+                    // Edit-video mode: speech segments of the user's own video —
+                    // the creation asset-gate and per-block cost don't apply.
+                    requiresAsset: state.projectMode === 'edit' ? false : requiresAssetAttachment(b, projectAssetsCount),
                     carouselRole: undefined,
+                    editMode: state.projectMode === 'edit',
                   });
 
                   const selectedIdx = selectedBlockId ? blocks.findIndex(b => b.id === selectedBlockId) : -1;
@@ -3765,6 +4564,10 @@ export const ReelsStudio: React.FC = () => {
                   return (
                     <>
                       <ScriptBlockCard key={selected.id} {...cardProps(selected, selectedIdx)} />
+                      {/* Motion Dock — the single home of motion config (mockup
+                          anatomy: preview big in the center, dock in the right
+                          column, right under the selected block). */}
+                      {renderMotionDockSection(selected)}
                       {blocks.length > 1 && (
                         <div className="pt-3 mt-1 border-t border-white/5 space-y-1.5">
                           <div className="text-[9px] uppercase tracking-[0.18em] text-zinc-500 px-1 mb-1.5 flex items-center justify-between">
@@ -3870,7 +4673,7 @@ export const ReelsStudio: React.FC = () => {
                       <button
                         onClick={() => setConfirmOpen(true)}
                         disabled={audio.status === 'generating'}
-                        className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="w-full py-2.5 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                         title={`Custo estimado · $${estimatedTotalCost.toFixed(2)}`}
                       >
                         {audio.status === 'generating'
@@ -3921,6 +4724,13 @@ export const ReelsStudio: React.FC = () => {
             onSetLayout={selBlock ? (l) => dispatch({ type: 'set-block-layout', id: selBlock.id, layout: l }) : undefined}
             onSetAvatarPhoto={selBlock ? (id) => dispatch({ type: 'set-block-avatar-photo', id: selBlock.id, photoId: id }) : undefined}
             onSetStylePreset={selBlock ? (preset) => dispatch({ type: 'set-block-style-preset', id: selBlock.id, preset }) : undefined}
+            onSetMotionPlacement={selBlock ? (placement) => {
+              // Merge the placement into the existing motion, or seed a draft
+              // carrying it — the generation pipeline reads motion.placement.
+              const existing = selBlock.motion;
+              const draft = existing ?? createMotionFromBlock(selBlock);
+              dispatch({ type: 'set-block-motion', id: selBlock.id, motion: { ...draft, placement } });
+            } : undefined}
             motionModelOverride={selBlock?.motionModelOverride}
             onSetMotionModel={selBlock ? (model) => dispatch({ type: 'set-block-motion-model', id: selBlock.id, model }) : undefined}
             onOpenMotion={selBlock ? () => setMotionPickerBlockId(selBlock.id) : undefined}
@@ -3941,10 +4751,23 @@ export const ReelsStudio: React.FC = () => {
       })()}
 
       {/* ─── MONTAR (guided staged production) — own strip above the timeline,
-           so it never eats into the timeline's fixed height / clips tracks. ── */}
-      {aspect !== 'carousel' && blocks.length > 0 && (() => {
+           so it never eats into the timeline's fixed height / clips tracks.
+           Hidden in edit-video mode: the imported video IS the person talking,
+           so "Gerar avatares"/staged production makes no sense there. ── */}
+      {aspect !== 'carousel' && state.projectMode !== 'edit' && blocks.length > 0 && (() => {
         const avatarReady = avatarBlocks.filter(b => state.avatarClips[b.id]?.status === 'ready').length;
-        const motionCandidates = blocks.filter(b => !b.motion?.html && !requiresAssetAttachment(b, projectAssetsCount));
+        // Candidates: blocks with no motion yet + blocks whose motion needs a
+        // (re)render (html newer than the MP4, or never rendered). The batch
+        // routes html-blocks straight to render — this pill is THE single
+        // batch entry point now (the ⋯ menu duplicates were removed).
+        const motionCandidates = blocks.filter(b => {
+          if (requiresAssetAttachment(b, projectAssetsCount)) return false;
+          const m = b.motion;
+          if (!m?.html) return true;
+          if (!m.videoPath) return true;
+          if (m.generatedAt && m.renderedAt && m.generatedAt > m.renderedAt) return true;
+          return false;
+        });
         const motionDone = blocks.filter(b => !!b.motion?.videoPath).length;
         return (
           <MontarBar
@@ -3969,8 +4792,34 @@ export const ReelsStudio: React.FC = () => {
         );
       })()}
 
+      {/* ─── EDIT-VIDEO toolbar — the edit-mode counterpart of the MontarBar
+           (approved v2 mockup): video info + the single global entry point
+           for overlay generation via the scene director. ── */}
+      {aspect !== 'carousel' && state.projectMode === 'edit' && blocks.length > 0 && (() => {
+        const overlayMotions = (state.overlayElements ?? []).filter(e => e.kind === 'motion');
+        const editTargets = blocks.filter(x => (x.end - x.start) >= 1.0);
+        return (
+          <div className="flex items-center gap-3 px-4 py-2 border-t border-b border-white/5" style={{ backgroundColor: '#111114' }}>
+            <span className="text-[11px] font-semibold text-zinc-300 shrink-0">📼 Edição de vídeo</span>
+            <span className="text-[10px] text-zinc-500 truncate">
+              {state.baseVideoTake?.name ?? 'vídeo importado'} · {blocks.length} falas · {overlayMotions.length} overlay{overlayMotions.length === 1 ? '' : 's'}
+            </span>
+            <button
+              onClick={() => { if (!overlayGenerating && editTargets.length > 0) void handleGenerateOverlays(editTargets, 'auto', editDockValue.placement); }}
+              disabled={overlayGenerating || editTargets.length === 0}
+              className="ml-auto shrink-0 px-3.5 py-1.5 rounded-lg text-[11px] font-bold text-white transition-opacity hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ background: 'linear-gradient(180deg, #60A5FA, #2563EB)', boxShadow: '0 2px 10px rgba(37,99,235,0.35)' }}
+            >
+              {overlayGenerating ? '⏳ Gerando overlays…' : `⚡ Gerar overlays — diretor de cenas (${editTargets.length})`}
+            </button>
+          </div>
+        );
+      })()}
+
       {/* ─── TIMELINE (hidden in carousel mode — no audio timeline concept) ── */}
-      <div className={`h-[300px] border-t border-white/5 bg-[#0C0C0E] flex flex-col shrink-0 ${aspect === 'carousel' ? 'hidden' : ''}`}>
+      {/* Compact timeline (Rob's request on the v2 mockup): lower lanes give
+          ~40px of vertical space back to the preview above. */}
+      <div className={`h-[260px] border-t border-white/5 bg-[#0C0C0E] flex flex-col shrink-0 ${aspect === 'carousel' ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between px-5 py-2 border-b border-white/5">
           <div className="flex items-center gap-2">
             <TakesPanel
@@ -3987,29 +4836,6 @@ export const ReelsStudio: React.FC = () => {
                 exists for the actions the agent can't (yet) trigger itself,
                 or for power users who prefer direct control. */}
             {(() => {
-              const allMotions = blocks.filter(b => !!b.motion);
-              const motionPendingCount = allMotions.filter(b => {
-                const m = b.motion!;
-                if (!m.html) return true;
-                if (!m.videoPath) return true;
-                if (m.generatedAt && m.renderedAt && m.generatedAt > m.renderedAt) return true;
-                return false;
-              }).length;
-              const motionBusyCount = Object.keys(motionBusyByBlock).length;
-              const motionBusy = motionBusyCount > 0;
-              // Blocks that have no motion at all yet — candidates for "Gerar todos".
-              const blocksWithoutMotion = blocks.filter(b => !b.motion?.html);
-              // Of those, the ones that ALSO pass the asset-attachment gate.
-              // A block waiting on an asset isn't a real candidate — running it
-              // would just no-op in handleAutoMotion. We exclude it from both
-              // the count and the batch list so the button never lies about
-              // what's about to happen.
-              const blocksReadyForMotion = blocksWithoutMotion.filter(
-                b => !requiresAssetAttachment(b, projectAssetsCount),
-              );
-              const blocksAwaitingAsset = blocksWithoutMotion.length - blocksReadyForMotion.length;
-              const generateAllCount = blocksReadyForMotion.length;
-
               const items: Array<{
                 key: string;
                 label: string;
@@ -4066,52 +4892,9 @@ export const ReelsStudio: React.FC = () => {
                   disabled: generatingClips,
                   visible: avatarBlocks.length > 0,
                 },
-                {
-                  key: 'generate-all-motions',
-                  icon: '⚡',
-                  label: batchMotionProgress
-                    ? `Gerando motion ${batchMotionProgress.current} de ${batchMotionProgress.total}…`
-                    : motionBusy
-                      ? `Gerando motions… (${motionBusyCount})`
-                      : blocksAwaitingAsset > 0
-                        ? `Gerar motions (${generateAllCount}) · ${blocksAwaitingAsset} aguardam asset`
-                        : `Gerar todos os motions (${generateAllCount})`,
-                  hint: 'Gemini cria HTML + HyperFrames renderiza MP4 pra cada bloco sem motion',
-                  onClick: () => {
-                    if (motionBusy || generateAllCount === 0) return;
-                    console.log('[generate-all-motions] iniciando em', generateAllCount, 'blocos');
-                    void handleAutoMotionMany(blocksReadyForMotion.map(b => b.id));
-                  },
-                  disabled: motionBusy || generateAllCount === 0,
-                  disabledHint: motionBusy
-                    ? 'Geração em andamento…'
-                    : generateAllCount === 0
-                    ? blocksAwaitingAsset > 0
-                      ? `${blocksAwaitingAsset} bloco(s) aguardam asset — anexe um a cada bloco antes de gerar`
-                      : 'Todos os blocos já têm motion'
-                    : undefined,
-                  visible: blocks.length > 0,
-                },
-                {
-                  key: 'motions',
-                  icon: '🎬',
-                  label: motionBusy
-                    ? `Renderizando motions… (${motionBusyCount})`
-                    : motionPendingCount > 0
-                    ? `Regenerar pendentes (${motionPendingCount})`
-                    : `Motions prontos (${allMotions.length})`,
-                  hint: 'HyperFrames → MP4 pra motions com HTML novo ou stale',
-                  onClick: () => {
-                    if (!motionBusy && motionPendingCount > 0) void handleRenderAllMotions();
-                  },
-                  disabled: motionBusy || motionPendingCount === 0,
-                  disabledHint: motionBusy
-                    ? 'Renderizando em andamento…'
-                    : motionPendingCount === 0
-                    ? 'Todos os motions já estão renderizados'
-                    : undefined,
-                  visible: allMotions.length > 0,
-                },
+                // Motion batch actions intentionally NOT here — "Gerar todos"
+                // lives in the MontarBar phase pill + the empty motion-track
+                // CTA (single discoverable hierarchy, no duplicate surfaces).
                 {
                   key: 'assets',
                   icon: '🖼',
@@ -4232,6 +5015,7 @@ export const ReelsStudio: React.FC = () => {
                   {captionText && !captionLoading && (
                     <textarea
                       readOnly
+                    autoCorrect="off"
                       value={captionText}
                       onClick={e => e.currentTarget.select()}
                       spellCheck={false}
@@ -4341,8 +5125,8 @@ export const ReelsStudio: React.FC = () => {
         <div ref={timelineRef} className="relative flex-1 px-2 py-2 cursor-pointer overflow-hidden" onPointerDown={handleTimelinePointerDown}>
           {/* Audio waveform — only shown when audio exists OR is being generated. */}
           {(audio.status === 'ready' || audio.status === 'generating') && (
-          <div className={`relative h-12 mb-1.5 rounded-md bg-cyan-500/[0.04] border border-cyan-500/20 overflow-hidden ${audio.status === 'generating' ? 'animate-pulse' : ''}`}>
-            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-cyan-300/60 font-semibold pointer-events-none z-10">Audio</div>
+          <div className={`relative h-9 mb-1 rounded-md bg-cyan-500/[0.04] border border-cyan-500/20 overflow-hidden ${audio.status === 'generating' ? 'animate-pulse' : ''}`}>
+            <div className="absolute left-2 top-1 text-[8px] uppercase tracking-wider text-cyan-300/60 font-semibold pointer-events-none z-10">Audio</div>
             <div className="absolute inset-0 flex items-center px-2 pl-12">
               {audio.peaks.length > 0 ? (
                 cutOn ? (
@@ -4385,7 +5169,7 @@ export const ReelsStudio: React.FC = () => {
               )}
             </div>
             {audio.status === 'generating' && (
-              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-violet-400/15 to-transparent" style={{ animation: 'shimmer 1.6s linear infinite' }}></div>
+              <div className="absolute inset-0 bg-gradient-to-r from-transparent via-blue-400/15 to-transparent" style={{ animation: 'shimmer 1.6s linear infinite' }}></div>
             )}
             {/* Silence cut indicators.
                 - Cut OFF: vermelho hash sobre as regiões silenciosas (preview do que seria cortado)
@@ -4441,14 +5225,14 @@ export const ReelsStudio: React.FC = () => {
           )}
 
           {/* Unified content track — avatar + broll blocks share one row in source-time order */}
-          <div className="relative h-14 mb-1.5 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
-            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-zinc-400/70 font-semibold pointer-events-none z-10 flex items-center gap-1.5">
+          <div className="relative h-10 mb-1 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
+            <div className="absolute left-2 top-1 text-[8px] uppercase tracking-wider text-zinc-400/70 font-semibold pointer-events-none z-10 flex items-center gap-1.5">
               Conteúdo
               {activeTake && (
                 <>
                   <span className="text-[8px] px-1 py-0.5 rounded bg-emerald-500/20 text-emerald-200 normal-case font-normal">{activeTake.name}</span>
                   {activeTake.cutSilence && activeTake.detectedSilenceSec > 0.1 && (
-                    <span className="text-[8px] px-1 py-0.5 rounded bg-violet-500/20 text-violet-200 normal-case font-normal" title={`${activeTake.detectedSilenceSec.toFixed(1)}s de silêncio cortado`}>
+                    <span className="text-[8px] px-1 py-0.5 rounded bg-blue-500/20 text-blue-200 normal-case font-normal" title={`${activeTake.detectedSilenceSec.toFixed(1)}s de silêncio cortado`}>
                       ✂ −{activeTake.detectedSilenceSec.toFixed(1)}s
                     </span>
                   )}
@@ -4468,6 +5252,33 @@ export const ReelsStudio: React.FC = () => {
               const isHovered = hoveredId === b.id;
               const blockLen = b.end - b.start;
 
+              // Edit-video mode: every transcript block is a SPEECH segment of
+              // the user's own continuous video — never a draggable/deletable
+              // "B-roll" clip. Neutral graphite chip, click selects (drives the
+              // Motion Dock context), no drag, no destructive affordances.
+              if (state.projectMode === 'edit') {
+                const selected = selectedBlockId === b.id;
+                return (
+                  <div
+                    key={b.id}
+                    data-no-scrub="true"
+                    onClick={() => selectAndSeekBlock(b.id)}
+                    className="absolute top-1 bottom-1 rounded-md cursor-pointer overflow-hidden transition-colors"
+                    style={{
+                      left: `${left}%`, width: `${Math.max(width, 0.5)}%`,
+                      backgroundColor: selected ? 'rgba(96,165,250,0.16)' : 'rgba(255,255,255,0.05)',
+                      border: `1px solid ${selected ? 'rgba(96,165,250,0.6)' : 'rgba(255,255,255,0.10)'}`,
+                    }}
+                    title={b.text}
+                  >
+                    <div className="px-2 py-1 min-w-0">
+                      <div className="text-[9px] truncate" style={{ color: selected ? '#dbeafe' : 'rgba(244,244,245,0.75)' }}>{b.text.slice(0, 48) || '(fala)'}</div>
+                      <div className="text-[8px] font-mono" style={{ color: 'rgba(161,161,170,0.7)' }}>{blockLen.toFixed(1)}s</div>
+                    </div>
+                  </div>
+                );
+              }
+
               if (b.kind === 'broll') {
                 return (
                   <div
@@ -4476,7 +5287,7 @@ export const ReelsStudio: React.FC = () => {
                     onMouseEnter={() => setHoveredId(b.id)}
                     onMouseLeave={() => setHoveredId(null)}
                     onPointerDown={handleBlockPointerDown(b.id)}
-                    className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b from-emerald-400/70 to-emerald-600/80 border border-emerald-300/40 shadow-[0_2px_8px_rgba(16,185,129,0.2)] cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-transform overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : ''}`}
+                    className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b from-emerald-400/70 to-emerald-600/80 border border-emerald-300/40 shadow-[0_2px_8px_rgba(16,185,129,0.2)] cursor-grab active:cursor-grabbing hover:-translate-y-0.5 transition-transform overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : ''}`}
                     style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}
                   >
                     <div className="px-2 py-1.5 flex items-center gap-1">
@@ -4506,7 +5317,7 @@ export const ReelsStudio: React.FC = () => {
                 : isReady
                 ? 'from-amber-400/85 to-amber-600/95 border-amber-300/40 ring-1 ring-amber-300/30'
                 : isGenerating
-                ? 'from-violet-400/80 to-violet-600/90 border-violet-300/40'
+                ? 'from-blue-400/70 to-blue-600/80 border-blue-300/40'
                 : 'from-amber-400/70 to-amber-600/80 border-amber-300/40';
 
               const statusLabel = status === 'queued'      ? 'na fila'
@@ -4527,7 +5338,7 @@ export const ReelsStudio: React.FC = () => {
                   onMouseEnter={() => setHoveredId(b.id)}
                   onMouseLeave={() => setHoveredId(null)}
                   onPointerDown={handleBlockPointerDown(b.id)}
-                  className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b ${tone} border cursor-grab active:cursor-grabbing transition-all overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-violet-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : isHovered ? '-translate-y-0.5 shadow-[0_8px_24px_rgba(245,158,11,0.4)] z-10' : 'shadow-[0_2px_8px_rgba(245,158,11,0.2)]'}`}
+                  className={`absolute top-1 bottom-1 rounded-md bg-gradient-to-b ${tone} border cursor-grab active:cursor-grabbing transition-all overflow-hidden ${isDraggingThis ? 'opacity-40' : ''} ${selectedBlockId === b.id ? 'ring-2 ring-blue-400 ring-offset-1 ring-offset-[#0C0C0E] z-10' : isHovered ? '-translate-y-0.5 shadow-[0_8px_24px_rgba(245,158,11,0.4)] z-10' : 'shadow-[0_2px_8px_rgba(245,158,11,0.2)]'}`}
                   style={{ left: `${left}%`, width: `${Math.max(width, 0.5)}%` }}
                 >
                   {/* When avatar is partially visible, divider shows where B-roll takes over */}
@@ -4563,7 +5374,7 @@ export const ReelsStudio: React.FC = () => {
                           per state. When no clip exists yet the user clicks
                           this to make one; when ready, to redo a bad take;
                           when errored, to retry after fixing whatever. The
-                          color shifts (sparkle violet for first gen → amber
+                          color shifts (sparkle steel-blue for first gen → amber
                           loop arrows for regen/retry) to telegraph intent. */}
                       <button
                         onClick={(e) => { e.stopPropagation(); setRegenAvatarBlockId(b.id); }}
@@ -4573,7 +5384,7 @@ export const ReelsStudio: React.FC = () => {
                             ? 'bg-amber-500/80 hover:bg-amber-500'
                             : isError
                               ? 'bg-red-500/80 hover:bg-red-500'
-                              : 'bg-violet-500/80 hover:bg-violet-500'
+                              : 'bg-blue-500/80 hover:bg-blue-500'
                         }`}
                         title={
                           isReady
@@ -4628,7 +5439,7 @@ export const ReelsStudio: React.FC = () => {
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); setPreviewClipId(b.id); }}
-                        className="w-5 h-5 rounded-full bg-violet-500/80 hover:bg-violet-500 backdrop-blur flex items-center justify-center text-white transition-all hover:scale-110"
+                        className="w-5 h-5 rounded-full bg-blue-500/80 hover:bg-blue-500 backdrop-blur flex items-center justify-center text-white transition-all hover:scale-110"
                         title="Ver no app"
                       >
                         <svg className="w-2.5 h-2.5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
@@ -4677,8 +5488,26 @@ export const ReelsStudio: React.FC = () => {
           </div>
 
           {/* Motion track */}
-          <div className="relative h-10 mb-1.5 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
-            <div className="absolute left-2 top-1.5 text-[9px] uppercase tracking-wider text-zinc-400/70 font-semibold pointer-events-none z-10">🎨 Motion</div>
+          <div className="relative h-8 mb-1 rounded-md bg-white/[0.02] border border-white/10 overflow-hidden">
+            <div className="absolute left-2 top-1 text-[8px] uppercase tracking-wider text-zinc-400/70 font-semibold pointer-events-none z-10">🎨 Motion</div>
+            {/* Empty-track CTA — the main action must never be hidden behind
+                per-block selection. One click generates every block via the
+                Auto router (Figma/CapCut empty-state pattern). */}
+            {state.projectMode !== 'edit' && audio.status === 'ready' && blocks.length > 0 && blocks.every(b => !b.motion) && (() => {
+              const eligible = blocks.filter(b => !requiresAssetAttachment(b, projectAssetsCount));
+              if (eligible.length === 0) return null;
+              return (
+                <div className="absolute inset-0 z-20 flex items-center justify-center">
+                  <button
+                    onClick={() => void handleAutoMotionMany(eligible.map(b => b.id))}
+                    className="px-4 py-1.5 rounded-lg text-[11px] font-bold text-white transition-opacity hover:opacity-90"
+                    style={{ background: 'linear-gradient(180deg, #60A5FA, #3b82f6)', boxShadow: '0 2px 12px rgba(96,165,250,0.35)' }}
+                  >
+                    ⚡ Gerar motions de todos os blocos ({eligible.length}) — a IA escolhe o visual de cada um
+                  </button>
+                </div>
+              );
+            })()}
             {(() => {
               // Motion plays once and freezes on its last frame, so each motion is
               // visually active during the ENTIRE block (or until the next block that
@@ -4690,13 +5519,22 @@ export const ReelsStudio: React.FC = () => {
               if (!slot) return null;
               const motion = b.motion!;
               const motionDur = motion.durationSec ?? 3;
-              // Right edge: start of next motion-block, or end of current block, whichever is greater.
-              const nextMotionBlock = mIdx < blocksWithMotion.length - 1 ? blocksWithMotion[mIdx + 1] : null;
-              const nextSlot = nextMotionBlock ? slotById.get(nextMotionBlock.id) : null;
-              const rightAt = nextSlot ? nextSlot.projectStart : slot.projectEnd;
-              const left = viewPct(slot.projectStart);
-              const width = Math.max(0, viewPct(rightAt) - left);
-              const layerLabel = motion.layer === 'overlay' ? 'over' : motion.layer === 'replace' ? 'full' : motion.layer === 'split-bottom' ? 'split↑' : motion.layer === 'split-top' ? 'split↓' : 'over';
+              void mIdx;
+              // Honest chip geometry: the chip spans exactly the motion's
+              // visibility window (director anchor / "Quando" sliders), not
+              // the whole block — what you see on the track is when the
+              // motion is actually on screen.
+              const chipPlacement = resolveMotionPlacement(b);
+              const chipOffset = chipPlacement?.startOffsetSec ?? 0;
+              const chipBlockDur = slot.projectEnd - slot.projectStart;
+              const chipVisibleDur = Math.max(0.4, Math.min(chipPlacement?.durationSec ?? (chipBlockDur - chipOffset), chipBlockDur - chipOffset));
+              const left = viewPct(slot.projectStart + chipOffset);
+              const width = Math.max(0, viewPct(slot.projectStart + chipOffset + chipVisibleDur) - left);
+              const isAnchored = chipOffset > 0.05;
+              const layerLabel = chipPlacement?.area === 'float' ? 'flutua'
+                : chipPlacement?.area === 'full' ? 'cheia'
+                : chipPlacement?.area === 'top-half' ? '½↑'
+                : chipPlacement?.area === 'bottom-half' ? '½↓' : 'flutua';
               const busyMessage = motionBusyByBlock[b.id];
               const isBusy = !!busyMessage;
               const isReady = motion.status === 'ready' && !!motion.videoPath;
@@ -4719,7 +5557,7 @@ export const ReelsStudio: React.FC = () => {
                 ? 'from-cyan-500/40 to-cyan-600/50 border-cyan-400/40'
                 : isDraft
                 ? 'from-zinc-600/40 to-zinc-700/50 border-zinc-500/40'
-                : 'from-fuchsia-500/60 to-fuchsia-600/70 border-fuchsia-400/50';
+                : 'from-blue-500/50 to-blue-600/60 border-blue-400/50';
 
               const statusLabel = isError       ? 'erro'
                                 : isReady       ? '✓'
@@ -4737,12 +5575,13 @@ export const ReelsStudio: React.FC = () => {
                   key={`mot-${b.id}`}
                   data-no-scrub="true"
                   onPointerDown={(e) => e.stopPropagation()}
-                  onClick={(e) => { e.stopPropagation(); setMotionPickerBlockId(b.id); }}
-                  className={`absolute top-1 bottom-1 rounded bg-gradient-to-r ${tone} border cursor-pointer hover:brightness-110 transition-all overflow-hidden ${selectedBlockId === b.id ? 'ring-2 ring-violet-400' : ''}`}
+                  onClick={(e) => { e.stopPropagation(); selectAndSeekBlock(b.id); }}
+                  className={`absolute top-1 bottom-1 rounded bg-gradient-to-r ${tone} border cursor-pointer hover:brightness-110 transition-all overflow-hidden ${selectedBlockId === b.id ? 'ring-2 ring-blue-400' : ''}`}
                   style={{ left: `${left}%`, width: `${Math.max(width, 1)}%` }}
                   title={titleText}
                 >
                   <div className="px-1.5 py-1 flex items-center gap-1 text-white relative z-10">
+                    {isAnchored && <span className="text-[8px] text-amber-300 shrink-0" title={`Ancorado em ${chipOffset.toFixed(1)}s`}>⚓</span>}
                     <span className="text-[10px] truncate font-medium">{motion.text || motion.intent || 'motion'}</span>
                     <span className="text-[8px] uppercase tracking-wider opacity-90 shrink-0 font-semibold">
                       {statusLabel}
@@ -4777,8 +5616,8 @@ export const ReelsStudio: React.FC = () => {
 
           {/* Playhead */}
           <div className="absolute top-0 bottom-0 pointer-events-none z-20" style={{ left: `calc(${playheadPct}% + 8px)` }}>
-            <div className="absolute top-0 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-violet-400 drop-shadow-[0_0_6px_rgba(10,132,255,0.8)]"></div>
-            <div className="absolute top-0 bottom-0 w-0.5 bg-violet-400 -translate-x-1/2 shadow-[0_0_8px_rgba(10,132,255,0.6)]"></div>
+            <div className="absolute top-0 -translate-x-1/2 w-0 h-0 border-l-[6px] border-l-transparent border-r-[6px] border-r-transparent border-t-[8px] border-t-blue-400 drop-shadow-[0_0_6px_rgba(10,132,255,0.8)]"></div>
+            <div className="absolute top-0 bottom-0 w-0.5 bg-blue-400 -translate-x-1/2 shadow-[0_0_8px_rgba(10,132,255,0.6)]"></div>
           </div>
 
           {/* Drop indicator while dragging a block to reorder */}
@@ -4858,7 +5697,7 @@ export const ReelsStudio: React.FC = () => {
                         dispatch({ type: 'set-block-transition', id: fromBlock.id, transition: opt.value });
                         setTransitionPopoverIdx(null);
                       }}
-                      className={`w-full text-left px-2 py-1.5 rounded-md transition-colors ${current === opt.value ? 'bg-violet-500/20 border border-violet-500/40' : 'border border-transparent hover:bg-white/5'}`}
+                      className={`w-full text-left px-2 py-1.5 rounded-md transition-colors ${current === opt.value ? 'bg-blue-500/20 border border-blue-500/40' : 'border border-transparent hover:bg-white/5'}`}
                     >
                       <div className="text-[11px] font-medium text-zinc-100 flex items-center gap-1.5">
                         {opt.label}
@@ -4889,15 +5728,15 @@ export const ReelsStudio: React.FC = () => {
               <div className="text-xs text-zinc-500">Vai juntar o roteiro inteiro e enviar pro Minimax via fal.ai.</div>
             </div>
             <div className="px-6 py-4 bg-black/30 border-y border-white/5 space-y-2">
-              <div className="flex justify-between text-xs"><span className="text-zinc-500">Voz</span><span className="text-zinc-200">{selectedVoiceLabel.label}{selectedVoiceLabel.isCustom && <span className="ml-1 text-[9px] text-violet-300">(sua)</span>}</span></div>
+              <div className="flex justify-between text-xs"><span className="text-zinc-500">Voz</span><span className="text-zinc-200">{selectedVoiceLabel.label}{selectedVoiceLabel.isCustom && <span className="ml-1 text-[9px] text-blue-300">(sua)</span>}</span></div>
               <div className="flex justify-between text-xs"><span className="text-zinc-500">Idioma</span><span className="text-zinc-200">Português</span></div>
               <div className="flex justify-between text-xs"><span className="text-zinc-500">Blocos</span><span className="text-zinc-200">{blocks.length}</span></div>
               <div className="flex justify-between text-xs"><span className="text-zinc-500">Duração estimada</span><span className="text-zinc-200">~{formatTime(estimateScriptDuration(blocks))}</span></div>
-              <div className="flex justify-between text-xs pt-2 border-t border-white/5"><span className="text-zinc-300 font-medium">Custo</span><span className="text-violet-400 font-bold">${estimatedAudioCost.toFixed(2)}</span></div>
+              <div className="flex justify-between text-xs pt-2 border-t border-white/5"><span className="text-zinc-300 font-medium">Custo</span><span className="text-blue-400 font-bold">${estimatedAudioCost.toFixed(2)}</span></div>
             </div>
             <div className="px-6 py-4 flex gap-2">
               <button onClick={() => setConfirmOpen(false)} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Cancelar</button>
-              <button onClick={handleGenerate} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all">Gerar agora</button>
+              <button onClick={handleGenerate} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all">Gerar agora</button>
             </div>
           </div>
         </div>
@@ -5059,6 +5898,7 @@ export const ReelsStudio: React.FC = () => {
             motionEnergy={state.motionEnergy ?? 'energetic'}
             onSetMotionColorMode={(mode) => dispatch({ type: 'set-motion-color-mode', mode })}
             appTheme={state.appTheme ?? 'dark'}
+            activeTake={activeTake}
             onClose={() => setMotionPickerBlockId(null)}
             onSave={(motion) => {
               dispatch({ type: 'set-block-motion', id: block.id, motion });
@@ -5150,6 +5990,13 @@ export const ReelsStudio: React.FC = () => {
         />
       )}
 
+      {breakdownDirectOpen && (
+        <BreakdownDirectModal
+          onClose={() => setBreakdownDirectOpen(false)}
+          appTheme={state.appTheme ?? 'dark'}
+        />
+      )}
+
       {avatarsModalOpen && (
         <GenerateAvatarsModal
           totalAvatarSeconds={avatarBlocks.reduce((sum, b) => sum + (b.end - b.start), 0)}
@@ -5175,7 +6022,7 @@ export const ReelsStudio: React.FC = () => {
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[80] p-6">
           <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-md w-full overflow-hidden">
             <div className="px-6 pt-6 pb-2">
-              <div className="text-[11px] uppercase tracking-widest text-violet-300/80 font-semibold mb-2">
+              <div className="text-[11px] uppercase tracking-widest text-blue-300/80 font-semibold mb-2">
                 Resplit · preview
               </div>
               <div className="text-base font-semibold text-zinc-100 mb-2">
@@ -5207,7 +6054,7 @@ export const ReelsStudio: React.FC = () => {
             <div className="px-6 py-4 flex flex-col gap-2">
               <button
                 onClick={applyPendingResplit}
-                className="w-full py-2.5 rounded-lg bg-violet-500 hover:bg-violet-400 text-white text-[12.5px] font-semibold transition-colors"
+                className="w-full py-2.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-white text-[12.5px] font-semibold transition-colors"
               >
                 Quebrar agora
               </button>
@@ -5506,11 +6353,11 @@ export const ReelsStudio: React.FC = () => {
               <div className="flex items-center gap-3 mb-3">
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                   confirmClearMode === 'new'
-                    ? 'bg-violet-500/15 border border-violet-500/30'
+                    ? 'bg-blue-500/15 border border-blue-500/30'
                     : 'bg-red-500/15 border border-red-500/30'
                 }`}>
                   {confirmClearMode === 'new' ? (
-                    <svg className="w-5 h-5 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <svg className="w-5 h-5 text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                       <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                     </svg>
                   ) : (
@@ -5584,7 +6431,7 @@ export const ReelsStudio: React.FC = () => {
                 disabled={clearing}
                 className={`flex-1 py-2.5 rounded-lg text-xs font-semibold text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                   confirmClearMode === 'new'
-                    ? 'bg-violet-500 hover:bg-violet-400'
+                    ? 'bg-blue-500 hover:bg-blue-400'
                     : 'bg-red-500 hover:bg-red-400'
                 }`}
               >
@@ -5604,8 +6451,8 @@ export const ReelsStudio: React.FC = () => {
           <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-[0_30px_80px_rgba(0,0,0,0.8)] max-w-md w-full overflow-hidden">
             <div className="px-6 pt-6 pb-4">
               <div className="flex items-center gap-3 mb-3">
-                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-violet-500/15 border border-violet-500/30">
-                  <svg className="w-5 h-5 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <div className="w-10 h-10 rounded-full flex items-center justify-center bg-blue-500/15 border border-blue-500/30">
+                  <svg className="w-5 h-5 text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
                 </div>
@@ -5647,7 +6494,7 @@ export const ReelsStudio: React.FC = () => {
                   setNewProjectConfirmOpen(false);
                   setGuidedOpen(true);
                 }}
-                className="flex-1 py-2.5 rounded-lg bg-violet-500 hover:bg-violet-400 text-xs font-semibold text-white transition-colors"
+                className="flex-1 py-2.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-xs font-semibold text-white transition-colors"
               >
                 Salvar e continuar
               </button>
@@ -5953,6 +6800,9 @@ interface BlockCardProps {
   requiresAsset: boolean;
   /** Shown as a badge in the card header when in carousel mode. */
   carouselRole?: 'cover' | 'body' | 'cta';
+  /** Edit-video mode: the card is a SPEECH segment of the user's own video —
+   *  hide creation-only noise (per-block cost, avatar/asset gates). */
+  editMode?: boolean;
 }
 
 // ── Carousel canvas preview — shows motion video or slide text fallback ────────
@@ -5986,7 +6836,7 @@ const CarouselCanvasPreview: React.FC<{
             <p className="text-zinc-600 text-[12px] italic">Slide vazio</p>
           )}
           {isWorking ? (
-            <div className="flex items-center gap-2 text-fuchsia-400 text-[11px]">
+            <div className="flex items-center gap-2 text-blue-400 text-[11px]">
               <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25"/>
                 <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
@@ -6079,14 +6929,14 @@ const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
     : 'Gerar motion';
 
   const motionCls = isBusy
-    ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-200 cursor-progress'
+    ? 'bg-blue-500/15 border-blue-400/40 text-blue-200 cursor-progress'
     : isStale ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
-    : isReady ? 'bg-fuchsia-500/20 border-fuchsia-400/50 text-fuchsia-100 hover:bg-fuchsia-500/30'
+    : isReady ? 'bg-blue-500/20 border-blue-400/50 text-blue-100 hover:bg-blue-500/30'
     : isError ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
-    : 'bg-fuchsia-500/[0.08] border-fuchsia-400/30 text-fuchsia-200 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/50';
+    : 'bg-blue-500/[0.08] border-blue-400/30 text-blue-200 hover:bg-blue-500/15 hover:border-blue-400/50';
 
   const roleCls = role === 'cover'
-    ? 'bg-violet-500/30 text-violet-300'
+    ? 'bg-blue-500/30 text-blue-300'
     : role === 'cta'
     ? 'bg-emerald-500/20 text-emerald-300'
     : 'bg-white/5 text-zinc-400';
@@ -6106,7 +6956,7 @@ const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
     <div
       className={`rounded-xl border overflow-hidden transition-all cursor-pointer ${
         isSelected
-          ? 'border-fuchsia-500/50 ring-1 ring-fuchsia-500/30 bg-fuchsia-500/[0.03]'
+          ? 'border-blue-500/50 ring-1 ring-blue-500/30 bg-blue-500/[0.03]'
           : 'border-white/8 bg-white/[0.02] hover:border-white/15'
       }`}
       onClick={onSelect}
@@ -6189,13 +7039,15 @@ const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
         </div>
       </div>
 
-      {/* Motion preview thumbnail (when ready) */}
+      {/* Motion preview thumbnail — plays only on hover to avoid 10x simultaneous video decode */}
       {isReady && m?.videoPath && (
-        <div className="px-3 pt-2.5">
+        <div className="px-3 pt-2.5 group/thumb">
           <video
-            src={`asset-file://${m.videoPath}`}
+            src={convertFileSrc(m.videoPath)}
             className="w-full aspect-[4/5] rounded-lg object-cover bg-black"
-            autoPlay loop muted playsInline
+            muted playsInline preload="auto"
+            onMouseEnter={e => (e.currentTarget as HTMLVideoElement).play().catch(() => {})}
+            onMouseLeave={e => { const v = e.currentTarget as HTMLVideoElement; v.pause(); v.currentTime = 0; }}
           />
         </div>
       )}
@@ -6203,7 +7055,7 @@ const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
       {/* Editable text */}
       <textarea
         value={b.text}
-        onChange={e => onUpdateText(e.target.value)}
+                    onChange={e => onUpdateText(e.target.value)}
         rows={3}
         placeholder={placeholder}
         // Spell-check disabled: NSSpellServer in WKWebView hammers CPU when
@@ -6221,13 +7073,13 @@ const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
           onClick={onOpenAssetPicker}
           className={`px-2 py-1 rounded-md text-[10.5px] font-medium border transition-colors flex items-center gap-1 min-w-0 ${
             assetCount > 0
-              ? 'bg-violet-500/20 border-violet-400/50 text-violet-100 hover:bg-violet-500/30'
-              : 'bg-violet-500/[0.06] border-violet-400/20 text-violet-300/80 hover:bg-violet-500/15 hover:text-violet-200 hover:border-violet-400/40'
+              ? 'bg-blue-500/20 border-blue-400/50 text-blue-100 hover:bg-blue-500/30'
+              : 'bg-blue-500/[0.06] border-blue-400/20 text-blue-300/80 hover:bg-blue-500/15 hover:text-blue-200 hover:border-blue-400/40'
           }`}
         >
           <span>📎</span>
           <span className="max-w-[120px] truncate">{assetLabel}</span>
-          {assetCount > 1 && <span className="ml-0.5 px-1 rounded bg-violet-300/20 text-[9px] font-bold text-violet-50">{assetCount}</span>}
+          {assetCount > 1 && <span className="ml-0.5 px-1 rounded bg-blue-300/20 text-[9px] font-bold text-blue-50">{assetCount}</span>}
         </button>
 
         <div className="relative">
@@ -6276,7 +7128,7 @@ const CarouselSlideCard: React.FC<CarouselSlideCardProps> = ({
 
 const LayoutThumbnail: React.FC<{ layout: BlockLayout; selected: boolean }> = ({ layout, selected }) => {
   // Each thumbnail is a stylized 9:16-ish rectangle showing where avatar (amber) and media (emerald) sit.
-  const borderClass = selected ? 'border-violet-400 shadow-[0_0_12px_rgba(10,132,255,0.4)]' : 'border-white/10';
+  const borderClass = selected ? 'border-blue-400 shadow-[0_0_12px_rgba(10,132,255,0.4)]' : 'border-white/10';
   return (
     <div className={`relative w-full aspect-[9/16] rounded border bg-zinc-900 overflow-hidden transition-all ${borderClass}`}>
       {layout === 'avatar-only' && (
@@ -6335,7 +7187,7 @@ const BlockAvatarPhotoPicker: React.FC<{
           onClick={() => onPick(undefined)}
           className={`shrink-0 w-12 h-12 rounded-md border flex items-center justify-center text-[9px] font-medium transition-colors ${
             usingDefault
-              ? 'border-violet-400 bg-violet-500/15 text-violet-200'
+              ? 'border-blue-400 bg-blue-500/15 text-blue-200'
               : 'border-white/10 bg-black/30 text-zinc-400 hover:bg-white/5'
           }`}
           title="Usar a foto padrão do projeto"
@@ -6349,7 +7201,7 @@ const BlockAvatarPhotoPicker: React.FC<{
               key={p.id}
               onClick={() => onPick(p.id)}
               className={`shrink-0 w-12 h-12 rounded-md overflow-hidden border transition-colors ${
-                selected ? 'border-violet-400' : 'border-white/10 hover:border-white/30'
+                selected ? 'border-blue-400' : 'border-white/10 hover:border-white/30'
               }`}
               title={p.name}
             >
@@ -6366,7 +7218,7 @@ const BlockAvatarPhotoPicker: React.FC<{
   );
 };
 
-const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, onSetAvatarPhoto, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, requiresAsset, carouselRole }) => {
+const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wordCount, audioReady, onToggleKind, onUpdateText, onRemove, onMoveUp, onMoveDown, onSetAvatarVisibleSec, onSetLayout, onSetAvatarZoom, onSetAvatarOffsetY, onSetAvatarPhoto, defaultZoom, isCurrent, isSelected, compact, onSelect, onJumpTo, onOpenMotion, onOpenMotionAdvanced, onOpenAssetPicker, onSetStylePreset, onDuplicate, motionBusyMessage, requiresAsset, carouselRole, editMode }) => {
   const [styleMenuOpen, setStyleMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // Note: Onda 1 moved all "advanced" controls (zoom, offset, layout, photo,
@@ -6387,7 +7239,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         onClick={onSelect}
         title={b.text || '(vazio)'}
         className={`w-full text-left rounded-lg border px-3 py-2 transition-colors flex items-center gap-2.5 ${
-          isCurrent ? 'ring-1 ring-violet-400/40' : ''
+          isCurrent ? 'ring-1 ring-blue-400/40' : ''
         } ${
           isAvatar
             ? 'bg-amber-500/[0.04] border-amber-500/20 hover:border-amber-500/40'
@@ -6400,7 +7252,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         <span className="shrink-0 text-[10px]">{isAvatar ? '👤' : '🖥️'}</span>
         {carouselRole && (
           <span className={`shrink-0 text-[8px] px-1 py-0.5 rounded font-semibold uppercase ${
-            carouselRole === 'cover' ? 'bg-violet-500/30 text-violet-300' :
+            carouselRole === 'cover' ? 'bg-blue-500/30 text-blue-300' :
             carouselRole === 'cta'   ? 'bg-emerald-500/20 text-emerald-300' :
                                       'bg-white/5 text-zinc-500'
           }`}>
@@ -6418,8 +7270,8 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
     <div
       onClick={onSelect}
       className={`group rounded-xl border transition-all ${
-        isSelected ? 'ring-2 ring-violet-400 shadow-[0_0_24px_rgba(10,132,255,0.35)]'
-        : isCurrent ? 'ring-1 ring-violet-400/50 shadow-[0_0_24px_rgba(10,132,255,0.15)]' : ''
+        isSelected ? 'ring-2 ring-blue-400 shadow-[0_0_24px_rgba(10,132,255,0.35)]'
+        : isCurrent ? 'ring-1 ring-blue-400/50 shadow-[0_0_24px_rgba(10,132,255,0.15)]' : ''
       } ${
         isAvatar ? 'bg-amber-500/[0.04] border-amber-500/20 hover:border-amber-500/40' : 'bg-emerald-500/[0.04] border-emerald-500/20 hover:border-emerald-500/40'
       }`}>
@@ -6437,35 +7289,34 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         // requiresAsset takes precedence over the normal label tree: even if
         // the motion has an old html (e.g. user removed the previously-attached
         // asset), we want the user to fix the gap before regenerating.
+        // STATUS chip — informational. Generation/regeneration lives in the
+        // Motion Dock below the selected card (single home); clicking the
+        // chip just selects the block (event bubbles to the card's onSelect).
         const motionLabel = isBusy
           ? motionBusyMessage
           : requiresAsset
-            ? '📎 Anexar asset primeiro'
+            ? '📎 Anexar asset'
             : isStale
               ? (snapCount === 0 && currentAssets.length > 0
-                  ? `Regenerar com ${noun(currentAssets.length)}`
-                  : snapCount > 0 && currentAssets.length === 0
-                    ? 'Regenerar sem asset'
-                    : 'Regenerar')
+                  ? `Regenerar (${noun(currentAssets.length)})`
+                  : 'Regenerar no Dock')
               : isReady
                 ? 'Motion ✓'
                 : isError
                   ? 'Motion ⚠'
-                  : currentAssets.length > 0
-                    ? `Gerar com ${noun(currentAssets.length)}`
-                    : 'Gerar motion';
+                  : 'Sem motion';
 
         const motionCls = isBusy
-          ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-200 cursor-progress'
+          ? 'bg-blue-500/10 border-blue-400/40 text-blue-200 cursor-progress'
           : requiresAsset
-            ? 'bg-amber-500/15 border-amber-400/50 text-amber-100 hover:bg-amber-500/25'
+            ? 'bg-amber-500/15 border-amber-400/50 text-amber-100 hover:bg-amber-500/25 cursor-pointer'
             : isStale
-              ? 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:bg-amber-500/30'
+              ? 'bg-amber-500/15 border-amber-400/40 text-amber-200'
               : isReady
-                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20'
+                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
                 : isError
-                  ? 'bg-red-500/15 border-red-500/40 text-red-200 hover:bg-red-500/25'
-                  : 'bg-fuchsia-500/[0.08] border-fuchsia-400/30 text-fuchsia-200 hover:bg-fuchsia-500/15 hover:border-fuchsia-400/50';
+                  ? 'bg-red-500/15 border-red-500/40 text-red-200'
+                  : 'bg-white/[0.04] border-white/10 text-zinc-400';
 
         const describeList = (items: { name: string }[]): string =>
           items.length === 0 ? '(nenhum)' : items.map(x => `"${x.name}"`).join(' → ');
@@ -6473,16 +7324,14 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         const motionTooltip = isBusy
           ? motionBusyMessage ?? 'Gerando…'
           : requiresAsset
-            ? 'A pasta do projeto tem assets, mas este bloco não tem nenhum anexado. Anexe um antes de gerar.'
+            ? 'A pasta do projeto tem assets, mas este bloco não tem nenhum anexado. Clique pra anexar.'
             : isStale
-              ? `Motion foi gerado com ${describeList(snapItems)}. Atual: ${describeList(currentAssets)}. Clique pra regerar.`
+              ? `Motion foi gerado com ${describeList(snapItems)}. Atual: ${describeList(currentAssets)}. Regere no Dock abaixo.`
               : isReady
-                ? `Editar motion · ${m?.intent ?? ''}`
+                ? `Motion pronto · ${m?.intent ?? ''} — configure no Dock abaixo`
                 : isError
-                  ? `Erro: ${m?.errorMessage ?? ''}. Clique pra tentar de novo.`
-                  : currentAssets.length > 0
-                    ? `Gerar motion com ${currentAssets.length} ${currentAssets.length === 1 ? 'asset' : 'slides em sequência'}`
-                    : 'Gerar motion automaticamente (Gemini decide)';
+                  ? `Erro: ${m?.errorMessage ?? ''}. Regere no Dock abaixo.`
+                  : 'Sem motion ainda — gere no Dock abaixo do card';
 
         const assetCount = currentAssets.length;
         const assetLabel = assetCount === 0
@@ -6512,7 +7361,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                 </button>
                 {carouselRole && (
                   <span className={`text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase tracking-wide ${
-                    carouselRole === 'cover' ? 'bg-violet-500/30 text-violet-300' :
+                    carouselRole === 'cover' ? 'bg-blue-500/25 text-blue-300' :
                     carouselRole === 'cta'   ? 'bg-emerald-500/20 text-emerald-300' :
                                               'bg-white/5 text-zinc-500'
                   }`}>
@@ -6522,17 +7371,13 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
               </div>
 
               <div className="flex items-center gap-1 flex-1 min-w-0 justify-end">
-                <button
+                <div
                   onClick={(e) => {
-                    e.stopPropagation();
-                    if (isBusy) return;
-                    // When blocked by missing asset, redirect the click to the
-                    // AssetPicker so the user can fix it in one tap instead of
-                    // hunting for the right button.
-                    if (requiresAsset) { onOpenAssetPicker(); return; }
-                    onOpenMotion();
+                    // Missing-asset is the one actionable state: one tap opens
+                    // the AssetPicker. Everything else bubbles to the card's
+                    // onSelect — the Motion Dock below is where actions live.
+                    if (!isBusy && requiresAsset) { e.stopPropagation(); onOpenAssetPicker(); }
                   }}
-                  disabled={isBusy}
                   className={`px-2.5 py-1 rounded-md text-[11px] font-medium border transition-colors flex items-center gap-1.5 min-w-0 ${motionCls}`}
                   title={motionTooltip}
                 >
@@ -6542,13 +7387,11 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                       <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                     </svg>
                   )}
-                  {!isBusy && (
-                    isReady
-                      ? <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
-                      : <span className="text-[12px] leading-none">🎨</span>
+                  {!isBusy && isReady && (
+                    <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" /></svg>
                   )}
                   <span className="truncate">{motionLabel}</span>
-                </button>
+                </div>
                 {/* ⋯ menu (motion advanced · asset · jump/move/duplicate/delete) */}
                 <div className="relative shrink-0">
                   <button
@@ -6572,7 +7415,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                             onClick={() => { setMoreMenuOpen(false); onOpenMotionAdvanced(); }}
                             className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
                           >
-                            <svg className="w-3.5 h-3.5 text-fuchsia-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                            <svg className="w-3.5 h-3.5 text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                               <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                             </svg>
@@ -6583,7 +7426,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                           onClick={() => { setMoreMenuOpen(false); onOpenAssetPicker(); }}
                           className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
                         >
-                          <svg className="w-3.5 h-3.5 text-violet-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                          <svg className="w-3.5 h-3.5 text-blue-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
                             <path strokeLinecap="round" strokeLinejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                           </svg>
                           Anexar asset…
@@ -6593,7 +7436,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
                           onClick={() => { setMoreMenuOpen(false); onJumpTo(); }}
                           className="w-full text-left px-3 py-2 text-[12px] text-zinc-200 hover:bg-white/5 flex items-center gap-2"
                         >
-                          <svg className="w-3.5 h-3.5 text-violet-300" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                          <svg className="w-3.5 h-3.5 text-blue-300" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
                           Pular pra este bloco
                         </button>
                         <button
@@ -6638,7 +7481,7 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
       })()}
       <textarea
         value={b.text}
-        onChange={e => onUpdateText(e.target.value)}
+                    onChange={e => onUpdateText(e.target.value)}
         placeholder="Digite o texto desse bloco..."
         spellCheck={false}
         autoCorrect="off"
@@ -6651,7 +7494,9 @@ const ScriptBlockCard: React.FC<BlockCardProps> = ({ block: b, index, total, wor
         <span>{formatTime(b.start)} → {formatTime(b.end)}{b.dirty && <span className="ml-1.5 text-amber-400">· alterado</span>}</span>
         <span>
           {duration.toFixed(1)}s · {wordCount} palavras
-          {isAvatar && cost > 0 && <span className="text-amber-400/70 ml-2">${cost.toFixed(2)}</span>}
+          {/* Per-block HeyGen cost is a CREATION concept — meaningless when the
+              speech comes from the user's own imported video. */}
+          {!editMode && isAvatar && cost > 0 && <span className="text-amber-400/70 ml-2">${cost.toFixed(2)}</span>}
         </span>
       </div>
     </div>

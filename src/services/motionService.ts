@@ -16,11 +16,13 @@
 
 import { GoogleGenAI, Type } from '@google/genai';
 import { logActualCost, calculateActualCost } from './costPredictor';
+import { EDITING_PACING_RULES, MOTION_LAWS_BRIEF, EASING_DICTIONARY, CAPTION_TONES } from './editingPlaybook';
 import type { MotionConfig, FontSet } from '../components/reelsStudio/motionLibrary';
 import { buildFontSetHead, FONT_SETS_PROMPT_TABLE } from '../components/reelsStudio/motionFontSets';
 import { buildOverlays, OVERLAYS_PROMPT_HINT } from '../components/reelsStudio/motionOverlays';
 import {
   STYLE_PRESETS,
+  TEMPLATE_PRESET_IDS,
   ANIMATION_GRAMMAR_BRIEF,
   FORBIDDEN_PATTERNS,
   findStylePreset,
@@ -54,7 +56,7 @@ export interface GenerationOutput {
   };
 }
 
-const getApiKey = (): string => {
+export const getApiKey = (): string => {
   const key = localStorage.getItem('GOOGLE_API_KEY');
   if (!key) throw new Error('GOOGLE_API_KEY não configurada.');
   return key;
@@ -89,7 +91,7 @@ const readSelectedMotionModel = (): MotionModelId => {
   return DEFAULT_MOTION_MODEL;
 };
 
-const getModelCandidates = (preferred?: string): readonly MotionModelId[] => {
+export const getModelCandidates = (preferred?: string): readonly MotionModelId[] => {
   // Per-block override (preferred) wins; else the global localStorage choice.
   const valid = preferred && (SUPPORTED_MOTION_MODELS as readonly string[]).includes(preferred)
     ? (preferred as MotionModelId)
@@ -991,6 +993,29 @@ export interface GenerateMotionInput {
    * `.shimmer-sweep-target` class where appropriate.
    */
   overlays?: { grain?: boolean; vignette?: boolean; shimmer?: boolean };
+  /**
+   * When true, generates a motion graphic designed as a SCREEN-BLEND OVERLAY
+   * over an existing video (not a full-frame composition). The motion uses
+   * pure black (#000000) background so screen-blend makes it disappear and
+   * only the foreground elements (text, icons, badges) remain visible over the
+   * user's talking-head video. Activates the OVERLAY CONSTRAINT section of the
+   * system prompt. Use with `motionLayer: 'overlay'` or `'fullscreen'`.
+   */
+  overlayMode?: boolean;
+  /**
+   * HyperFrames lint error from a previous generation attempt.
+   * When provided, Gemini is shown the exact lint errors and asked to produce
+   * corrected HTML in its next attempt. Used by the self-correction retry loop —
+   * never set by callers outside the retry logic.
+   */
+  lintError?: string;
+  /**
+   * Pre-filled template variable values from the template router
+   * (routeTemplateForBlock). When present for a template preset, the
+   * variable-extraction Gemini call is skipped — the router already filled
+   * them in the same call that selected the template.
+   */
+  templateVars?: Record<string, string>;
 }
 
 // ─── Step 1: Brand research via Google Search grounding ───────────────────────
@@ -1394,12 +1419,228 @@ ${lineGsap}
   };
 }
 
-// ─── Main HTML generator ────────────────────────────────────────────────────
+// ─── Template preset handler ─────────────────────────────────────────────────
+
+/** Dispatch a template preset to its builder, fill vars, apply brand palette. */
+async function _dispatchTemplateBuilder(
+  input: GenerateMotionInput,
+  vars: Record<string, string>,
+): Promise<GenerationOutput> {
+  const T = await import('./motionTemplates');
+  let out: GenerationOutput;
+  switch (input.presetId) {
+    case 'stat-counter':        out = T.buildStatCounter(input, vars); break;
+    case 'typewriter-terminal': out = T.buildTypewriterTerminal(input, vars); break;
+    case 'imessage-notif':      out = T.buildImessageNotification(input, vars); break;
+    case 'audio-waveform':      out = T.buildAudioWaveform(input, vars); break;
+    case 'app-icon-launcher':   out = await T.buildAppIconLauncher(input, vars); break;
+    case 'wastebasket-trash':   out = await T.buildWastebasketTrash(input, vars); break;
+    case 'toggle-flip':         out = T.buildToggleFlip(input, vars); break;
+    case 'progress-bar':        out = T.buildProgressBar(input, vars); break;
+    case 'apple-maps-route':    out = T.buildAppleMapsRoute(input, vars); break;
+    case 'claude-bloom-steps':  out = await T.buildClaudeBloomSteps(input, vars); break;
+    default:                    out = T.buildStatCounter(input, vars); break;
+  }
+  // Overlay mode (screen-blend over footage): pure-black canvas, no bg
+  // pattern. Applied first — overrides any light-mode/brand background.
+  if (input.overlayMode) {
+    out.htmlBody = T.applyOverlayMode(out.htmlBody, input.presetId);
+    return out;
+  }
+  // Light/dark toggle first, then brand palette (brand wins when both exist).
+  out.htmlBody = T.applyColorMode(out.htmlBody, input.presetId, input.motionColorMode);
+  const brand = input.existingBrand;
+  if (brand) {
+    out.htmlBody = T.applyBrandPalette(out.htmlBody, input.presetId, {
+      bg: brand.brandBackgroundColor,
+      text: brand.brandTextColor,
+      accent: brand.brandPrimaryColor,
+    });
+  }
+  return out;
+}
+
+async function _buildTemplateHtml(input: GenerateMotionInput): Promise<GenerationOutput> {
+  const { TEMPLATE_VARIABLE_SCHEMAS } = await import('./motionTemplates');
+  const schema = TEMPLATE_VARIABLE_SCHEMAS[input.presetId] ?? [];
+
+  // Pre-filled vars (from the template router) skip the extraction call entirely.
+  if (input.templateVars && Object.keys(input.templateVars).length > 0) {
+    return _dispatchTemplateBuilder(input, input.templateVars);
+  }
+
+  // No variables to fill — build directly (audio-waveform).
+  if (schema.length === 0) {
+    return _dispatchTemplateBuilder(input, {});
+  }
+
+  // Ask Gemini to fill ONLY the variable values — same model chain + cost
+  // logging as the main generator, just a much smaller prompt.
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const varList = schema.map(v =>
+    `- ${v.name} (${v.required ? 'obrigatório' : 'opcional'}): ${v.description}. Exemplo: "${v.example}"`
+  ).join('\n');
+  const prompt = [
+    `Bloco do script de um Reel: "${input.blockText}"`,
+    `Template visual escolhido: ${input.presetId}`,
+    '',
+    'Preencha os valores das variáveis abaixo baseado no conteúdo do bloco.',
+    'Os textos devem estar na MESMA LÍNGUA do bloco. Seja fiel ao conteúdo — não invente números ou fatos.',
+    '',
+    'Variáveis:',
+    varList,
+    '',
+    'Responda SOMENTE com JSON válido:',
+    `{${schema.map(v => `"${v.name}":"..."`).join(',')}}`,
+  ].join('\n');
+
+  let vars: Record<string, string> = {};
+  let lastErr: unknown;
+  for (const model of getModelCandidates(input.preferredModel)) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: { parts: [{ text: prompt }] },
+        config: { responseMimeType: 'application/json', temperature: 0.3, maxOutputTokens: 1024 },
+      });
+      logActualCost('Motion Template Vars', model, response.usageMetadata, 0);
+      const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
+      vars = JSON.parse(raw.replace(/```json|```/g, '').trim());
+      lastErr = undefined;
+      break;
+    } catch (err) {
+      lastErr = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const retryable = /not found|NOT_FOUND|not supported|404|503|UNAVAILABLE|overload|RESOURCE_EXHAUSTED|429|500|INTERNAL/i.test(msg);
+      if (!retryable) break;
+    }
+  }
+  if (lastErr) {
+    console.warn('[motionTemplates] variable extraction failed, using template defaults:', lastErr);
+  }
+  return _dispatchTemplateBuilder(input, vars);
+}
+
+// ─── Template router — LLM picks the best template for a block ──────────────
+
+export interface TemplateRouteResult {
+  templateId: string;
+  vars: Record<string, string>;
+  rationale: string;
+}
+
+/**
+ * One small Gemini call that decides whether any motion-pack template fits the
+ * block AND fills its variables in the same shot. Returns null when no
+ * template fits — caller falls back to the freeform Gemini HTML generator.
+ *
+ * Used by the auto-pipeline (from-scratch creation). NOT used when the user
+ * explicitly picked a preset in the modal — explicit choice always wins.
+ */
+export const routeTemplateForBlock = async (input: {
+  blockText: string;
+  durationSec: number;
+  preferredModel?: string;
+  /** True when the motion does NOT own the whole frame (float over a person,
+   *  or a split half). Motion-pack templates are full-frame DESIGNS — giant
+   *  titles, centered grids — so they are only routable when the motion is
+   *  full-frame replace. Anything else gets freeform generation, which
+   *  respects the face-safe zone / split canvas. */
+  overlayContext?: boolean;
+}): Promise<TemplateRouteResult | null> => {
+  // Templates are geometrically full-frame: routing one into a float would
+  // plaster a 1080×1920 layout over the speaker's face (the "Ferramenta
+  // gigante" bug). Freeform handles those contexts.
+  if (input.overlayContext) return null;
+
+  const { TEMPLATE_SELECTION_CATALOG, TEMPLATE_VARIABLE_SCHEMAS } = await import('./motionTemplates');
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+
+  const availableTemplates = TEMPLATE_SELECTION_CATALOG;
+
+  const catalog = availableTemplates.map(t => {
+    const schema = TEMPLATE_VARIABLE_SCHEMAS[t.id] ?? [];
+    const varDesc = schema.length > 0
+      ? ` Variáveis: ${schema.map(v => `${v.name} (${v.description})`).join('; ')}`
+      : ' (sem variáveis)';
+    return `- "${t.id}": ${t.whenToUse}${varDesc}`;
+  }).join('\n');
+
+  const prompt = [
+    'Você é um diretor de motion graphics para Reels. Para o bloco de script abaixo, decida se algum dos templates da biblioteca encaixa PERFEITAMENTE no conteúdo. Seja conservador: escolha um template apenas quando o bloco pede exatamente aquele visual; na dúvida, responda null.',
+    '',
+    input.overlayContext
+      ? 'CONTEXTO: o motion vai FLUTUAR sobre um vídeo real de talking-head via screen-blend — elementos compactos e claros, nunca cobrindo o centro do frame onde está o rosto.'
+      : '',
+    `Bloco (${input.durationSec.toFixed(0)}s de fala): "${input.blockText}"`,
+    '',
+    'Biblioteca de templates:',
+    catalog,
+    '',
+    'Se um template encaixar, preencha TODAS as variáveis dele com base no conteúdo do bloco (mesma língua do bloco, fiel aos fatos — não invente números).',
+    '',
+    'Responda SOMENTE com JSON válido:',
+    '{"templateId": "<id ou null>", "variables": {"NOME": "valor", ...}, "rationale": "<1 frase explicando>"}',
+  ].filter(Boolean).join('\n');
+
+  for (const model of getModelCandidates(input.preferredModel)) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: { parts: [{ text: prompt }] },
+        config: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 1536 },
+      });
+      logActualCost('Motion Template Router', model, response.usageMetadata, 0);
+      const raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '{}';
+      const parsed = JSON.parse(raw.replace(/```json|```/g, '').trim()) as {
+        templateId?: string | null;
+        variables?: Record<string, string>;
+        rationale?: string;
+      };
+      const validIds = availableTemplates.map(t => t.id);
+      if (!parsed.templateId || !validIds.includes(parsed.templateId)) return null;
+      return {
+        templateId: parsed.templateId,
+        vars: parsed.variables ?? {},
+        rationale: parsed.rationale ?? '',
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const retryable = /not found|NOT_FOUND|not supported|404|503|UNAVAILABLE|overload|RESOURCE_EXHAUSTED|429|500|INTERNAL/i.test(msg);
+      if (!retryable) {
+        console.warn('[motion/router] template routing failed:', msg);
+        return null;
+      }
+    }
+  }
+  return null;
+};
+
+// ─── Main HTML generator ─────────────────────────────────────────────────────
 
 export const generateMotionHtml = async (input: GenerateMotionInput): Promise<GenerationOutput & { brand?: BrandResearch }> => {
+  // ── CENTRAL TEMPLATE GATE ──
+  // Templates (and the native claude-ui doc) are full-frame 1080×1920
+  // DESIGNS — giant titles, centered grids. Composited as a float or split
+  // they plaster a full-screen layout over the speaker's face (the
+  // "Ferramenta gigante" bug). No matter which path requested it (router,
+  // director, effect-detector seed, modal regen with a stale presetId),
+  // anything that isn't full-frame 'replace' falls back to freeform, which
+  // authors inside the face-safe zone.
+  const isFullFrame = !input.motionLayer || input.motionLayer === 'replace';
+  if (!isFullFrame && (input.presetId === 'claude-ui' || TEMPLATE_PRESET_IDS.includes(input.presetId))) {
+    console.warn('[motion] template', input.presetId, 'requested for layer', input.motionLayer, '— full-frame design over a person; falling back to freeform');
+    input = { ...input, presetId: 'bold-pop', templateVars: undefined };
+  }
+
   // Claude UI preset — native HTML, no Gemini call needed.
   if (input.presetId === 'claude-ui') {
     return _buildClaudeUiHtml(input);
+  }
+
+  // Motion-pack templates — static HTML + small Gemini variable fill.
+  if (TEMPLATE_PRESET_IDS.includes(input.presetId)) {
+    return _buildTemplateHtml(input);
   }
 
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
@@ -1537,7 +1778,7 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
   // inject a mandatory override that forces a white/light background palette.
   // Light presets (bgType !== 'dark') are intentionally skipped — they are
   // already bright and don't need forcing.
-  const lightModeSection = (input.motionColorMode === 'light' && preset.bgType === 'dark') ? [
+  const lightModeSection = (input.motionColorMode === 'light' && preset.bgType === 'dark' && !input.overlayMode) ? [
     `╔══════════════════════════════════════════════════════╗`,
     `  ☀️  LIGHT MODE OVERRIDE — MANDATORY (user setting)`,
     `╚══════════════════════════════════════════════════════╝`,
@@ -1974,8 +2215,20 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       `• y:0–1100 (top 57%) MUST be pure black — that's where the presenter's face/chest live; nothing visible there`,
       `• y:1536–1920 (bottom 20%) MUST be pure black — that's the platform UI occlusion zone, anything there gets hidden by the app chrome on upload`,
       `• Text: white or bright brand color, bold sans, strong drop shadow so it reads over the moving presenter behind`,
+      `• LIGHT-ON-DARK ONLY — the screen blend can only LIGHTEN: mid-gray or dark fills VANISH over bright`,
+      `  footage. The app composites a soft dark scrim behind this overlay, so design bright content on black:`,
+      `  pure-white / vivid brand colors with a strong glow (text-shadow), never dark card backgrounds as the`,
+      `  primary container (they read on dark preview but disappear over a white wall).`,
       `• Energy: a single hero element (headline / stat / label) — NOT a dense composition. Mobile = one idea per overlay.`,
       `• NO atmospheric gradients/glows outside y:1114–1536 — they'd brighten the face or get clipped`,
+      ``,
+      `FACE RULES (from the motion-pack guide — a real person is talking behind this overlay):`,
+      `• "If my face is in the video: place graphics in the lower-half ONLY, below my chin."`,
+      `• "Logos that fly in should arc through open space, never cross my face" — entrance paths`,
+      `  must travel through the lower half (slide up from y:1920 or in from the sides at y>1100),`,
+      `  NEVER descend through the center of the frame.`,
+      `• "IG Reel top 220px: reserved for handle/follow button — keep graphics out."`,
+      `• "IG Reel bottom 420px: reserved for caption/like/comment — keep graphics out."`,
       ``,
       `📐 SAFE AREA (floating overlay card, 1080×1920):`,
       `  Primary content: x:80–1000, y:1114–1536 (the mobile-safe floating zone)`,
@@ -2049,7 +2302,20 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
         `                radial-gradient(ellipse 60% 50% at ${atm.warmGlow.pos}, ${rgba(atm.warmGlow.color, atmWarmAlpha)} 0%, transparent 60%),`,
         `                radial-gradient(ellipse 55% 45% at ${atm.coolGlow.pos}, ${rgba(atm.coolGlow.color, atmCoolAlpha)} 0%, transparent 65%);"></div>`,
       ].join('\n');
-  const atmosphereSection = [
+  const atmosphereSection = input.overlayMode ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  🎨 ATMOSPHERE — FLOATING OVERLAY: NONE.`,
+    `╚══════════════════════════════════════════════════════╝`,
+    `This composition is screen-blended over real footage AND the user can`,
+    `slide it vertically. Any full-frame glow/gradient/vignette/grain creates`,
+    `a VISIBLE SEAM at the frame edge when repositioned, and brightens the`,
+    `speaker's face. Therefore:`,
+    `• Track 0 background: <div style="position:absolute; inset:0; background:#000000;"></div> — pure black, NOTHING else.`,
+    `• NO radial-gradient atmospheres, NO vignette pass, NO dot grids, NO grain.`,
+    `• Glow is allowed ONLY as a tight box-shadow/halo hugging the card itself`,
+    `  (fully contained inside y:1064–1586) — never reaching the canvas edges.`,
+    ``,
+  ].filter(Boolean).join('\n') : [
     `╔══════════════════════════════════════════════════════╗`,
     `  🎨 ATMOSPHERE — copy this snippet for track 0`,
     `╚══════════════════════════════════════════════════════╝`,
@@ -2144,7 +2410,31 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
       ].join('\n')
     : '';
 
+  // Overlay mode: the motion sits OVER a real talking-head video via screen-blend.
+  // Pure black bg + only bright foreground elements = black disappears, elements float.
+  const overlayConstraintSection = input.overlayMode ? [
+    `╔══════════════════════════════════════════════════════╗`,
+    `  🎬 OVERLAY MODE — screen-blend over talking-head video`,
+    `╚══════════════════════════════════════════════════════╝`,
+    ``,
+    `OVERLAY CONSTRAINT (OBRIGATÓRIO — não ignorar):`,
+    `• Background: PRETO PURO #000000. NENHUM gradiente, nenhuma partícula de fundo,`,
+    `  nenhum atmosphere-bake, NENHUM dot-grid, NENHUMA vinheta, NENHUM grain-overlay.`,
+    `  O track-0 background clip DEVE ser apenas #000000 sólido.`,
+    `• Apenas elementos FOREGROUND em cores CLARAS (branco, cores vivas, amarelo, ciano…):`,
+    `  texto, ícones, badges, números, cards isolados. Nada que preencha >40% da tela.`,
+    `• Por quê: o preto vai SUMIR via screen-blend no renderer — o vídeo real do usuário`,
+    `  fica visível atrás. Elementos claros flutuam sobre o rosto do apresentador.`,
+    `• Composição parcial: deixe espaço generoso nos lados e topo pro rosto aparecer.`,
+    `• Drop-shadow em texto é bem-vindo (ajuda contraste sobre o vídeo de fundo).`,
+    `• NÃO use: background-color diferente de #000, backdrop-filter, opacidade de fundo.`,
+    ``,
+    EDITING_PACING_RULES,
+    ``,
+  ].join('\n') : '';
+
   const userBrief = [
+    overlayConstraintSection,
     languageSection,
     slotSection,
     '',
@@ -2206,9 +2496,29 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     '',
     ANIMATION_GRAMMAR_BRIEF,
     '',
+    MOTION_LAWS_BRIEF,
+    '',
+    EASING_DICTIONARY,
+    '',
+    CAPTION_TONES,
+    '',
     FORBIDDEN_PATTERNS,
+    // Self-correction: when a previous generation attempt produced HTML that failed
+    // HyperFrames lint, include the exact errors so Gemini can avoid repeating them.
+    input.lintError ? [
+      '',
+      '⚠️ LINT CORRECTION REQUIRED — your previous HTML failed HyperFrames validation:',
+      input.lintError,
+      'Fix ALL of the above errors in your new output. Do NOT repeat them.',
+    ].join('\n') : '',
   ].filter(Boolean).join('\n');
 
+  // Float overlays author at FULL 1080×1920 like everything else — the
+  // overlay slotSection constrains content to the face-safe card zone and the
+  // screen-blend composite makes the black canvas transparent. A band-sized
+  // canvas (420px) was tried twice and failed twice: the model gravitates to
+  // 1920-space coordinates no matter what the canvas line says, dropping all
+  // content below the crop → black MP4s.
   const canvasSize = input.canvasAspect === '4:5' ? '1080×1350' : '1080×1920';
   const systemPromptForRequest = SYSTEM_PROMPT
     .replace('CANVAS_SIZE_PLACEHOLDER', canvasSize)
@@ -2377,9 +2687,28 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
 // ─── HTML doc assembly ─────────────────────────────────────────────────
 
 export const buildFullHtmlDoc = (motion: MotionConfig, canvasAspect?: '9:16' | '4:5', motionColorMode?: 'dark' | 'light'): string => {
+  // Motion-pack template builders return a COMPLETE self-contained document
+  // (own DOCTYPE, composition root and window.__timelines registration).
+  // Wrapping it again would produce nested DOCTYPEs + two composition roots
+  // and fail the HyperFrames lint — pass it through untouched.
+  if (/^\s*<!doctype html/i.test(motion.html)) {
+    return motion.html;
+  }
   const compositionId = motion.id;
   const dur = motion.durationSec;
-  const isSplit = motion.layer === 'split-bottom' || motion.layer === 'split-top';
+  // Placement (unified model) wins over the legacy layer — a stale layer here
+  // crops the canvas to 960px while the HTML was authored for 1920px, which
+  // renders pure black frames (the screen-blend then shows nothing).
+  const effLayer = motion.placement
+    ? (motion.placement.area === 'top-half' ? 'split-top'
+      : motion.placement.area === 'bottom-half' ? 'split-bottom'
+      : motion.placement.area === 'full' ? 'replace' : 'overlay')
+    : motion.layer;
+  const isSplit = effLayer === 'split-bottom' || effLayer === 'split-top';
+  // Float overlays author at FULL 1080×1920 (face-safe card zone) and are
+  // screen-blended over the whole frame. Never a band-sized canvas — the
+  // model authors in 1920-space regardless, so a shorter canvas just crops
+  // everything into black frames.
   const canvasH = isSplit ? 960 : canvasAspect === '4:5' ? 1350 : 1920;
   const isLight = motionColorMode === 'light';
 

@@ -165,6 +165,13 @@ export const buildStateFromSnapshot = async (
     motionEnergy: (snapshot as { motionEnergy?: ReelsState['motionEnergy'] }).motionEnergy ?? 'energetic',
     appTheme: snapshot.appTheme ?? 'dark',
     lastAvatarLayout: (snapshot as { lastAvatarLayout?: ReelsState['lastAvatarLayout'] }).lastAvatarLayout ?? 'avatar-top',
+    // Edit-video mode: restore the flag, overlay elements, and resolve the base
+    // video take from the rebuilt takes (so its url is fresh, not the null-ed one).
+    projectMode: snapshot.projectMode ?? 'generate',
+    baseVideoTake: snapshot.baseVideoTakeId
+      ? restoredTakes.find(t => t.id === snapshot.baseVideoTakeId)
+      : undefined,
+    overlayElements: snapshot.overlayElements ?? [],
   };
 };
 

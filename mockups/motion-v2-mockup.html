@@ -1,0 +1,780 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mockup · Motion v2 — criação + edição de vídeo</title>
+<style>
+  :root {
+    --bg: #0c0c0f;
+    --panel: #111114;
+    --panel-2: #18181c;
+    --line: rgba(255,255,255,0.07);
+    --line-2: rgba(255,255,255,0.12);
+    --txt: #e4e4e7;
+    --txt-2: #a1a1aa;
+    --txt-3: #71717a;
+    --blue: #60A5FA;
+    --blue-deep: #2563EB;
+    --amber: #fbbf24;
+    --emerald: #34d399;
+    --coral: #D97757;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { background: var(--bg); color: var(--txt); font-family: Inter, -apple-system, "SF Pro Text", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+  body { padding: 18px 22px 40px; }
+
+  .banner {
+    display:flex; align-items:center; gap:12px; margin-bottom:16px;
+    padding:10px 14px; border:1px solid var(--line-2); border-radius:10px; background:var(--panel);
+  }
+  .banner b { font-size:13px; letter-spacing:0.02em; }
+  .banner span.note { font-size:11.5px; color:var(--txt-2); }
+  .tag { font-size:9px; font-weight:800; letter-spacing:0.12em; text-transform:uppercase; padding:3px 8px; border-radius:5px; background:linear-gradient(180deg,#2563EB,#1d4ed8); color:#fff; }
+
+  /* mode switch */
+  .modes { margin-left:auto; display:flex; background:#0d0d10; border:1px solid var(--line-2); border-radius:9px; padding:3px; gap:3px; }
+  .modes button {
+    font-size:11.5px; font-weight:600; padding:6px 14px; border-radius:7px; border:none; cursor:pointer;
+    background:transparent; color:var(--txt-3); font-family:inherit;
+  }
+  .modes button.on { background:linear-gradient(180deg,#2a2a30,#1e1e23); color:#fff; box-shadow:0 1px 6px rgba(0,0,0,0.5); }
+
+  .app {
+    border:1px solid var(--line-2); border-radius:14px; overflow:hidden;
+    background:var(--bg); box-shadow:0 30px 80px rgba(0,0,0,0.8);
+  }
+  .topbar {
+    display:flex; align-items:center; gap:14px; padding:10px 16px;
+    background:var(--panel); border-bottom:1px solid var(--line);
+    font-size:12px; color:var(--txt-2);
+  }
+  .topbar .dot { width:10px; height:10px; border-radius:50%; background:#2a2a2e; }
+  .topbar .title { color:var(--txt); font-weight:600; }
+  .topbar .right { margin-left:auto; display:flex; gap:8px; }
+  .chipbtn {
+    font-size:11px; padding:5px 12px; border-radius:7px; border:1px solid var(--line-2);
+    background:var(--panel-2); color:var(--txt-2); cursor:default; font-family:inherit;
+  }
+  .chipbtn.primary { background:#fff; color:#111; font-weight:600; border-color:#fff; }
+
+  .main { display:grid; grid-template-columns: 1fr 392px; gap:0; }
+
+  /* ============ Preview ============ */
+  .stage {
+    display:flex; align-items:center; justify-content:center; padding:24px 20px;
+    background: radial-gradient(120% 100% at 50% 0%, #131318 0%, #0c0c0f 70%);
+    position:relative; min-height: 660px;
+  }
+  .phone {
+    width:330px; aspect-ratio: 9/16; border-radius:22px; overflow:hidden; position:relative;
+    background:#000; box-shadow: 0 24px 64px rgba(0,0,0,0.85), 0 0 0 1px rgba(255,255,255,0.09);
+  }
+
+  /* avatar layer (criação) */
+  .avatar-layer {
+    position:absolute; inset:0;
+    background: linear-gradient(180deg, #2e2e35 0%, #1b1b20 55%, #0a0a0c 100%);
+    transition: all .45s cubic-bezier(.2,.8,.2,1);
+  }
+  /* base video layer (edição) — vídeo gravado pelo usuário */
+  .video-layer {
+    position:absolute; inset:0; display:none;
+    background:
+      radial-gradient(90% 70% at 70% 18%, rgba(214,170,120,0.18) 0%, transparent 55%),
+      linear-gradient(180deg, #33302f 0%, #211f1e 55%, #0c0b0a 100%);
+  }
+  .video-layer::after {
+    content:""; position:absolute; inset:0; pointer-events:none; opacity:0.05;
+    background-image: repeating-linear-gradient(0deg, #fff 0 1px, transparent 1px 3px);
+  }
+  .vbadge {
+    position:absolute; top:10px; right:10px; z-index:40; font-size:8px; letter-spacing:0.1em; text-transform:uppercase;
+    color:var(--txt-2); background:rgba(0,0,0,0.6); border:1px solid var(--line); padding:3px 7px; border-radius:5px;
+  }
+  .person { position:relative; width:100%; height:100%; }
+  .person .head {
+    position:absolute; left:50%; top:24%; transform:translateX(-50%);
+    width:96px; height:112px; border-radius:48% 48% 44% 44%;
+    background: linear-gradient(180deg, #8d6e57 0%, #75573f 100%);
+  }
+  .person .hair {
+    position:absolute; left:50%; top:21.5%; transform:translateX(-50%);
+    width:104px; height:56px; border-radius:52px 52px 18px 18px; background:#2a2118;
+  }
+  .person .beard {
+    position:absolute; left:50%; top:31.8%; transform:translateX(-50%);
+    width:80px; height:46px; border-radius: 10px 10px 40px 40px; background:rgba(35,27,18,0.85);
+  }
+  .person .glasses {
+    position:absolute; left:50%; top:28%; transform:translateX(-50%);
+    width:88px; height:22px; display:flex; gap:8px; justify-content:center;
+  }
+  .person .glasses i { width:31px; height:22px; border:3px solid #15120e; border-radius:7px; background:rgba(255,255,255,0.05); }
+  .person .body {
+    position:absolute; left:50%; top:40%; transform:translateX(-50%);
+    width:210px; height:210px; border-radius:84px 84px 0 0;
+    background: linear-gradient(180deg, #27272c 0%, #1a1a1f 100%);
+  }
+  .video-layer .person .body { background: linear-gradient(180deg, #3a3431 0%, #241f1d 100%); }
+
+  /* float (full-frame blend) */
+  .motion-float { position:absolute; inset:0; pointer-events:none; z-index:30; }
+  .float-card {
+    position:absolute; left:7%; right:7%; top:58.5%;
+    background: rgba(13,16,24,0.86);
+    border:1.5px solid rgba(96,165,250,0.35); border-radius:14px;
+    padding:13px 14px 12px; backdrop-filter: blur(8px);
+    box-shadow: 0 14px 40px rgba(0,0,0,0.75), 0 0 28px rgba(96,165,250,0.12);
+    transform-origin: 50% 100%;
+    animation: cardIn 5.2s cubic-bezier(.22,1,.36,1) infinite;
+  }
+  @keyframes cardIn {
+    0%   { opacity:0; transform: translateY(26px) scale(0.96); }
+    7%   { opacity:1; transform: translateY(0) scale(1); }
+    14%  { transform: translateY(0) scale(1.012); }
+    20%  { transform: translateY(0) scale(1); }
+    50%  { transform: translateY(0) scale(1.01); }
+    86%  { opacity:1; transform: translateY(0) scale(1); }
+    94%, 100% { opacity:0; transform: translateY(14px) scale(0.97); }
+  }
+  .float-card .kicker { font-size:7.5px; font-weight:800; letter-spacing:0.18em; color:var(--blue); text-transform:uppercase; margin-bottom:5px; }
+  .float-card .stat { font-size:27px; font-weight:900; letter-spacing:-0.03em; line-height:1; }
+  .float-card .stat em { font-style:normal; color:var(--amber); }
+  .float-card .bar { margin-top:9px; height:5px; border-radius:3px; background:rgba(255,255,255,0.1); overflow:hidden; }
+  .float-card .bar i { display:block; height:100%; width:30%; border-radius:3px; background:linear-gradient(90deg,var(--blue-deep),var(--blue)); animation: fillUp 5.2s ease-in-out infinite; }
+  @keyframes fillUp { 0%,8% {width:4%;} 60%,86% {width:86%;} 94%,100% {width:86%; opacity:0;} }
+  .float-card .sub { margin-top:7px; font-size:8.5px; color:var(--txt-2); }
+
+  /* legenda karaokê (edição) */
+  .caption { position:absolute; left:0; right:0; top:75.5%; z-index:32; display:none; text-align:center; }
+  .caption span {
+    font-size:13.5px; font-weight:800; letter-spacing:-0.01em; padding:0 2px;
+    color:#fff; text-shadow:0 2px 8px rgba(0,0,0,0.9);
+  }
+  .caption span.hl { color:var(--amber); animation: hlPulse 3.2s steps(1) infinite; }
+  @keyframes hlPulse {
+    0%, 24%  { color:#fff; }
+    25%, 49% { color:var(--amber); }
+    50%, 100% { color:#fff; }
+  }
+  .caption span:nth-child(2).hl { animation-delay: 0.8s; }
+  .caption span:nth-child(4).hl { animation-delay: 1.6s; }
+
+  /* split + full */
+  .motion-panel {
+    position:absolute; left:0; right:0; z-index:30; overflow:hidden;
+    background:
+      radial-gradient(80% 90% at 20% 10%, rgba(37,99,235,0.16) 0%, transparent 60%),
+      radial-gradient(70% 80% at 85% 90%, rgba(251,191,36,0.07) 0%, transparent 55%),
+      #050507;
+    display:none; align-items:center; justify-content:center;
+  }
+  .mini-ui {
+    width:78%; border-radius:12px; border:1px solid rgba(96,165,250,0.28);
+    background:rgba(15,17,24,0.92); padding:12px;
+    box-shadow:0 16px 40px rgba(0,0,0,0.7);
+    animation: uiBreath 3.4s ease-in-out infinite;
+  }
+  @keyframes uiBreath { 0%,100% { transform:scale(1);} 50% { transform:scale(1.014);} }
+  .mini-ui .row { display:flex; align-items:center; gap:8px; }
+  .mini-ui .led { width:22px; height:22px; border-radius:7px; background:linear-gradient(135deg,var(--blue-deep),var(--blue)); display:flex; align-items:center; justify-content:center; font-size:11px; }
+  .mini-ui .t1 { font-size:11px; font-weight:800; letter-spacing:-0.01em; }
+  .mini-ui .t2 { font-size:7.5px; color:var(--txt-3); }
+  .mini-ui .grid { margin-top:10px; display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; }
+  .mini-ui .cell { border-radius:7px; background:rgba(255,255,255,0.05); border:1px solid var(--line); padding:7px 6px; }
+  .mini-ui .cell b { display:block; font-size:11px; color:var(--blue); }
+  .mini-ui .cell span { font-size:6.5px; color:var(--txt-3); letter-spacing:0.06em; text-transform:uppercase; }
+  .seam { position:absolute; left:0; right:0; height:2px; background:rgba(217,119,87,0.65); z-index:35; display:none; }
+
+  /* zonas seguras */
+  .guides { position:absolute; inset:0; z-index:50; pointer-events:none; display:none; }
+  .guides .zone-top { position:absolute; left:0; right:0; top:0; height:11.5%; background:repeating-linear-gradient(135deg, rgba(217,119,87,0.10) 0 8px, transparent 8px 16px); border-bottom:1px dashed rgba(217,119,87,0.55); }
+  .guides .zone-bottom { position:absolute; left:0; right:0; bottom:0; height:19.8%; background:repeating-linear-gradient(135deg, rgba(217,119,87,0.10) 0 8px, transparent 8px 16px); border-top:1px dashed rgba(217,119,87,0.55); }
+  .guides .chin { position:absolute; left:0; right:0; top:56.4%; border-top:1px dashed rgba(96,165,250,0.7); }
+  .guides .glabel { position:absolute; font-size:7px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; padding:2px 6px; border-radius:4px; background:rgba(0,0,0,0.72); }
+  .guides .glabel.top { top:calc(11.5% - 9px); right:6px; color:#e8a188; }
+  .guides .glabel.chin { top:calc(56.4% + 4px); left:6px; color:var(--blue); }
+  .guides .glabel.bot { bottom:calc(19.8% + 5px); right:6px; color:#e8a188; }
+
+  .hud { position:absolute; top:10px; left:10px; z-index:60; font-size:8.5px; color:var(--txt-2); background:rgba(0,0,0,0.6); border:1px solid var(--line); padding:3px 8px; border-radius:6px; backdrop-filter:blur(4px); }
+
+  .stage-controls { position:absolute; left:22px; bottom:16px; display:flex; flex-direction:column; gap:8px; }
+  .stage-controls label { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--txt-2); cursor:pointer; user-select:none; }
+  .stage-controls input { accent-color: var(--blue); }
+
+  .callout {
+    position:absolute; right:22px; top:22px; width:210px;
+    border:1px solid var(--line-2); background:rgba(17,17,20,0.92); border-radius:10px; padding:11px 12px;
+    font-size:10.5px; color:var(--txt-2); line-height:1.5; backdrop-filter:blur(6px);
+  }
+  .callout b { color:var(--txt); display:block; font-size:11px; margin-bottom:3px; }
+  .callout .num { display:inline-flex; width:16px; height:16px; border-radius:5px; background:linear-gradient(180deg,var(--blue-deep),#1d4ed8); color:#fff; font-size:10px; font-weight:800; align-items:center; justify-content:center; margin-right:5px; }
+
+  /* ============ Painel direito ============ */
+  .side { background:var(--panel); border-left:1px solid var(--line); padding:14px 14px 18px; }
+  .side h3 { font-size:13px; font-weight:700; }
+  .side .sub { font-size:10.5px; color:var(--txt-3); margin-top:2px; margin-bottom:12px; }
+
+  .block-card {
+    border:1px solid rgba(96,165,250,0.4); background:var(--panel-2); border-radius:11px; padding:11px 12px; margin-bottom:10px;
+    box-shadow:0 0 0 3px rgba(96,165,250,0.07);
+  }
+  .block-card .head { display:flex; align-items:center; gap:7px; margin-bottom:7px; }
+  .badge { font-size:8.5px; font-weight:800; letter-spacing:0.1em; text-transform:uppercase; padding:2.5px 7px; border-radius:5px; }
+  .badge.avatar { background:rgba(251,191,36,0.13); color:var(--amber); border:1px solid rgba(251,191,36,0.3); }
+  .badge.fala { background:rgba(255,255,255,0.06); color:var(--txt-2); border:1px solid var(--line-2); }
+  .badge.status { background:rgba(52,211,153,0.1); color:var(--emerald); border:1px solid rgba(52,211,153,0.3); margin-left:auto; }
+  .block-card p { font-size:12px; color:var(--txt); line-height:1.45; }
+  .block-card p mark { background:rgba(96,165,250,0.18); color:var(--blue); border-radius:3px; padding:0 3px; font-weight:600; }
+
+  /* lista de overlays (edição) */
+  .ovlist { display:none; border:1px solid var(--line-2); border-radius:11px; background:var(--panel-2); padding:10px 11px; margin-bottom:10px; }
+  .ovlist .ot { font-size:9px; font-weight:800; letter-spacing:0.13em; text-transform:uppercase; color:var(--txt-3); margin-bottom:7px; display:flex; }
+  .ovlist .ot a { margin-left:auto; font-size:9.5px; font-weight:700; color:var(--blue); letter-spacing:0; text-transform:none; cursor:pointer; }
+  .ovitem { display:flex; align-items:center; gap:7px; padding:6px 8px; border-radius:7px; font-size:10.5px; color:var(--txt-2); cursor:pointer; }
+  .ovitem.sel { background:rgba(96,165,250,0.1); border:1px solid rgba(96,165,250,0.35); color:var(--txt); }
+  .ovitem .ic { font-size:10px; }
+  .ovitem .tm { margin-left:auto; font-size:9px; color:var(--txt-3); font-variant-numeric:tabular-nums; }
+
+  .dock { border:1px solid var(--line-2); border-radius:11px; background:var(--panel-2); padding:12px; }
+  .dock .dhead { display:flex; align-items:center; gap:7px; margin-bottom:11px; }
+  .dock .dhead .t { font-size:9px; font-weight:800; letter-spacing:0.14em; text-transform:uppercase; color:var(--txt-3); }
+  .dock .dhead select { margin-left:auto; background:transparent; color:var(--txt-3); border:1px solid var(--line); border-radius:5px; font-size:9px; padding:2px 4px; }
+  .step { margin-bottom:12px; }
+  .step .label { font-size:9px; font-weight:800; letter-spacing:0.12em; text-transform:uppercase; color:var(--txt-3); margin-bottom:6px; display:flex; align-items:center; gap:5px; }
+  .step .label .n { width:14px; height:14px; border-radius:4px; background:#26262c; color:var(--txt-2); font-size:9px; display:inline-flex; align-items:center; justify-content:center; }
+
+  .chips { display:flex; gap:5px; overflow-x:auto; padding-bottom:2px; }
+  .chips::-webkit-scrollbar { display:none; }
+  .chip {
+    flex-shrink:0; font-size:10px; padding:5px 10px; border-radius:7px; cursor:pointer; user-select:none;
+    border:1px solid var(--line-2); background:#141417; color:var(--txt-2); white-space:nowrap;
+  }
+  .chip.sel { background:rgba(96,165,250,0.13); border-color:rgba(96,165,250,0.55); color:var(--blue); font-weight:600; }
+  .chip .zap { color:var(--amber); }
+
+  .areas { display:flex; gap:6px; }
+  .area { width:62px; cursor:pointer; user-select:none; text-align:center; }
+  .area .mini { width:34px; height:58px; margin:0 auto 4px; border-radius:6px; border:1.5px solid var(--line-2); background:#0d0d10; position:relative; overflow:hidden; transition:border-color .15s; }
+  .area.sel .mini { border-color:var(--blue); box-shadow:0 0 0 2.5px rgba(96,165,250,0.18); }
+  .area .mini i { position:absolute; background:linear-gradient(180deg,rgba(96,165,250,0.85),rgba(37,99,235,0.85)); border-radius:2px; }
+  .area[data-a="float"] .mini i { left:4px; right:4px; top:56%; height:22%; box-shadow:0 0 8px rgba(96,165,250,0.5); }
+  .area[data-a="top"] .mini i { left:0; right:0; top:0; height:50%; border-radius:4.5px 4.5px 0 0; }
+  .area[data-a="bottom"] .mini i { left:0; right:0; bottom:0; height:50%; border-radius:0 0 4.5px 4.5px; }
+  .area[data-a="full"] .mini i { inset:0; border-radius:4.5px; }
+  .area span { font-size:8.5px; color:var(--txt-3); }
+  .area.sel span { color:var(--blue); font-weight:700; }
+
+  .when { background:#141417; border:1px solid var(--line); border-radius:8px; padding:9px 10px; }
+  .when .anchor { display:flex; align-items:center; gap:6px; font-size:10.5px; color:var(--txt); margin-bottom:8px; }
+  .when .anchor .a { color:var(--amber); font-size:11px; }
+  .when .anchor b { color:var(--blue); }
+  .when .anchor .src { margin-left:auto; font-size:8px; color:var(--txt-3); letter-spacing:0.08em; text-transform:uppercase; }
+  .slider { display:flex; align-items:center; gap:8px; font-size:9.5px; color:var(--txt-3); margin-top:6px; }
+  .slider .track { flex:1; height:3.5px; border-radius:2px; background:rgba(255,255,255,0.1); position:relative; }
+  .slider .track i { position:absolute; top:0; bottom:0; border-radius:2px; background:linear-gradient(90deg,var(--blue-deep),var(--blue)); }
+  .slider .track u { position:absolute; top:50%; width:11px; height:11px; border-radius:50%; background:#fff; transform:translate(-50%,-50%); box-shadow:0 1px 4px rgba(0,0,0,0.6); }
+  .slider .val { width:42px; text-align:right; color:var(--txt-2); font-variant-numeric:tabular-nums; }
+
+  .transp { display:flex; align-items:center; gap:6px; margin-top:10px; font-size:9.5px; color:var(--txt-3); }
+
+  .cta {
+    width:100%; margin-top:4px; padding:10px; border:none; border-radius:9px; cursor:pointer;
+    font-size:12px; font-weight:700; color:#fff; font-family:inherit;
+    background:linear-gradient(180deg,#60A5FA,#2563EB); box-shadow:0 3px 14px rgba(37,99,235,0.4);
+  }
+  .dock .foot { display:flex; justify-content:space-between; margin-top:9px; font-size:9.5px; }
+  .dock .foot a { color:var(--txt-3); text-decoration:none; border-bottom:1px dotted var(--line-2); cursor:pointer; }
+  .dock .foot a.go { color:var(--blue); }
+
+  /* ============ MontarBar (criação) / toolbar (edição) ============ */
+  .montar {
+    display:flex; align-items:center; gap:12px; padding:9px 16px;
+    background:var(--panel); border-top:1px solid var(--line); border-bottom:1px solid var(--line);
+  }
+  .montar .mt { font-size:11px; color:var(--txt-2); font-weight:600; display:flex; align-items:center; gap:6px; }
+  .phase { flex:1; max-width:225px; border:1px solid var(--line-2); border-radius:10px; padding:7px 11px; background:var(--panel-2); }
+  .phase .ph { display:flex; align-items:center; gap:6px; font-size:11px; font-weight:600; }
+  .phase .ps { font-size:9.5px; color:var(--txt-3); margin-top:1px; }
+  .phase .bar { margin-top:5px; height:3px; border-radius:2px; background:rgba(255,255,255,0.07); overflow:hidden; }
+  .phase .bar i { display:block; height:100%; border-radius:2px; }
+  .phase.done .bar i { width:100%; background:var(--emerald); }
+  .phase .check { margin-left:auto; font-size:11px; color:var(--emerald); }
+  .phase .pillbtn {
+    margin-left:auto; font-size:9.5px; font-weight:700; color:#fff; padding:4px 9px; border-radius:6px; border:none; cursor:pointer;
+    background:linear-gradient(180deg,#60A5FA,#2563EB); font-family:inherit;
+  }
+  .arrow { color:var(--txt-3); font-size:12px; }
+  .next { margin-left:auto; display:flex; align-items:center; gap:9px; }
+  .next .nl { font-size:9px; letter-spacing:0.1em; color:var(--txt-3); text-transform:uppercase; }
+
+  .edit-toolbar { display:none; align-items:center; gap:12px; padding:9px 16px; background:var(--panel); border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .edit-toolbar .mt { font-size:11px; color:var(--txt-2); font-weight:600; }
+  .edit-toolbar .info { font-size:10px; color:var(--txt-3); }
+  .edit-toolbar .gen {
+    margin-left:auto; font-size:11px; font-weight:700; color:#fff; padding:6px 14px; border-radius:8px; border:none; cursor:pointer;
+    background:linear-gradient(180deg,#60A5FA,#2563EB); box-shadow:0 2px 10px rgba(37,99,235,0.35); font-family:inherit;
+  }
+  .edit-toolbar .sec { font-size:10.5px; color:var(--txt-2); padding:6px 11px; border-radius:8px; border:1px solid var(--line-2); background:var(--panel-2); cursor:pointer; font-family:inherit; }
+
+  /* ============ Timeline — COMPACTA ============ */
+  .timeline { padding:8px 16px 12px; background:var(--bg); }
+  .ruler { display:flex; font-size:8px; color:var(--txt-3); font-variant-numeric:tabular-nums; margin-bottom:4px; padding-left:50px; }
+  .ruler span { flex:1; border-left:1px solid var(--line); padding-left:4px; }
+  .trk { display:flex; align-items:stretch; margin-bottom:4px; }
+  .trk .tl { width:50px; flex-shrink:0; font-size:7px; font-weight:800; letter-spacing:0.1em; color:var(--txt-3); text-transform:uppercase; display:flex; align-items:center; }
+  .trk .lane { flex:1; position:relative; border-radius:6px; }
+  .lane.audio { height:22px; background:var(--panel); border:1px solid var(--line); overflow:hidden; }
+  .wave { position:absolute; inset:0; display:flex; align-items:center; gap:1.5px; padding:0 6px; }
+  .wave i { flex:1; background:rgba(96,165,250,0.55); border-radius:1px; }
+  .lane.blocks { height:27px; }
+  .blk {
+    position:absolute; top:0; bottom:0; border-radius:6px; padding:2px 8px; font-size:9px; overflow:hidden;
+    border:1px solid; cursor:pointer; display:flex; align-items:center; gap:6px;
+  }
+  .blk .bk { font-size:6.5px; font-weight:800; letter-spacing:0.08em; text-transform:uppercase; opacity:0.8; flex-shrink:0; }
+  .blk .bt { font-size:8.5px; font-weight:600; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+  .blk.av { background:linear-gradient(180deg, rgba(251,191,36,0.16), rgba(251,191,36,0.08)); border-color:rgba(251,191,36,0.4); color:#fcd34d; }
+  .blk.br { background:linear-gradient(180deg, rgba(52,211,153,0.14), rgba(52,211,153,0.06)); border-color:rgba(52,211,153,0.35); color:#6ee7b7; }
+  .blk.fl { background:linear-gradient(180deg, rgba(255,255,255,0.07), rgba(255,255,255,0.03)); border-color:var(--line-2); color:var(--txt-2); }
+  .blk.sel { box-shadow:0 0 0 2px rgba(96,165,250,0.6); }
+  .lane.motions { height:24px; }
+  .mot {
+    position:absolute; top:1px; bottom:1px; border-radius:5px; padding:2px 7px; overflow:hidden; cursor:pointer;
+    background:linear-gradient(180deg, rgba(37,99,235,0.30), rgba(37,99,235,0.16));
+    border:1px solid rgba(96,165,250,0.55); color:#bfdbfe;
+    display:flex; align-items:center; gap:5px;
+  }
+  .mot.fullspan { background:linear-gradient(180deg, rgba(52,211,153,0.2), rgba(52,211,153,0.08)); border-color:rgba(52,211,153,0.4); color:#a7f3d0; }
+  .mot.txt { background:linear-gradient(180deg, rgba(251,191,36,0.16), rgba(251,191,36,0.07)); border-color:rgba(251,191,36,0.45); color:#fcd34d; }
+  .mot .mt1 { font-size:8px; font-weight:700; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
+  .mot .mt2 { font-size:6.5px; opacity:0.75; white-space:nowrap; flex-shrink:0; }
+  .mot .dot { width:4px; height:4px; border-radius:50%; background:var(--emerald); flex-shrink:0; }
+  .anchor-tick { position:absolute; top:-6px; width:1.5px; height:6px; background:var(--amber); }
+  .playhead { position:absolute; top:-3px; bottom:-3px; width:2px; background:var(--blue); border-radius:1px; box-shadow:0 0 8px rgba(96,165,250,0.8); z-index:5; }
+
+  .spacenote { display:flex; align-items:center; gap:7px; margin:6px 0 0 50px; font-size:9px; color:var(--txt-3); }
+  .spacenote .ln { flex:1; border-top:1px dashed var(--line-2); }
+
+  .legend { display:flex; gap:22px; margin-top:12px; padding:0 4px; flex-wrap:wrap; }
+  .legend .li { display:flex; gap:8px; font-size:10.5px; color:var(--txt-2); align-items:flex-start; max-width:300px; line-height:1.5; }
+  .legend .li .num { flex-shrink:0; width:17px; height:17px; border-radius:5px; background:linear-gradient(180deg,var(--blue-deep),#1d4ed8); color:#fff; font-size:10px; font-weight:800; display:flex; align-items:center; justify-content:center; margin-top:1px; }
+  .legend .li b { color:var(--txt); }
+
+  .m-edit-only { display:none; }
+  body.edit .m-create-only { display:none !important; }
+  body.edit .m-edit-only { display:flex; }
+  body.edit .ovlist { display:block; }
+  body.edit .montar { display:none; }
+  body.edit .edit-toolbar { display:flex; }
+  body.edit .video-layer { display:block; }
+  body.edit .avatar-layer { display:none; }
+  body.edit .caption { display:block; }
+</style>
+</head>
+<body>
+
+<div class="banner">
+  <span class="tag">Mockup</span>
+  <b>Motion v2 — como vai ficar</b>
+  <span class="note">Alterne os modos aqui → · clique nas colocações em "② Onde" · ligue as zonas seguras</span>
+  <div class="modes">
+    <button id="btnCreate" class="on">🎬 Criação (avatar)</button>
+    <button id="btnEdit">📼 Edição de vídeo</button>
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- ======= top bar ======= -->
+  <div class="topbar">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    <span class="title" id="projTitle">Reel · 11/06 10h15</span>
+    <span style="color:var(--emerald);font-size:11px;">✓ salvo</span>
+    <span id="projInfo">● Áudio pronto · 00:27.53 · Rob PT-BR</span>
+    <div class="right">
+      <button class="chipbtn">⋯</button>
+      <button class="chipbtn">✦ Agents</button>
+      <button class="chipbtn primary">Exportar ▾</button>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- ======= preview ======= -->
+    <div class="stage">
+      <div class="phone" id="phone">
+        <div class="hud" id="hud">Flutuar · screen-blend no frame inteiro</div>
+
+        <!-- criação: avatar HeyGen -->
+        <div class="avatar-layer" id="avatarLayer">
+          <div class="person">
+            <div class="body"></div>
+            <div class="head"></div><div class="hair"></div><div class="beard"></div><div class="glasses"><i></i><i></i></div>
+          </div>
+        </div>
+
+        <!-- edição: vídeo importado do usuário -->
+        <div class="video-layer" id="videoLayer">
+          <div class="vbadge">🎞 vídeo importado · 00:31</div>
+          <div class="person">
+            <div class="body"></div>
+            <div class="head"></div><div class="hair"></div><div class="beard"></div><div class="glasses"><i></i><i></i></div>
+          </div>
+        </div>
+
+        <!-- float full-frame (mesmo sistema nos 2 modos) -->
+        <div class="motion-float" id="layerFloat">
+          <div class="float-card">
+            <div class="kicker">⚡ Canva · novo recurso</div>
+            <div class="stat">R$ <em>4.700</em>/mês</div>
+            <div class="bar"><i></i></div>
+            <div class="sub">criando cardápios digitais pra restaurantes</div>
+          </div>
+        </div>
+
+        <!-- legenda karaokê (edição) -->
+        <div class="caption"><span>dá pra</span> <span class="hl">ganhar</span> <span>dinheiro</span> <span class="hl">de verdade</span></div>
+
+        <!-- split / full -->
+        <div class="motion-panel" id="layerPanel">
+          <div class="mini-ui">
+            <div class="row">
+              <div class="led">⚡</div>
+              <div><div class="t1">CARDÁPIOS DIGITAIS</div><div class="t2">BISTRÔ GOURMET · ABERTO</div></div>
+            </div>
+            <div class="grid">
+              <div class="cell"><b>R$49</b><span>prato chef</span></div>
+              <div class="cell"><b>+312</b><span>pedidos</span></div>
+              <div class="cell"><b>4.9★</b><span>avaliação</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="seam" id="seam"></div>
+
+        <!-- zonas seguras -->
+        <div class="guides" id="guides">
+          <div class="zone-top"></div>
+          <div class="zone-bottom"></div>
+          <div class="chin"></div>
+          <div class="glabel top">top 220px · handle/seguir</div>
+          <div class="glabel chin">linha do queixo — gráficos só abaixo</div>
+          <div class="glabel bot">bottom 380px · legenda/UI</div>
+        </div>
+      </div>
+
+      <div class="callout m-create-only" style="display:block">
+        <b><span class="num">1</span>Float agora é o frame inteiro</b>
+        Autorado em 1080×1920, fundo preto puro, screen-blend — o card aparece <u>abaixo do queixo</u>, na zona segura dos guides. Sem banda, sem crop, sem frame preto.
+      </div>
+      <div class="callout m-edit-only" style="display:none" id="calloutEdit">
+        <b><span class="num">2</span>Mesmo sistema sobre SEU vídeo</b>
+        O diretor transcreve, segmenta as falas e ancora cada overlay na palavra — card flutuante, legenda karaokê e telas cheias usam o mesmo Dock e o mesmo compositor da criação.
+      </div>
+
+      <div class="stage-controls">
+        <label><input type="checkbox" id="ckGuides" /> Mostrar zonas seguras (regras do guide)</label>
+        <label class="m-create-only" style="display:flex"><input type="checkbox" id="ckAvatar" checked /> Avatar gerado (desligue = silhueta)</label>
+      </div>
+    </div>
+
+    <!-- ======= painel direito ======= -->
+    <div class="side">
+      <h3 id="sideTitle">Script</h3>
+      <div class="sub" id="sideSub">5 blocos · 00:27.53 — bloco selecionado:</div>
+
+      <div class="block-card">
+        <div class="head">
+          <span class="badge avatar m-create-only" style="display:inline-block">👤 Avatar</span>
+          <span class="badge fala m-edit-only" style="display:none" id="badgeFala">🗣 Fala 1</span>
+          <span style="font-size:9px;color:var(--txt-3)">5.5s</span>
+          <span class="badge status">motion ✓</span>
+        </div>
+        <p>Muita gente usa o <mark>Canva</mark> só pra postzinho, mas dá pra <mark>ganhar dinheiro de verdade</mark> com ele…</p>
+      </div>
+
+      <!-- lista de overlays — só edição -->
+      <div class="ovlist">
+        <div class="ot">Overlays neste vídeo <a>+ adicionar</a></div>
+        <div class="ovitem sel"><span class="ic">⚡</span> R$ 4.700/mês — flutuar <span class="tm">1.8s → 5.5s</span></div>
+        <div class="ovitem"><span class="ic">Ⓣ</span> Legenda karaokê — auto <span class="tm">0s → 31s</span></div>
+        <div class="ovitem"><span class="ic">⚡</span> COMENTA EU QUERO — flutuar <span class="tm">24.1s → 27.6s</span></div>
+      </div>
+
+      <div class="dock">
+        <div class="dhead">
+          <span class="tag" style="background:linear-gradient(180deg,#26262c,#1c1c20);color:var(--txt-2)">Motion</span>
+          <span class="t">pronto · regenerável</span>
+          <select><option>🤖 Gemini 3.5 Flash (global)</option></select>
+        </div>
+
+        <div class="step">
+          <div class="label"><span class="n">①</span> Visual</div>
+          <div class="chips">
+            <span class="chip sel"><span class="zap">⚡</span> Auto — diretor escolhe</span>
+            <span class="chip"><span class="zap">⚡</span> Stat counter</span>
+            <span class="chip"><span class="zap">⚡</span> Terminal</span>
+            <span class="chip"><span class="zap">⚡</span> Progress</span>
+            <span class="chip">Neon glow</span>
+            <span class="chip">Editorial</span>
+          </div>
+        </div>
+
+        <div class="step">
+          <div class="label"><span class="n">②</span> Onde aparece</div>
+          <div class="areas" id="areas">
+            <div class="area sel" data-a="float"><div class="mini"><i></i></div><span>Flutuar</span></div>
+            <div class="area" data-a="top"><div class="mini"><i></i></div><span>Metade ↑</span></div>
+            <div class="area" data-a="bottom"><div class="mini"><i></i></div><span>Metade ↓</span></div>
+            <div class="area" data-a="full"><div class="mini"><i></i></div><span>Tela cheia</span></div>
+          </div>
+          <div class="transp" id="floatNote">🌙 transparente — preto vira transparência sobre o vídeo · conteúdo abaixo do queixo</div>
+        </div>
+
+        <div class="step">
+          <div class="label"><span class="n">③</span> Quando <span style="margin-left:auto;font-weight:600;color:var(--amber);letter-spacing:0;text-transform:none">⚓ diretor de cenas</span></div>
+          <div class="when">
+            <div class="anchor"><span class="a">⚓</span> Ancorado em <b>“Canva”</b> <span class="src">word-timestamp 1.8s</span></div>
+            <div class="slider"><span>Começa</span><div class="track"><i style="left:0;width:33%"></i><u style="left:33%"></u></div><span class="val">1.8s</span></div>
+            <div class="slider"><span>Duração</span><div class="track"><i style="left:33%;width:57%"></i><u style="left:90%"></u></div><span class="val">3.7s</span></div>
+          </div>
+        </div>
+
+        <button class="cta">↻ Regerar motion</button>
+        <div class="foot">
+          <a>avançado…</a>
+          <a class="go" id="genAllLink">⚡ Gerar TODOS os blocos (3)</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= MontarBar (criação) ======= -->
+  <div class="montar">
+    <span class="mt">🎬 Montar Reels <span style="color:var(--txt-3);font-weight:400">· em fases</span></span>
+    <div class="phase done">
+      <div class="ph">🎙 Áudio <span class="check">✓</span></div>
+      <div class="ps">pronto</div>
+      <div class="bar"><i></i></div>
+    </div>
+    <span class="arrow">→</span>
+    <div class="phase">
+      <div class="ph">😀 Avatares <button class="pillbtn">Gerar (3)</button></div>
+      <div class="ps">0/3 prontos</div>
+      <div class="bar"><i style="width:0"></i></div>
+    </div>
+    <span class="arrow">→</span>
+    <div class="phase done">
+      <div class="ph">✨ Motions <span class="check">✓</span></div>
+      <div class="ps">5/5 prontos · diretor de cenas</div>
+      <div class="bar"><i></i></div>
+    </div>
+    <div class="next"><span class="nl">próximo</span><button class="chipbtn primary">Gerar avatares →</button></div>
+  </div>
+
+  <!-- ======= toolbar (edição) ======= -->
+  <div class="edit-toolbar">
+    <span class="mt">📼 Edição de vídeo</span>
+    <span class="info">video-rob-canva.mp4 · 00:31 · transcrito ✓ · 5 falas · 3 overlays</span>
+    <button class="sec">Ⓣ Legenda karaokê</button>
+    <button class="gen">⚡ Gerar overlays — diretor de cenas</button>
+  </div>
+
+  <!-- ======= timeline COMPACTA ======= -->
+  <div class="timeline">
+    <div class="ruler"><span>0:00</span><span>0:05</span><span>0:10</span><span>0:15</span><span>0:20</span><span>0:25</span></div>
+
+    <div class="trk">
+      <div class="tl" id="laneAudioLabel">Áudio</div>
+      <div class="lane audio"><div class="wave" id="wave"></div></div>
+    </div>
+
+    <!-- blocos (criação) -->
+    <div class="trk m-create-only" style="display:flex" id="trkBlocksCreate">
+      <div class="tl">Blocos</div>
+      <div class="lane blocks">
+        <div class="playhead" style="left:14%"></div>
+        <div class="blk av sel" style="left:0%;width:19.5%"><span class="bk">👤</span><span class="bt">Muita gente usa o Canva só pra…</span></div>
+        <div class="blk br" style="left:20%;width:20.6%"><span class="bk">🎞</span><span class="bt">cardápio digital na tela</span></div>
+        <div class="blk br" style="left:41.1%;width:21%"><span class="bk">🎞</span><span class="bt">criando o modelo</span></div>
+        <div class="blk av" style="left:62.6%;width:18.8%"><span class="bk">👤</span><span class="bt">A grande vantagem aqui é que v…</span></div>
+        <div class="blk av" style="left:81.9%;width:18.1%"><span class="bk">👤</span><span class="bt">Quer aprender o passo a passo?</span></div>
+      </div>
+    </div>
+
+    <!-- falas (edição) -->
+    <div class="trk m-edit-only" id="trkBlocksEdit">
+      <div class="tl">Falas</div>
+      <div class="lane blocks">
+        <div class="playhead" style="left:14%"></div>
+        <div class="blk fl sel" style="left:0%;width:19.5%"><span class="bk">🗣</span><span class="bt">Muita gente usa o Canva só pra…</span></div>
+        <div class="blk fl" style="left:20%;width:20.6%"><span class="bk">🗣</span><span class="bt">olha esse cardápio digital aqui…</span></div>
+        <div class="blk fl" style="left:41.1%;width:21%"><span class="bk">🗣</span><span class="bt">você cria o modelo uma vez…</span></div>
+        <div class="blk fl" style="left:62.6%;width:18.8%"><span class="bk">🗣</span><span class="bt">a grande vantagem é que vende…</span></div>
+        <div class="blk fl" style="left:81.9%;width:18.1%"><span class="bk">🗣</span><span class="bt">quer aprender? comenta EU QUERO</span></div>
+      </div>
+    </div>
+
+    <!-- motions (criação) -->
+    <div class="trk m-create-only" style="display:flex" id="trkMotionsCreate">
+      <div class="tl">Motions</div>
+      <div class="lane motions">
+        <div class="mot" style="left:6.5%;width:13%">
+          <div class="anchor-tick" style="left:0"></div>
+          <span class="mt1">GANHAR DINHEIRO…</span><span class="mt2">⚓1.8s·3.7s</span><span class="dot"></span>
+        </div>
+        <div class="mot fullspan" style="left:20%;width:20.6%"><span class="mt1">CARDÁPIOS DIGITAIS</span><span class="mt2">tela cheia·bloco</span><span class="dot"></span></div>
+        <div class="mot fullspan" style="left:41.1%;width:21%"><span class="mt1">Criar o modelo</span><span class="mt2">tela cheia·bloco</span><span class="dot"></span></div>
+        <div class="mot" style="left:66.5%;width:11.5%">
+          <div class="anchor-tick" style="left:0"></div>
+          <span class="mt1">+R$ por cliente</span><span class="mt2">⚓·3.1s</span><span class="dot"></span>
+        </div>
+        <div class="mot" style="left:85.4%;width:12.8%">
+          <div class="anchor-tick" style="left:0"></div>
+          <span class="mt1">COMENTA EU QUERO</span><span class="mt2">⚓·3.5s</span><span class="dot"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- overlays (edição) -->
+    <div class="trk m-edit-only" id="trkMotionsEdit">
+      <div class="tl">Overlays</div>
+      <div class="lane motions">
+        <div class="mot" style="left:6.5%;width:13%">
+          <div class="anchor-tick" style="left:0"></div>
+          <span class="mt1">R$ 4.700/mês</span><span class="mt2">⚓“Canva”·flutuar</span><span class="dot"></span>
+        </div>
+        <div class="mot txt" style="left:0%;width:100%;top:auto;height:7px;bottom:-9px;padding:0 6px;">
+          <span class="mt2" style="font-size:6px">Ⓣ legenda karaokê · vídeo inteiro</span>
+        </div>
+        <div class="mot" style="left:46%;width:12%">
+          <div class="anchor-tick" style="left:0"></div>
+          <span class="mt1">passo a passo</span><span class="mt2">⚓·flutuar</span><span class="dot"></span>
+        </div>
+        <div class="mot" style="left:87%;width:12.5%">
+          <div class="anchor-tick" style="left:0"></div>
+          <span class="mt1">COMENTA EU QUERO</span><span class="mt2">⚓·3.5s</span><span class="dot"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="spacenote"><span>timeline compacta: 3 trilhas em ~96px (antes ~150px) — o espaço vai pro preview</span><span class="ln"></span></div>
+
+    <div class="legend">
+      <div class="li"><span class="num">1</span><span><b>Float = frame inteiro com blend.</b> O preto vira transparência; conteúdo nasce abaixo do queixo. Preview = export, nos dois modos.</span></div>
+      <div class="li"><span class="num">2</span><span><b>Diretor de cenas (1 chamada).</b> Criação: roteiro + word-timestamps do TTS. Edição: transcrição do seu vídeo. Em ambos: motion ancorado na palavra, 3–8s. B-roll continua tela cheia.</span></div>
+      <div class="li"><span class="num">3</span><span><b>Casa única.</b> Chips e cards <u>selecionam</u>; configuração só no Dock. “Gerar todos” no MontarBar (criação) / toolbar (edição) + trilha vazia. Zero lilás.</span></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // waveform
+  (function(){
+    const w = document.getElementById('wave');
+    let seed = 7;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    for (let i = 0; i < 150; i++) {
+      const bar = document.createElement('i');
+      bar.style.height = (18 + rnd() * 74) + '%';
+      if (rnd() > 0.93) bar.style.background = 'rgba(217,119,87,0.4)';
+      w.appendChild(bar);
+    }
+  })();
+
+  // ===== modo criação / edição =====
+  const btnCreate = document.getElementById('btnCreate');
+  const btnEdit = document.getElementById('btnEdit');
+  function setMode(edit) {
+    document.body.classList.toggle('edit', edit);
+    btnCreate.classList.toggle('on', !edit);
+    btnEdit.classList.toggle('on', edit);
+    document.getElementById('projTitle').textContent = edit ? 'Edição · video-rob-canva.mp4' : 'Reel · 11/06 10h15';
+    document.getElementById('projInfo').textContent = edit ? '● Transcrito · 00:31 · 5 falas' : '● Áudio pronto · 00:27.53 · Rob PT-BR';
+    document.getElementById('sideTitle').textContent = edit ? 'Falas do vídeo' : 'Script';
+    document.getElementById('sideSub').textContent = edit ? '5 falas transcritas · 00:31 — fala selecionada:' : '5 blocos · 00:27.53 — bloco selecionado:';
+    document.getElementById('laneAudioLabel').textContent = edit ? 'Vídeo' : 'Áudio';
+    document.getElementById('genAllLink').textContent = edit ? '⚡ Gerar overlays (Auto)' : '⚡ Gerar TODOS os blocos (3)';
+    // callouts e controles específicos
+    document.querySelectorAll('.callout.m-create-only').forEach(el => el.style.display = edit ? 'none' : 'block');
+    document.querySelectorAll('.callout.m-edit-only').forEach(el => el.style.display = edit ? 'block' : 'none');
+    document.querySelectorAll('label.m-create-only').forEach(el => el.style.display = edit ? 'none' : 'flex');
+    document.querySelectorAll('.badge.m-create-only').forEach(el => el.style.display = edit ? 'none' : 'inline-block');
+    document.querySelectorAll('.badge.m-edit-only').forEach(el => el.style.display = edit ? 'inline-block' : 'none');
+    document.querySelectorAll('.trk.m-create-only').forEach(el => el.style.display = edit ? 'none' : 'flex');
+    document.querySelectorAll('.trk.m-edit-only').forEach(el => el.style.display = edit ? 'flex' : 'none');
+    setArea(currentArea); // re-aplica composição no layer certo
+  }
+  btnCreate.addEventListener('click', () => setMode(false));
+  btnEdit.addEventListener('click', () => setMode(true));
+
+  // ===== colocação =====
+  const layerFloat = document.getElementById('layerFloat');
+  const layerPanel = document.getElementById('layerPanel');
+  const seam = document.getElementById('seam');
+  const hud = document.getElementById('hud');
+  const floatNote = document.getElementById('floatNote');
+  const HUD = {
+    float:  'Flutuar · screen-blend no frame inteiro',
+    top:    'Metade ↑ · motion em cima, vídeo embaixo',
+    bottom: 'Metade ↓ · vídeo em cima, motion embaixo',
+    full:   'Tela cheia · motion substitui o slot',
+  };
+  let currentArea = 'float';
+  function baseLayer() {
+    return document.body.classList.contains('edit')
+      ? document.getElementById('videoLayer')
+      : document.getElementById('avatarLayer');
+  }
+  function setArea(a) {
+    currentArea = a;
+    document.querySelectorAll('.area').forEach(el => el.classList.toggle('sel', el.dataset.a === a));
+    hud.textContent = HUD[a];
+    floatNote.style.display = a === 'float' ? 'flex' : 'none';
+    layerFloat.style.display = a === 'float' ? 'block' : 'none';
+    seam.style.display = (a === 'top' || a === 'bottom') ? 'block' : 'none';
+    // reset both base layers
+    ['avatarLayer','videoLayer'].forEach(id => {
+      const el = document.getElementById(id);
+      el.style.top = '0'; el.style.bottom = '0';
+      el.querySelector('.person').style.transform = 'none';
+    });
+    const base = baseLayer();
+    if (a === 'float') {
+      layerPanel.style.display = 'none';
+    } else if (a === 'top') {
+      layerPanel.style.display = 'flex';
+      layerPanel.style.top = '0'; layerPanel.style.bottom = '50%';
+      seam.style.top = 'calc(50% - 1px)';
+      base.style.top = '50%';
+    } else if (a === 'bottom') {
+      layerPanel.style.display = 'flex';
+      layerPanel.style.top = '50%'; layerPanel.style.bottom = '0';
+      seam.style.top = 'calc(50% - 1px)';
+      base.style.bottom = '50%';
+    } else {
+      layerPanel.style.display = 'flex';
+      layerPanel.style.top = '0'; layerPanel.style.bottom = '0';
+    }
+    const half = a === 'top' || a === 'bottom';
+    const p = base.querySelector('.person');
+    p.style.transform = half ? 'scale(0.62) translateY(-12%)' : 'none';
+    p.style.transformOrigin = '50% 30%';
+  }
+  document.querySelectorAll('.area').forEach(el => el.addEventListener('click', () => setArea(el.dataset.a)));
+  setArea('float');
+
+  // toggles
+  document.getElementById('ckGuides').addEventListener('change', e => {
+    document.getElementById('guides').style.display = e.target.checked ? 'block' : 'none';
+  });
+  document.getElementById('ckAvatar').addEventListener('change', e => {
+    const on = e.target.checked;
+    const av = document.getElementById('avatarLayer');
+    av.style.opacity = on ? '1' : '0.32';
+    av.style.filter = on ? 'none' : 'grayscale(1)';
+  });
+</script>
+</body>
+</html>

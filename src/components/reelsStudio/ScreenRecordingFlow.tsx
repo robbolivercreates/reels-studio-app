@@ -177,8 +177,8 @@ export const ScreenRecordingFlow: React.FC<Props> = ({ open, onClose, onTakeReco
               </div>
             </label>
 
-            <div className="rounded-lg bg-violet-500/[0.05] border border-violet-500/20 p-3">
-              <div className="text-[11px] text-violet-200 leading-relaxed">
+            <div className="rounded-lg bg-blue-500/[0.05] border border-blue-500/20 p-3">
+              <div className="text-[11px] text-blue-200 leading-relaxed">
                 💡 <strong>Pode gravar mais que precisa</strong> — você corta as bordas depois com facilidade. A próxima fase vai oferecer remoção automática de pausas longas pra deixar dinâmico.
               </div>
             </div>

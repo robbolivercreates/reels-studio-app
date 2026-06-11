@@ -45,6 +45,168 @@ export interface MotionOverlays {
 // split-top: motion top half, avatar bottom half
 export type MotionLayer = 'overlay' | 'replace' | 'split-bottom' | 'split-top';
 
+/**
+ * Unified placement model — ONE vocabulary for where/when a motion appears,
+ * shared by both pipelines (block.motion in creation, OverlayElement in the
+ * edit-video mode). Replaces the divergent `MotionLayer` (creation) and
+ * `OverlayElement.mode` (edit) vocabularies; both stay on the types for
+ * back-compat hydration and are translated via `placementOf()`.
+ *
+ *   float       → screen-blend band floating over whatever is underneath
+ *                 (avatar or imported video); y/height position the band
+ *   top-half    → motion fills the top 50%, underlying content the bottom
+ *   bottom-half → motion fills the bottom 50%, underlying content the top
+ *   full        → motion covers the whole frame
+ */
+export interface MotionPlacement {
+  area: 'float' | 'top-half' | 'bottom-half' | 'full';
+  /** @deprecated float is full-frame screen-blend now — kept only so old persisted projects hydrate. */
+  y?: number;
+  /** @deprecated float is full-frame screen-blend now — kept only so old persisted projects hydrate. */
+  height?: number;
+  /**
+   * float only: vertical translate of the full-frame blend layer, as a
+   * fraction of frame height. 0 = as authored (face-safe zone below the
+   * chin); −0.47 ≈ the card lands at the top of the frame ("acima da
+   * cabeça"). Pure compositor translate — repositioning is INSTANT, no
+   * regeneration (black stays transparent under screen blend, so shifted
+   * edges are invisible).
+   */
+  floatShiftY?: number;
+  /**
+   * float only: strength of the contrast scrim — a soft black vertical
+   * gradient drawn UNDER the motion (over the footage), centered on the
+   * card zone and following floatShiftY. Screen blend can only LIGHTEN, so
+   * over bright footage the motion's dark backgrounds vanish; the scrim
+   * restores light-on-dark contrast. 0 = off, default 0.5, max 0.8.
+   */
+  scrimAlpha?: number;
+  /** Seconds into the block/segment before the motion appears. Default 0. */
+  startOffsetSec?: number;
+  /** Visible duration. Defaults to the full block/segment duration. */
+  durationSec?: number;
+}
+
+/** Float position presets — card zone authored at y:1114–1536 of 1920. */
+export const FLOAT_SHIFT_TOP = -0.47;    // card lands ≈ y:212–634 (above the head, below IG handle zone)
+export const FLOAT_SHIFT_MIDDLE = -0.24; // card lands ≈ y:653–1075 (center)
+export const FLOAT_SHIFT_BOTTOM = 0;     // as authored (below the chin)
+/** Normalized vertical center of the authored float card zone ((1114+1536)/2 / 1920). */
+export const FLOAT_CARD_CENTER = 0.69;
+export const DEFAULT_SCRIM_ALPHA = 0.5;
+
+export const DEFAULT_FLOAT_Y = 0.58;
+export const DEFAULT_FLOAT_HEIGHT = 0.22;
+
+/**
+ * Adapter: derive a MotionPlacement from a (possibly legacy) MotionConfig.
+ * Priority: explicit `placement` → legacy `layer` + overlayBox/startOffsetSec.
+ */
+export const placementOfMotion = (m: Pick<MotionConfig, 'layer' | 'placement' | 'overlayBox' | 'startOffsetSec' | 'durationSec'>): MotionPlacement => {
+  if (m.placement) return m.placement;
+  const base = { startOffsetSec: m.startOffsetSec ?? 0, durationSec: m.durationSec };
+  switch (m.layer) {
+    case 'replace':      return { area: 'full', ...base };
+    case 'split-top':    return { area: 'top-half', ...base };
+    case 'split-bottom': return { area: 'bottom-half', ...base };
+    case 'overlay':
+    default:
+      return {
+        area: 'float',
+        y: m.overlayBox?.y ?? DEFAULT_FLOAT_Y,
+        height: m.overlayBox?.height ?? DEFAULT_FLOAT_HEIGHT,
+        ...base,
+      };
+  }
+};
+
+/**
+ * Adapter: derive a MotionPlacement from a (possibly legacy) OverlayElement.
+ * Priority: explicit `placement` → legacy `mode` + y/overlayH.
+ */
+export const placementOfElement = (el: {
+  placement?: MotionPlacement;
+  mode: 'overlay' | 'fullscreen' | 'split-top' | 'split-bottom';
+  y: number;
+  overlayH?: number;
+  startSec: number;
+  durationSec: number;
+}): MotionPlacement => {
+  if (el.placement) return el.placement;
+  switch (el.mode) {
+    case 'fullscreen':   return { area: 'full', durationSec: el.durationSec };
+    case 'split-top':    return { area: 'top-half', durationSec: el.durationSec };
+    case 'split-bottom': return { area: 'bottom-half', durationSec: el.durationSec };
+    case 'overlay':
+    default:
+      return { area: 'float', y: el.y ?? DEFAULT_FLOAT_Y, height: el.overlayH ?? DEFAULT_FLOAT_HEIGHT, durationSec: el.durationSec };
+  }
+};
+
+/**
+ * THE default placement for a block — single source of truth shared by the
+ * Motion Dock display AND the generation pipeline, so what the user SEES
+ * selected is exactly what generates (fixes the "marked Flutuar but it
+ * generated full-frame" divergence).
+ *
+ *   creation + broll  → full   (the motion IS the content — no placement choice)
+ *   creation + avatar → float  (band over the avatar)
+ *   edit-video        → float  (band over the imported footage)
+ */
+export const defaultPlacementFor = (
+  blockKind: 'avatar' | 'broll',
+  projectMode: 'generate' | 'edit' | undefined,
+  blockDurationSec?: number,
+): MotionPlacement => {
+  if (projectMode !== 'edit' && blockKind === 'broll') {
+    return { area: 'full', startOffsetSec: 0, durationSec: blockDurationSec };
+  }
+  return { area: 'float', y: DEFAULT_FLOAT_Y, height: DEFAULT_FLOAT_HEIGHT, startOffsetSec: 0, durationSec: blockDurationSec };
+};
+
+/** Translate a placement back to the legacy MotionLayer (for generation prompts). */
+export const layerOfPlacement = (p: MotionPlacement): MotionLayer => {
+  switch (p.area) {
+    case 'full':        return 'replace';
+    case 'top-half':    return 'split-top';
+    case 'bottom-half': return 'split-bottom';
+    case 'float':
+    default:            return 'overlay';
+  }
+};
+
+/**
+ * THE single placement resolution for a block's existing motion — used
+ * identically by the timeline preview (ReelsStudio) and the export compositor
+ * (mp4Renderer), so what you see while editing is exactly what exports.
+ *
+ * Explicit `motion.placement` wins. Legacy motions (no placement) derive the
+ * layer from the block's CURRENT layout — the user's intent now, not the
+ * generation-time `motion.layer` snapshot — then adapt via placementOfMotion.
+ */
+export const resolveMotionPlacement = (block: {
+  kind?: 'avatar' | 'broll';
+  layout?: 'avatar-only' | 'avatar-top' | 'media-top' | 'media-only';
+  motion?: Pick<MotionConfig, 'layer' | 'placement' | 'overlayBox' | 'startOffsetSec' | 'durationSec'>;
+}): MotionPlacement | null => {
+  const m = block.motion;
+  if (!m) return null;
+  if (m.placement) return m.placement;
+  const layoutLayer: MotionLayer = block.kind === 'broll'
+    ? m.layer
+    : block.layout === 'avatar-only' ? 'overlay'
+    : block.layout === 'avatar-top'  ? 'split-bottom'
+    : block.layout === 'media-top'   ? 'split-top'
+    : block.layout === 'media-only'  ? 'replace'
+    : m.layer ?? 'overlay';
+  return placementOfMotion({
+    layer: layoutLayer ?? 'overlay',
+    overlayBox: m.overlayBox,
+    startOffsetSec: m.startOffsetSec,
+    durationSec: m.durationSec ?? 4,
+  });
+};
+
 export type MotionRenderStatus = 'draft' | 'generating' | 'ready' | 'rendering' | 'error';
 
 export interface MotionConfig {
@@ -120,6 +282,28 @@ export interface MotionConfig {
     prompt: number;
     candidates: number;
   };
+  /**
+   * Seconds from block start before the motion becomes visible.
+   * Useful when the user wants the motion to fly in mid-sentence.
+   * Default 0 (starts immediately with the block).
+   */
+  startOffsetSec?: number;
+  /**
+   * Custom overlay position — only applies when layer === 'overlay'.
+   * y and height are normalized 0..1 fractions of the frame height.
+   * Default: { y: 0.58, height: 0.22 } (lower-third band).
+   * Set y=0, height=1 to make the motion cover the full frame while
+   * keeping the take/avatar visible through screen blend.
+   * @deprecated superseded by `placement` (float area) — kept for hydration.
+   */
+  overlayBox?: { y: number; height: number };
+  /**
+   * Unified placement (where + when). When present, takes precedence over
+   * the legacy `layer`/`overlayBox`/`startOffsetSec` trio — those remain so
+   * old persisted projects hydrate; `placementOfMotion()` resolves either
+   * shape into this one.
+   */
+  placement?: MotionPlacement;
 }
 
 export const newMotionId = (): string =>

@@ -9,12 +9,16 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { buildFullHtmlDoc } from '../../services/motionService';
-import type { MotionConfig, MotionLayer } from './motionLibrary';
+import type { MotionConfig, MotionLayer, MotionPlacement } from './motionLibrary';
+import { layerOfPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA } from './motionLibrary';
 
 interface Props {
   motion: MotionConfig;
   playing: boolean;
   layer: MotionLayer;
+  /** Unified placement — when provided, wins over `layer` and positions the
+   *  float band exactly like the export compositor (same y/height math). */
+  placement?: MotionPlacement;
   /** Optional local time within the motion clip in seconds. When provided
    *  the preview <video> seeks to match the project playhead instead of
    *  running on its own clock. Without this, blocks late in the timeline
@@ -23,26 +27,33 @@ interface Props {
   localTime?: number;
 }
 
-export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer, localTime }) => {
+export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer: layerProp, placement, localTime }) => {
+  // Placement wins; layer prop kept for legacy callsites.
+  const layer: MotionLayer = placement ? layerOfPlacement(placement) : layerProp;
   const [mp4Url, setMp4Url] = useState<string | null>(null);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(0.5);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Measure wrapper to scale the 1080x1920 iframe into the slot.
+  // Native canvas height: 1350 for carousel (4:5), 1920 otherwise — floats
+  // author at FULL frame now (face-safe zone + screen blend). Must mirror
+  // the canvasH logic in buildFullHtmlDoc so the live iframe scales 1:1.
+  const nativeH = motion.canvasAspect === '4:5' ? 1350 : 1920;
+
+  // Measure wrapper to scale the iframe into the slot.
   useEffect(() => {
     if (!wrapperRef.current) return;
     const el = wrapperRef.current;
     const ro = new ResizeObserver(() => {
       const w = el.clientWidth;
       const h = el.clientHeight;
-      const s = Math.max(w / 1080, h / 1920);
+      const s = Math.max(w / 1080, h / nativeH);
       setScale(s || 0.5);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [nativeH]);
 
   // Convert local MP4 path to asset:// URL via Tauri asset protocol.
   useEffect(() => {
@@ -97,7 +108,7 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer, lo
     const iframe = iframeRef.current;
     if (!iframe || !motion.html) return;
 
-    const baseDoc = buildFullHtmlDoc(motion);
+    const baseDoc = buildFullHtmlDoc(motion, motion.canvasAspect);
     const msgListener = `
 <script>
 (function() {
@@ -147,25 +158,31 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer, lo
         zIndex: 30,
       }
     : layer === 'overlay'
-    ? {
-        // Mobile-first floating overlay (Submagic / Hormozi style): the motion
-        // floats over the presenter's chest area, NOT in the bottom-third.
-        // Why bottom: '20%' and not 0: Reels/TikTok/Shorts UI (likes, comments,
-        // caption rail, progress bar) eats the bottom ~15-20% of the frame, so
-        // any content placed there gets occluded once the video is uploaded.
-        // The 22% height + 20% bottom puts the overlay center at ~y:0.69 of the
-        // frame — well inside the cross-platform safe zone (y:0.11-0.80).
-        position: 'absolute', left: 0, right: 0, bottom: '20%', height: '22%',
-        opacity: 1, mixBlendMode: 'screen', zIndex: 30,
-        filter: 'contrast(1.35) brightness(1.05)',
-      }
+    ? (() => {
+        // Float = FULL-FRAME screen blend — identical to composeMotionLayer
+        // in mp4Renderer (FULL_FRAME box + screen + contrast filter + the
+        // floatShiftY translate), so preview === export. The motion authors
+        // its content in the face-safe lower zone; black stays transparent,
+        // and the shift moves the card top/middle/bottom instantly. When
+        // shifted, the top/bottom edges are feathered (same as the export's
+        // featherY pass) so atmosphere gradients can't cut a visible seam.
+        const shift = placement?.floatShiftY ?? 0;
+        const feather = Math.abs(shift) > 0.005
+          ? 'linear-gradient(180deg, transparent 0%, #000 7%, #000 93%, transparent 100%)'
+          : undefined;
+        return {
+          position: 'absolute', left: 0, right: 0,
+          top: `${shift * 100}%`, height: '100%',
+          opacity: 1, mixBlendMode: 'screen', zIndex: 30,
+          filter: 'contrast(1.35) brightness(1.05)',
+          ...(feather ? { WebkitMaskImage: feather, maskImage: feather } : {}),
+        } as React.CSSProperties;
+      })()
     : { position: 'absolute', inset: 0, opacity: 1, zIndex: 30 }; // replace
 
-  // Overlay (lower-third) needs `contain` — `cover` would crop the motion's
-  // sides off; here we want the whole motion squeezed into the bottom band.
   const videoStyle: React.CSSProperties = {
     width: '100%', height: '100%',
-    objectFit: layer === 'overlay' ? 'contain' : 'cover',
+    objectFit: 'cover',
   };
 
   const mediaEl = mp4Url ? (
@@ -183,7 +200,7 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer, lo
         title="motion live preview"
         sandbox="allow-scripts"
         style={{
-          width: 1080, height: isSplit ? 960 : 1920, border: 'none',
+          width: 1080, height: isSplit ? 960 : nativeH, border: 'none',
           position: 'absolute', top: 0, left: 0,
           transform: `scale(${scale})`,
           transformOrigin: 'top left',
@@ -192,13 +209,41 @@ export const MotionLayerOverlay: React.FC<Props> = ({ motion, playing, layer, lo
     </div>
   ) : null;
 
+  // Contrast scrim — a soft black vertical gradient UNDER the blended motion
+  // (over the footage), centered on the card zone + shift. Mirrors the
+  // export compositor's scrim pass exactly (same center/spread/alpha math)
+  // so preview === export. z-25: above avatar video (20) / placeholder (15)
+  // / base video (5), below the motion wrapper (30).
+  const scrimEl = (() => {
+    if (layer !== 'overlay') return null;
+    const a = Math.min(0.85, placement?.scrimAlpha ?? DEFAULT_SCRIM_ALPHA);
+    if (a <= 0.005) return null;
+    const cy = (FLOAT_CARD_CENTER + (placement?.floatShiftY ?? 0)) * 100; // % of frame
+    const spread = 28; // % — alpha 0 at cy±spread
+    const core = 10;   // % — full alpha at cy±core
+    return (
+      <div
+        className="pointer-events-none"
+        style={{
+          position: 'absolute', left: 0, right: 0,
+          top: `${cy - spread}%`, height: `${spread * 2}%`,
+          zIndex: 25,
+          background: `linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,${a}) ${((spread - core) / (2 * spread) * 100).toFixed(1)}%, rgba(0,0,0,${a}) ${((spread + core) / (2 * spread) * 100).toFixed(1)}%, rgba(0,0,0,0) 100%)`,
+        }}
+      />
+    );
+  })();
+
   return (
-    <div
-      ref={wrapperRef}
-      className="pointer-events-none"
-      style={wrapperStyle}
-    >
-      {mediaEl}
-    </div>
+    <>
+      {scrimEl}
+      <div
+        ref={wrapperRef}
+        className="pointer-events-none"
+        style={wrapperStyle}
+      >
+        {mediaEl}
+      </div>
+    </>
   );
 };

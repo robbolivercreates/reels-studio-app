@@ -33,7 +33,18 @@ export type StylePresetId =
   | 'karaoke-captions'
   | 'icon-callout'
   | 'claude-ui'
-  | 'rob-boliver';
+  | 'rob-boliver'
+  // ─── Motion-pack templates (static HTML, Gemini only fills variables) ──
+  | 'stat-counter'
+  | 'typewriter-terminal'
+  | 'imessage-notif'
+  | 'audio-waveform'
+  | 'app-icon-launcher'
+  | 'wastebasket-trash'
+  | 'toggle-flip'
+  | 'progress-bar'
+  | 'apple-maps-route'
+  | 'claude-bloom-steps';
 
 /**
  * Whether the preset's intrinsic mood is dark, light, or warm cream/paper.
@@ -125,6 +136,12 @@ export interface StylePreset {
    * When omitted, motionService falls back to 'brand'.
    */
   defaultFontSet?: import('./motionLibrary').FontSet;
+  /**
+   * When true, this preset is built from a static HTML template (motion-pack style).
+   * Generation skips Gemini HTML writing — Gemini only fills a small variable JSON.
+   * Much faster, more reliable, and zero HTML hallucination risk.
+   */
+  isTemplate?: boolean;
 }
 
 export const STYLE_PRESETS: StylePreset[] = [
@@ -1223,6 +1240,198 @@ MOTION (6s timeline) — assembly + bloom rhythm:
 
 VOICE: Final beat — brand asserts itself, audience leaves with the name embedded. Cinematic, controlled.`.trim(),
   },
+
+  // ─── Motion-pack templates ────────────────────────────────────────────────
+  {
+    id: 'stat-counter',
+    isTemplate: true,
+    label: 'Contador de estatística',
+    description: 'Número grande animando de 0 ao valor alvo. Ex: "21GB", "+247%", "3.2M".',
+    emoji: '📊',
+    bestFor: 'Estatísticas que impactam: resultados, crescimento, economia de tempo.',
+    bgType: 'dark',
+    role: 'stat',
+    roleLabel: 'Estatística',
+    defaultFontSet: 'apple',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#D97757', alpha: 0.12, pos: '50% 50%' },
+      coolGlow: { color: '#B68C5A', alpha: 0.06, pos: '80% 80%' },
+      vignetteIntensity: 0.4,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'typewriter-terminal',
+    isTemplate: true,
+    label: 'Terminal digitando',
+    description: 'Janela de terminal macOS com comando sendo digitado e resultado.',
+    emoji: '⌨️',
+    bestFor: 'Demos de CLI, comandos Claude, automações, conteúdo dev/tech.',
+    bgType: 'dark',
+    role: 'command',
+    roleLabel: 'Comando',
+    defaultFontSet: 'tech',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#D97757', alpha: 0.08, pos: '30% 60%' },
+      coolGlow: { color: '#4CD964', alpha: 0.05, pos: '70% 40%' },
+      vignetteIntensity: 0.5,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'imessage-notif',
+    isTemplate: true,
+    label: 'Notificação iMessage',
+    description: 'Tela de bloqueio iOS com notificações em cascata.',
+    emoji: '💬',
+    bestFor: 'Social proof, "olha o que recebi", resultados que chegam como mensagem.',
+    bgType: 'dark',
+    role: 'example',
+    roleLabel: 'Exemplo',
+    defaultFontSet: 'social',
+    atmosphere: {
+      baseBg: '#2A2520',
+      warmGlow: { color: '#FFC88C', alpha: 0.18, pos: '25% 20%' },
+      coolGlow: { color: '#8CB4FF', alpha: 0.15, pos: '80% 80%' },
+      vignetteIntensity: 0.3,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'audio-waveform',
+    isTemplate: true,
+    label: 'Waveform de áudio',
+    description: '56 barras reactivas simulando visualização de áudio.',
+    emoji: '🎵',
+    bestFor: 'Hooks de abertura, podcasts, conteúdo de voz, momentos de escuta.',
+    bgType: 'dark',
+    role: 'hook',
+    roleLabel: 'Hook',
+    defaultFontSet: 'brand',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#D97757', alpha: 0.10, pos: '50% 50%' },
+      coolGlow: { color: '#B68C5A', alpha: 0.05, pos: '50% 50%' },
+      vignetteIntensity: 0.3,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'app-icon-launcher',
+    isTemplate: true,
+    label: 'Grid de ícones de apps',
+    description: 'Grid 3×3 de logos de apps com entrada animada. Busca logos reais automaticamente.',
+    emoji: '📱',
+    bestFor: 'Apresentar stack de ferramentas, comparar apps, listar o que você usa.',
+    bgType: 'dark',
+    role: 'list',
+    roleLabel: 'Lista',
+    defaultFontSet: 'tech',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#D97757', alpha: 0.10, pos: '50% 50%' },
+      coolGlow: { color: '#EDD9BC', alpha: 0.04, pos: '20% 80%' },
+      vignetteIntensity: 0.4,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'wastebasket-trash',
+    isTemplate: true,
+    label: 'Lixeira (substituir apps)',
+    description: 'Logos de ferramentas voam para a lixeira, revelando a alternativa vencedora.',
+    emoji: '🗑️',
+    bestFor: '"Pare de usar X" — jogar CapCut, Premiere, etc. no lixo e revelar o substituto.',
+    bgType: 'dark',
+    role: 'hook',
+    roleLabel: 'Hook',
+    defaultFontSet: 'brand',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#D97757', alpha: 0.15, pos: '50% 60%' },
+      coolGlow: { color: '#B68C5A', alpha: 0.08, pos: '20% 30%' },
+      vignetteIntensity: 0.5,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'toggle-flip',
+    isTemplate: true,
+    label: 'Toggle iOS',
+    description: 'Card de configuração iOS com toggle ativando — anel de destaque + slide do knob.',
+    emoji: '🎚️',
+    bestFor: '"Ative essa função" — ligar um recurso, habilitar um modo, mudar uma configuração.',
+    bgType: 'dark',
+    role: 'step',
+    roleLabel: 'Passo',
+    defaultFontSet: 'apple',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#4CD964', alpha: 0.08, pos: '60% 50%' },
+      coolGlow: { color: '#EDD9BC', alpha: 0.04, pos: '30% 30%' },
+      vignetteIntensity: 0.4,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'progress-bar',
+    isTemplate: true,
+    label: 'Passos + progresso',
+    description: 'Lista de 2-4 passos com check verde + barra de progresso 0→100%.',
+    emoji: '✅',
+    bestFor: 'Processos e tutoriais em etapas: "primeiro X, depois Y, por fim Z".',
+    bgType: 'dark',
+    role: 'list',
+    roleLabel: 'Lista',
+    defaultFontSet: 'brand',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#D97757', alpha: 0.10, pos: '50% 50%' },
+      coolGlow: { color: '#4CD964', alpha: 0.05, pos: '80% 70%' },
+      vignetteIntensity: 0.4,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'apple-maps-route',
+    isTemplate: true,
+    label: 'Rota Apple Maps',
+    description: 'UI fiel do Apple Maps: pins, rota azul animada e card de ETA.',
+    emoji: '🗺️',
+    bestFor: 'Localizações, trajetos, "como chegar", distâncias — reveals geográficos.',
+    bgType: 'light',
+    role: 'geo',
+    roleLabel: 'Geo',
+    defaultFontSet: 'apple',
+    atmosphere: {
+      baseBg: '#F2EDE0',
+      warmGlow: { color: '#FED867', alpha: 0.10, pos: '50% 40%' },
+      coolGlow: { color: '#4080F0', alpha: 0.06, pos: '70% 80%' },
+      vignetteIntensity: 0.2,
+    },
+    geminiBrief: '',
+  },
+  {
+    id: 'claude-bloom-steps',
+    isTemplate: true,
+    label: 'Reveal + passos',
+    description: 'Starburst com logo (buscado online) + wordmark + chips de 3 passos.',
+    emoji: '✨',
+    bestFor: 'Revelar a solução vencedora + mini-plano: "a resposta é X, em 3 passos".',
+    bgType: 'dark',
+    role: 'cta',
+    roleLabel: 'CTA',
+    defaultFontSet: 'brand',
+    atmosphere: {
+      baseBg: '#0A0808',
+      warmGlow: { color: '#D97757', alpha: 0.18, pos: '50% 45%' },
+      coolGlow: { color: '#B68C5A', alpha: 0.08, pos: '30% 70%' },
+      vignetteIntensity: 0.5,
+    },
+    geminiBrief: '',
+  },
 ];
 
 export const findStylePreset = (id: StylePresetId): StylePreset =>
@@ -1843,6 +2052,20 @@ NEVER:
 
 /** Preset IDs that are handled natively in motionService (no Gemini call). */
 export const NATIVE_PRESET_IDS: StylePresetId[] = ['claude-ui'];
+
+/** Preset IDs that use static HTML templates (motion-pack style). */
+export const TEMPLATE_PRESET_IDS: StylePresetId[] = [
+  'stat-counter',
+  'typewriter-terminal',
+  'imessage-notif',
+  'audio-waveform',
+  'app-icon-launcher',
+  'wastebasket-trash',
+  'toggle-flip',
+  'progress-bar',
+  'apple-maps-route',
+  'claude-bloom-steps',
+];
 
 // Rob Boliver Signature — dark editorial carousel aesthetic.
 STYLE_PRESETS.push({

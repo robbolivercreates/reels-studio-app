@@ -49,14 +49,14 @@ export const VoiceProfileBar: React.FC<Props> = ({
 }) => {
   const effectiveRewrite = rewriteOverride ?? activeProfile.rewriteLevel;
   return (
-    <div className="px-3 py-2.5 rounded-lg bg-violet-500/[0.06] border border-violet-500/20 flex items-center gap-3 text-[11px] flex-wrap">
-      <span className="text-violet-300">🎙</span>
+    <div className="px-3 py-2.5 rounded-lg bg-blue-500/[0.06] border border-blue-500/20 flex items-center gap-3 text-[11px] flex-wrap">
+      <span className="text-blue-300">🎙</span>
       <span className="text-zinc-400">Perfil:</span>
       <select
         value={activeProfile.id}
         onChange={e => onSelectProfile(e.target.value)}
         disabled={disabled}
-        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50"
       >
         {profiles.map(p => (
           <option key={p.id} value={p.id}>{p.name}</option>
@@ -67,7 +67,7 @@ export const VoiceProfileBar: React.FC<Props> = ({
         value={languageOverride}
         onChange={e => onChangeLanguage(e.target.value as LanguageOption)}
         disabled={disabled}
-        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50"
         title="Idioma de saída desta importação"
       >
         <option value="auto">
@@ -89,7 +89,7 @@ export const VoiceProfileBar: React.FC<Props> = ({
           onChangeRewrite(v === activeProfile.rewriteLevel ? null : v);
         }}
         disabled={disabled}
-        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50"
         title={REWRITE_LABELS[effectiveRewrite].hint}
       >
         {(['faithful', 'translate', 'adapt', 'reimagine'] as RewriteLevel[]).map(level => (
@@ -101,7 +101,7 @@ export const VoiceProfileBar: React.FC<Props> = ({
         value={contentMode}
         onChange={e => onChangeContentMode(e.target.value as ContentMode)}
         disabled={disabled}
-        className={`bg-black/30 border rounded px-2 py-1 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50 ${
+        className={`bg-black/30 border rounded px-2 py-1 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50 ${
           contentMode === 'trailer'
             ? 'border-amber-400/40 text-amber-200'
             : 'border-white/10 text-zinc-100'

@@ -152,7 +152,20 @@ export function MontarBar({
                     {done ? '✓' : running ? '…' : p.state === 'error' ? '!' : `${i + 1}`}
                   </div>
                 </div>
-                <div className="text-[10px] mt-0.5 truncate" style={{ color: tokens.text.tertiary }}>{p.sub}</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <div className="text-[10px] truncate flex-1 min-w-0" style={{ color: tokens.text.tertiary }}>{p.sub}</div>
+                  {/* Explicit action affordance — the whole card is clickable,
+                      but a card with a progress bar reads as a status indicator.
+                      This pill makes the action discoverable. */}
+                  {p.state === 'pending' && (
+                    <span
+                      className="shrink-0 text-[9.5px] font-bold px-2 py-0.5 rounded-md"
+                      style={{ backgroundColor: VIOLET, color: '#fff' }}
+                    >
+                      {p.key === 'motion' ? `⚡ Gerar todos (${motionCandidates})` : p.key === 'avatar' ? `Gerar (${avatarTotal - avatarReady})` : 'Gerar'}
+                    </span>
+                  )}
+                </div>
                 <div className="mt-1.5 h-1 rounded overflow-hidden" style={{ backgroundColor: tokens.border.subtle }}>
                   <div className="h-full rounded" style={{ width: `${p.pct}%`, backgroundColor: accent(p.state), transition: 'width 0.3s' }} />
                 </div>

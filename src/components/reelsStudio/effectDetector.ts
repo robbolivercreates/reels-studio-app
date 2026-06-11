@@ -134,14 +134,41 @@ export const detectEffect = (ctx: EffectDetectorCtx): EffectSuggestion => {
     return { recommendedEffect: 'icon-callout', reason: 'Destaque curto com ícone' };
   }
 
-  // 8b. Stat / number — falls through when emoji-led didn't match
+  // 8b. Stat / number — prefer the motion-pack stat-counter template for clean numbers
   if (STAT_NUMBER.test(text)) {
-    return { recommendedEffect: 'counter-reveal', reason: 'Estatística detectada — contador' };
+    // Use the motion-pack template for isolated numeric stats (faster, more reliable)
+    const hasIsolatedNumber = /\b\d+(\.\d+)?\s*(GB|MB|TB|k|K|M|B|%|x|s|min|h|ms|reais|R\$|\$|€)\b/i.test(text);
+    return {
+      recommendedEffect: hasIsolatedNumber ? 'stat-counter' : 'counter-reveal',
+      reason: hasIsolatedNumber ? 'Estatística detectada — template contador' : 'Estatística detectada — contador',
+    };
   }
 
-  // 9. DM / example / message
+  // 8c. Claude/IA command pattern → typewriter-terminal
+  const COMMAND_HINT = /\b(claude|comando|terminal|cli|script|automatiz|run|execute|código|code|prompt)\b/i;
+  if (COMMAND_HINT.test(text) && text.length < 150) {
+    return { recommendedEffect: 'typewriter-terminal', reason: 'Comando Claude/IA detectado — template terminal' };
+  }
+
+  // 8d. Tool stack / comparison → app-icon-launcher
+  const TOOL_STACK = /\b(stack|ferramentas?|apps?|plugins?|extensões?|integra|ecossistema|conjunto)\b/i;
+  if (TOOL_STACK.test(text)) {
+    return { recommendedEffect: 'app-icon-launcher', reason: 'Stack de ferramentas detectado — template grid de ícones' };
+  }
+
+  // 8e. "Stop using X" / replacement hooks → wastebasket-trash
+  const TRASH_HINT = /\b(pare de usar|não precisa de|substitui|jogar fora|dispensar|chega de|sem.*premier|sem.*capcut|sem.*after effects)\b/i;
+  if (TRASH_HINT.test(text)) {
+    return { recommendedEffect: 'wastebasket-trash', reason: 'Hook de substituição detectado — template lixeira' };
+  }
+
+  // 9. DM / example / message — prefer imessage-notif template for authentic iOS look
   if (EXAMPLE_HINT.test(text)) {
-    return { recommendedEffect: 'notification-pop', reason: 'Exemplo / mensagem — banner de notificação' };
+    const hasMessageHint = /\b(mensagem|mensagens|dm|chat|notificação|notif|recebi|respondeu|foi enviado)\b/i.test(text);
+    return {
+      recommendedEffect: hasMessageHint ? 'imessage-notif' : 'notification-pop',
+      reason: hasMessageHint ? 'Mensagem detectada — template iMessage' : 'Exemplo / mensagem — banner de notificação',
+    };
   }
 
   // 10. Geo content

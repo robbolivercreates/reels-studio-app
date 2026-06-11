@@ -254,6 +254,44 @@ export interface ScreenTake {
 }
 
 /**
+ * "Editar vídeo pronto" mode — an independent overlay element placed over the
+ * base video. NOT tied 1:1 to blocks: the user drops as many as they want, each
+ * with its own timing/position, and chooses per element whether it floats over
+ * the video (`overlay`) or takes the whole frame (`fullscreen`). This is the
+ * Wave-2 "elements editor" model — completely separate from the generative
+ * `block.motion` (which is untouched). Only used when `projectMode === 'edit'`.
+ */
+export interface OverlayElement {
+  id: string;
+  /** Element type: 'text' = caption/keyword typed by user;
+   * 'motion' = AI-generated HyperFrames overlay (screen-blend over the video). */
+  kind: 'text' | 'motion';
+  /** When it appears, on the project (audio) timeline. */
+  startSec: number;
+  /** How long it stays. */
+  durationSec: number;
+  /** overlay = floats over the video (screen-blend); fullscreen = covers it;
+   * split-top/split-bottom = motion fills one half, base video the other.
+   * @deprecated superseded by `placement` — kept for hydration of old projects. */
+  mode: 'overlay' | 'fullscreen' | 'split-top' | 'split-bottom';
+  /** Vertical anchor 0..1 (for overlay mode; centered horizontally). Default 0.58.
+   * @deprecated superseded by `placement.y`. */
+  y: number;
+  /** Overlay band height as fraction of frame. Default 0.22 (22% = lower-third).
+   * @deprecated superseded by `placement.height`. */
+  overlayH?: number;
+  /** Unified placement (where the motion sits). When present, wins over
+   * mode/y/overlayH — resolved via `placementOfElement()` in motionLibrary. */
+  placement?: import('./motionLibrary').MotionPlacement;
+  text: string;
+  /** Optional text styling (text kind only). */
+  color?: string;
+  fontScale?: number;
+  /** Motion config — populated after AI generation + render (motion kind only). */
+  motion?: MotionConfig;
+}
+
+/**
  * Snapshot of the most recent video-reference analysis. Persisted with the project
  * so the production plan stays available after reload. We store it as `unknown`-shaped
  * lightweight data here to avoid circular imports with the service layer.
@@ -299,6 +337,8 @@ export interface PersistedAnalysis {
   /** Cost tracking properties */
   actualCostUSD?: number;
   actualTokens?: { prompt: number; candidates: number };
+  /** Cached viral breakdown — avoids re-analysing the same video. */
+  viralBreakdown?: import('../../services/viralBreakdownService').ViralBreakdown;
 }
 
 /** Minimax HD 2.8 emotion presets. Drives voice expression on TTS generation. */
@@ -369,6 +409,26 @@ export interface ReelsState {
    * Stored as Record<string, unknown> to avoid circular import with the service.
    */
   brandIdentity?: Record<string, unknown>;
+  /**
+   * Project mode. 'generate' (default) = the classic script→TTS→avatar→motion
+   * flow. 'edit' = "Editar vídeo pronto": an uploaded video is the full-frame
+   * base track, its extracted audio is the master, and blocks are time-anchors
+   * for motions/captions over it. See `baseVideoTake`.
+   */
+  projectMode?: 'generate' | 'edit';
+  /**
+   * Edit mode only: the uploaded video that serves as the full-frame base
+   * layer for the entire project. Its audio drives the master clock and its
+   * keepSegments (silence cut) skip both video and audio. Undefined in
+   * 'generate' mode.
+   */
+  baseVideoTake?: ScreenTake;
+  /**
+   * Edit mode only: independent overlay elements (text/captions/graphics) the
+   * user places over the base video. Separate from `block.motion`. Undefined
+   * or empty in 'generate' mode.
+   */
+  overlayElements?: OverlayElement[];
 }
 
 export type ReelsAction =
@@ -441,6 +501,26 @@ export type ReelsAction =
   | { type: 'rename-take'; id: string; name: string }
   | { type: 'update-take'; id: string; patch: Partial<ScreenTake> }
   | { type: 'set-active-take'; id: string | null }
+  // Convert the CURRENT project into edit-video mode, reusing the take that's
+  // already loaded as the base video (no re-import / re-transcribe).
+  | { type: 'enter-edit-mode' }
+  // Overlay elements (edit-video mode) — independent of block.motion.
+  | { type: 'add-overlay-element'; element: OverlayElement }
+  | { type: 'update-overlay-element'; id: string; patch: Partial<OverlayElement> }
+  | { type: 'remove-overlay-element'; id: string }
+  /** Set the MotionConfig on a 'motion' OverlayElement after AI generation + render. */
+  | { type: 'set-overlay-motion'; id: string; motion: MotionConfig }
+  | {
+      // "Editar vídeo pronto": load an uploaded video as the base track and
+      // seed blocks + master audio from its Whisper transcript.
+      type: 'edit-video-loaded';
+      baseVideoTake: ScreenTake;
+      blocks: ScriptBlock[];
+      audioUrl: string;
+      duration: number;
+      peaks: number[];
+      words: WordTimestamp[];
+    }
   | { type: 'hydrate'; state: ReelsState };
 
 export const WAVEFORM_BUCKETS = 240;

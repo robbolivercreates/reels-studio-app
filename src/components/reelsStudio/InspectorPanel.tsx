@@ -22,10 +22,8 @@ import type { ScriptBlock, AppTheme, BlockLayout } from './types';
 import { getTheme } from './theme';
 import { LAYOUT_OPTIONS } from './layouts';
 import { loadAvatarPhotos } from './avatarPhotosStore';
-import { STYLE_PRESETS, findStylePreset, type StylePresetId, type StylePreset } from './motionStylePresets';
-import { STYLE_PRESET_IDS, EFFECT_PRESET_IDS, isHidden } from './presetCategory';
-import { detectEffect } from './effectDetector';
-import { getActiveMotionModel, getMotionModelLabel, MOTION_MODEL_OPTIONS } from '../../services/motionService';
+import type { StylePresetId } from './motionStylePresets';
+import type { MotionPlacement } from './motionLibrary';
 
 // Local mm:ss.cc formatter — formatTime in ReelsStudio.tsx isn't exported.
 const formatTime = (sec: number): string => {
@@ -50,6 +48,9 @@ interface Props {
   onSetLayout?: (layout: BlockLayout) => void;
   onSetAvatarPhoto?: (photoId: string | undefined) => void;
   onSetStylePreset?: (preset: StylePresetId | undefined) => void;
+  /** Unified placement setter — writes placement onto the block's motion
+   * (creating a draft when no motion exists yet). */
+  onSetMotionPlacement?: (placement: MotionPlacement) => void;
   /** Per-block motion model override (a MotionModelId, or undefined = global default). */
   motionModelOverride?: string;
   /** Setter for the per-block model override. undefined → revert to global default. */
@@ -101,7 +102,7 @@ const STORAGE_KEY_MOTION_CATEGORY = 'reels.inspector.motionCategory';
 // 280px: comporta a linha compacta do preset escolhido + 2 carrosséis com
 // thumbs 9:16 grandes o suficiente pra receber preview animado real
 // (Entrega C futura — slot interno já dimensionado pra <iframe>/<video>).
-const INSPECTOR_TAB_BODY_HEIGHT = 280;
+const INSPECTOR_TAB_BODY_HEIGHT = 220;
 const STYLE_THUMB_WIDTH = 80; // 9:16 aspect → ~142px de altura. Cabe preview.
 const TabBodyShell: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   // Height EXATA + overflow-hidden em ambos os eixos. Qualquer tab que
@@ -117,7 +118,7 @@ const TabBodyShell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
 
 // ─── Inline LayoutThumbnail (kept local to avoid circular imports) ──────
 const LayoutThumb: React.FC<{ layout: BlockLayout; selected: boolean }> = ({ layout, selected }) => {
-  const borderClass = selected ? 'border-violet-400 shadow-[0_0_8px_rgba(10,132,255,0.4)]' : 'border-white/10';
+  const borderClass = selected ? 'border-blue-400 shadow-[0_0_8px_rgba(10,132,255,0.4)]' : 'border-white/10';
   return (
     <div className={`relative w-full aspect-[9/16] rounded border bg-zinc-900 overflow-hidden transition-all ${borderClass}`}>
       {layout === 'avatar-only' && (
@@ -158,7 +159,7 @@ const PhotoPicker: React.FC<{
       <button
         onClick={() => onPick(undefined)}
         className={`shrink-0 w-12 h-12 rounded-md border flex items-center justify-center text-[9px] font-medium transition-colors ${
-          usingDefault ? 'border-violet-400 bg-violet-500/15 text-violet-200' : 'border-white/10 bg-black/30 text-zinc-400 hover:bg-white/5'
+          usingDefault ? 'border-blue-400 bg-blue-500/15 text-blue-200' : 'border-white/10 bg-black/30 text-zinc-400 hover:bg-white/5'
         }`}
         title="Usar a foto padrão do projeto"
       >
@@ -171,7 +172,7 @@ const PhotoPicker: React.FC<{
             key={p.id}
             onClick={() => onPick(p.id)}
             className={`shrink-0 w-12 h-12 rounded-md overflow-hidden border transition-colors ${
-              selected ? 'border-violet-400' : 'border-white/10 hover:border-white/30'
+              selected ? 'border-blue-400' : 'border-white/10 hover:border-white/30'
             }`}
             title={p.name}
           >
@@ -179,99 +180,6 @@ const PhotoPicker: React.FC<{
           </button>
         );
       })}
-    </div>
-  );
-};
-
-// ─── DecidedPresetCard ─────────────────────────────────────────────────
-// Hero card that surfaces the SINGLE preset currently driving the block's
-// motion generation. Replaces the previous "grid of 19 chips" as the default
-// view — chip grid still exists but lives behind a "Trocar manualmente"
-// disclosure now. Two modes:
-//   - source='auto'    → eyebrow "🤖 Sistema escolheu", purple border
-//   - source='manual'  → eyebrow "Você escolheu", neutral border, reset link
-const DecidedPresetCard: React.FC<{
-  preset: StylePreset;
-  source: 'auto' | 'manual';
-  reason: string;
-  onReset?: () => void;
-  isLight: boolean;
-  tokens: ReturnType<typeof getTheme>;
-}> = ({ preset, source, reason, onReset, isLight, tokens }) => {
-  const isAuto = source === 'auto';
-  return (
-    <div
-      className="rounded-lg px-4 py-3 flex items-center gap-4 transition-colors"
-      style={{
-        backgroundColor: isLight ? tokens.bg.elevated : 'rgba(255,255,255,0.03)',
-        border: `1px solid ${isAuto ? '#60A5FA' : tokens.border.subtle}`,
-        boxShadow: isAuto ? '0 0 0 3px rgba(10,132,255,0.10)' : 'none',
-      }}
-    >
-      {/* Big emoji + label cluster */}
-      <div className="flex items-center gap-3 shrink-0">
-        <span className="text-3xl leading-none" aria-hidden>{preset.emoji}</span>
-        <div className="text-[15px] font-semibold leading-tight" style={{ color: tokens.text.primary }}>
-          {preset.label}
-        </div>
-      </div>
-      {/* Eyebrow + reason */}
-      <div className="flex-1 min-w-0">
-        <div
-          className="text-[10px] uppercase tracking-wider font-semibold leading-none mb-1"
-          style={{ color: isAuto ? '#60A5FA' : tokens.text.tertiary }}
-        >
-          {isAuto ? '🤖 Sistema escolheu' : 'Você escolheu'}
-        </div>
-        <div className="text-[11px] leading-snug truncate" style={{ color: tokens.text.secondary }}>
-          {reason}
-        </div>
-      </div>
-      {/* Reset to auto link — only when user has a manual override */}
-      {!isAuto && onReset && (
-        <button
-          onClick={onReset}
-          className="shrink-0 text-[11px] font-medium underline-offset-2 hover:underline transition-colors"
-          style={{
-            color: '#60A5FA',
-            backgroundColor: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            padding: 0,
-          }}
-          title="Limpar escolha manual e voltar para a decisão automática do sistema"
-        >
-          Voltar para automático
-        </button>
-      )}
-    </div>
-  );
-};
-
-// ─── CarouselRow — horizontal thumbnail row with auto-scroll to active ─
-// When `activeId` changes (e.g. disclosure just opened OR user clicked a
-// thumb), the container scrolls so the active thumb is centered in view.
-// This is the "anchor" mechanic — user never loses sight of what's selected,
-// even after browsing the carousel.
-const CarouselRow: React.FC<{
-  activeId: string | undefined;
-  children: React.ReactNode;
-}> = ({ activeId, children }) => {
-  const rowRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!activeId) return;
-    const el = rowRef.current?.querySelector(`[data-preset-id="${activeId}"]`);
-    if (el instanceof HTMLElement) {
-      el.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
-    }
-  }, [activeId]);
-  return (
-    <div
-      ref={rowRef}
-      className="flex gap-2 overflow-x-auto pb-1"
-      style={{ scrollbarWidth: 'thin' }}
-    >
-      {children}
     </div>
   );
 };
@@ -289,6 +197,7 @@ export const InspectorPanel: React.FC<Props> = ({
   onSetLayout,
   onSetAvatarPhoto,
   onSetStylePreset,
+  onSetMotionPlacement,
   motionModelOverride,
   onSetMotionModel,
   onOpenMotion,
@@ -309,14 +218,18 @@ export const InspectorPanel: React.FC<Props> = ({
   const tokens = getTheme(appTheme ?? 'dark');
   const isLight = (appTheme ?? 'dark') === 'light';
   const [activeTab, setActiveTab] = useState<InspectorTab>(() => {
+    // NOTE: 'motion' may still arrive from old sessionStorage — effectiveTab
+    // redirects it to 'layout' below.
     try {
       const v = sessionStorage.getItem(STORAGE_KEY_TAB);
       if (v === 'motion' || v === 'avatar' || v === 'layout' || v === 'voz' || v === 'assets' || v === 'stats') return v;
     } catch { /* ignore */ }
-    return 'motion';
+    return 'layout';
   });
   const [collapsed, setCollapsed] = useState<boolean>(() => {
-    try { return sessionStorage.getItem(STORAGE_KEY_COLLAPSED) === '1'; } catch { return false; }
+    // Collapsed by default (progressive disclosure): Avatar/Layout/Voz are
+    // occasional adjustments — the screen breathes, the preview stays big.
+    try { return sessionStorage.getItem(STORAGE_KEY_COLLAPSED) !== '0'; } catch { return true; }
   });
   // "Trocar manualmente" disclosure — hidden by default. When open, the
   // 19-chip grid is shown below the DecidedPresetCard. Persists across
@@ -327,12 +240,12 @@ export const InspectorPanel: React.FC<Props> = ({
   // Segmented control state — picks which of the two categories the carousel
   // shows when the disclosure is open. Persists per session so the user lands
   // on the same tab they left.
-  const [motionCategory, setMotionCategory] = useState<'style' | 'effect'>(() => {
+  const [motionCategory, setMotionCategory] = useState<'template' | 'style' | 'effect'>(() => {
     try {
       const v = sessionStorage.getItem(STORAGE_KEY_MOTION_CATEGORY);
-      if (v === 'style' || v === 'effect') return v;
+      if (v === 'template' || v === 'style' || v === 'effect') return v;
     } catch { /* ignore */ }
-    return 'style';
+    return 'template';
   });
   // Inline per-block motion-model picker. The effective model is the block's
   // override when set, else the global default — and picking one writes the
@@ -361,7 +274,8 @@ export const InspectorPanel: React.FC<Props> = ({
   // silently fall back to "motion" so they never see a blank body.
   const effectiveTab: InspectorTab = (() => {
     if (!block) return activeTab;
-    if ((activeTab === 'avatar' || activeTab === 'voz') && !isAvatar) return 'motion';
+    if ((activeTab === 'avatar' || activeTab === 'voz') && !isAvatar) return 'layout';
+    if (activeTab === 'motion') return 'layout'; // legacy sessionStorage value
     return activeTab;
   })();
 
@@ -372,456 +286,9 @@ export const InspectorPanel: React.FC<Props> = ({
   })();
 
   // ─── Tab bodies ─────────────────────────────────────────────────
-  const motionBody = () => {
-    if (!block) return null;
-    const motionStatus = block.motion?.status;
-    const isBusy = !!motionBusy;
-    // Deterministic effect suggestion. Cheap (regex + bool checks) — no memo
-    // needed; it runs on every render of this body, which only happens when
-    // the user is actively looking at the Motion tab. Returns undefined when
-    // no rule matches.
-    const detected = detectEffect({
-      block,
-      index: blockIndex ?? 0,
-      total: blockTotal ?? 1,
-      brandHasLogo,
-      brandHasIdentity,
-      audioWordCount,
-    });
-    const motionLabel = (() => {
-      if (isBusy) return motionBusy;
-      // requiresAsset takes precedence over the normal status tree — the user
-      // needs to fix the missing attachment before any other status matters.
-      if (requiresAsset) return '⚠ Anexe um asset antes de gerar';
-      if (!block.motion) return 'Sem motion · pronto para gerar';
-      if (motionStatus === 'ready') return 'Motion pronto';
-      if (motionStatus === 'generating') return 'Gerando…';
-      if (motionStatus === 'rendering') return 'Renderizando…';
-      if (motionStatus === 'error') return 'Erro · abra o editor pra ver';
-      return 'Rascunho';
-    })();
-    // Resolve what the user is effectively going to render with — the manual
-    // override if set, otherwise whatever the detector recommended, otherwise
-    // a safe editorial fallback. This single id drives the DecidedPresetCard
-    // AND the chip's "active" highlight in the carousel — keeping both in
-    // sync so the user never sees two preset chips lit up at once.
-    const isManualOverride = !!block.stylePresetOverride;
-    const effectivePresetId: StylePresetId = isManualOverride
-      ? (block.stylePresetOverride as StylePresetId)
-      : (detected.recommendedEffect ?? 'editorial-clean');
-    const effectivePreset = findStylePreset(effectivePresetId);
-    const currentPresetId: string = effectivePresetId;
-    const reasonText = isManualOverride
-      ? effectivePreset.bestFor
-      : (detected.recommendedEffect ? detected.reason : 'Editorial limpo · escolha padrão');
-    return (
-      // 220px shell: Zone 1 (top) + Zone 2 (middle, grows to fill) + Zone 3
-      // (bottom, glued to floor). When disclosure opens, DecidedPresetCard
-      // is hidden to free room for the carousels.
-      <div className="h-full flex flex-col gap-3">
-        {/* ─── Zone 1 (top): hero card + status strip ──────────────────
-            DecidedPresetCard is hidden when the disclosure opens — the
-            chosen preset is already implicit (user is actively browsing
-            the carousel) and the card takes ~64px we need for the rows. */}
-        <div className="shrink-0 space-y-3">
-        {/* Closed state only: big hero card showing the decided preset.
-            Open state (disclosure expanded): card is hidden — the user is
-            actively browsing the carousel, the active chip already carries
-            all the information the card was showing. To return from manual
-            override → click the auto-default chip (glass-tech for avatar /
-            editorial-clean for b-roll), the click handler clears the
-            override automatically. */}
-        {!showMotionGrid && (
-          <DecidedPresetCard
-            preset={effectivePreset}
-            source={isManualOverride ? 'manual' : 'auto'}
-            reason={reasonText}
-            onReset={isManualOverride ? () => onSetStylePreset?.(undefined) : undefined}
-            isLight={isLight}
-            tokens={tokens}
-          />
-        )}
-
-        {/* Status strip — combines (left) status OR segmented control with
-            (right) Dark/Light toggle + Esconder link. When the disclosure
-            is closed, the left shows the motion status label. When open,
-            the left becomes the [Estilo (8) | Efeito (11)] segmented
-            control AND a discrete "Esconder ▴" appears on the far right. */}
-        <div className="flex items-center justify-between gap-3 px-1">
-          <div className="flex items-center gap-3 min-w-0">
-            {showMotionGrid ? (
-              <div
-                className="shrink-0 flex items-center gap-0.5 p-0.5 rounded-md"
-                style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)', border: `1px solid ${tokens.border.subtle}` }}
-              >
-                {([
-                  { id: 'style' as const,  label: 'Estilo', count: STYLE_PRESET_IDS.filter(id => !isHidden(id)).length },
-                  { id: 'effect' as const, label: 'Efeito', count: EFFECT_PRESET_IDS.filter(id => !isHidden(id)).length },
-                ]).map(opt => {
-                  const active = motionCategory === opt.id;
-                  return (
-                    <button
-                      key={opt.id}
-                      onClick={() => setMotionCategory(opt.id)}
-                      className="px-2 py-0.5 rounded text-[10px] font-medium transition-colors"
-                      style={{
-                        backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.10)') : 'transparent',
-                        color: active ? tokens.text.primary : tokens.text.tertiary,
-                        cursor: active ? 'default' : 'pointer',
-                        border: 'none',
-                      }}
-                      title={opt.id === 'style' ? 'Visual mood do motion' : 'Componente / shot template — opcional'}
-                    >
-                      {opt.label} <span className="opacity-50">({opt.count})</span>
-                    </button>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 min-w-0">
-                <div
-                  className="text-[10px] font-medium truncate"
-                  style={{ color: requiresAsset ? 'rgb(252, 211, 77)' : tokens.text.tertiary }}
-                >
-                  {motionLabel}
-                </div>
-                {/* Model badge — green when this block's motion was already
-                    generated (shows which model made it), violet otherwise
-                    (shows the active preference that will run on Gerar).
-                    Mirrors the same two-mode design used in MotionPickerModal,
-                    so users can see the model from either entry point without
-                    opening the modal. */}
-                {block.motion?.html ? (
-                  <span
-                    className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
-                    style={{ backgroundColor: 'rgba(16, 185, 129, 0.15)', color: 'rgb(110, 231, 183)', border: '1px solid rgba(16, 185, 129, 0.35)' }}
-                    title={`Este motion foi gerado com ${getMotionModelLabel(block.motion.modelUsed)}. Escolha outro modelo no botão 🤖 e clique em Regerar.`}
-                  >
-                    {getMotionModelLabel(block.motion.modelUsed)}
-                  </span>
-                ) : (
-                  <span
-                    className="shrink-0 text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded-full font-semibold"
-                    style={{ backgroundColor: 'rgba(124, 58, 237, 0.15)', color: 'rgb(196, 181, 253)', border: '1px solid rgba(124, 58, 237, 0.35)' }}
-                    title="Modelo que será usado ao gerar este bloco. Troque no botão 🤖 abaixo."
-                  >
-                    {motionModelOverride
-                      ? (MOTION_MODEL_OPTIONS.find(o => o.id === motionModelOverride)?.label ?? getActiveMotionModel().label)
-                      : getActiveMotionModel().label}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {showMotionGrid && (
-              <button
-                onClick={() => setShowMotionGrid(false)}
-                className="text-[11px] font-medium"
-                style={{
-                  color: tokens.text.secondary,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: 0,
-                }}
-                title="Voltar pra visão principal"
-              >
-                Esconder ▴
-              </button>
-            )}
-            {/* Dark/Light chip — controls how the NEXT generation paints
-                backgrounds. */}
-            {onSetMotionColorMode && (
-              <div
-                className="flex items-center gap-0.5 p-0.5 rounded-md"
-                style={{ backgroundColor: isLight ? '#FFFFFF' : 'rgba(0,0,0,0.25)' }}
-              >
-                {(['light', 'dark'] as const).map(mode => {
-                  const active = (motionColorMode ?? 'dark') === mode;
-                  return (
-                    <button
-                      key={mode}
-                      onClick={() => onSetMotionColorMode(mode)}
-                      className="px-2 py-0.5 rounded text-[10px] font-medium flex items-center gap-1 transition-colors"
-                      style={{
-                        backgroundColor: active ? (isLight ? '#F4F4F5' : 'rgba(255,255,255,0.1)') : 'transparent',
-                        color: active ? tokens.text.primary : tokens.text.tertiary,
-                        cursor: 'pointer',
-                        border: 'none',
-                      }}
-                      title={mode === 'light' ? 'Motion com fundo claro' : 'Motion com fundo escuro'}
-                    >
-                      <span>{mode === 'light' ? '☀' : '🌙'}</span>
-                      <span>{mode === 'light' ? 'Claro' : 'Escuro'}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        </div>
-        </div>
-        {/* ─── Zone 2 (middle): disclosure + horizontal carousel ─────────
-            flex column inside the flex-1 zone so the disclosure / segmented
-            control stays ALWAYS visible at the top, and only the carousel
-            below it gets cropped if vertical space runs out. */}
-        <div className="flex-1 min-h-0 flex flex-col gap-2 overflow-hidden">
-
-        {/* Disclosure trigger — only shown when CLOSED. When open, the
-            segmented control + "Esconder ▴" link live in the status strip
-            above. This zone just contains the carousel. */}
-        {!showMotionGrid && (
-          <button
-            onClick={() => {
-              // Auto-pick the category that contains the current preset
-              const cat = (EFFECT_PRESET_IDS as readonly string[]).includes(currentPresetId)
-                ? 'effect'
-                : 'style';
-              setMotionCategory(cat);
-              setShowMotionGrid(true);
-            }}
-            className="shrink-0 w-full text-center text-[11px] font-medium py-1.5 rounded transition-colors"
-            style={{
-              color: tokens.text.secondary,
-              backgroundColor: 'transparent',
-              border: `1px dashed ${tokens.border.subtle}`,
-              cursor: 'pointer',
-            }}
-          >
-            Trocar manualmente ▾
-          </button>
-        )}
-
-        {/* Full chip carousel — hidden by default. When open, renders TWO
-            horizontal scroll rows (Estilo + Efeito) with 9:16 mini-thumbnails.
-            Horizontal scroll only — vertical height stays inside the shell. */}
-        {showMotionGrid && (() => {
-          // Render helper — one 9:16 mini-thumbnail per preset. Closure over
-          // local props to keep the chip styling identical between rows.
-          const renderThumb = (p: typeof STYLE_PRESETS[number], opts?: { autoBadge?: boolean }) => {
-            const isActive = currentPresetId === p.id;
-            const auto = !!opts?.autoBadge;
-            const tip = auto
-              ? `Sugerido: ${detected.reason}${isActive ? '' : ' — clique para aplicar'}`
-              : p.bestFor;
-            // Atmosphere-aware mini-background that hints at the preset's mood
-            // without actually rendering the motion. baseBg + warmGlow give
-            // each thumb its own personality before the user generates.
-            const a = p.atmosphere;
-            const thumbBg = `radial-gradient(circle at 30% 30%, ${a.warmGlow.color}${Math.round(a.warmGlow.alpha * 255).toString(16).padStart(2, '0')} 0%, transparent 55%), radial-gradient(circle at 75% 75%, ${a.coolGlow.color}${Math.round(a.coolGlow.alpha * 255).toString(16).padStart(2, '0')} 0%, transparent 55%), ${a.baseBg}`;
-            return (
-              <button
-                key={p.id}
-                data-preset-id={p.id}
-                onClick={() => {
-                  // glass-tech is the natural avatar default (effectDetector
-                  // rule 12). Clicking it on an AVATAR block clears the
-                  // override → falls back to that default cleanly. But on
-                  // b-roll there's no rule recommending glass-tech, so
-                  // clearing the override would bounce the user to the
-                  // editorial-clean fallback — felt like a bug. So we only
-                  // use the "clear" shortcut when the click matches the
-                  // block's natural detected default; otherwise we set the
-                  // override explicitly.
-                  const isAvatarBlock = block.kind === 'avatar';
-                  const isNaturalDefault = p.id === 'glass-tech' && isAvatarBlock;
-                  onSetStylePreset?.(isNaturalDefault ? undefined : (p.id as StylePresetId));
-                }}
-                className="relative shrink-0 rounded-lg transition-all flex flex-col items-center overflow-hidden"
-                style={{
-                  width: STYLE_THUMB_WIDTH,
-                  border: `2px solid ${isActive ? '#60A5FA' : (auto ? '#60A5FA80' : tokens.border.subtle)}`,
-                  cursor: 'pointer',
-                  boxShadow: isActive ? '0 0 0 3px rgba(10,132,255,0.18)' : 'none',
-                  backgroundColor: isLight ? '#FFFFFF' : 'rgba(255,255,255,0.04)',
-                }}
-                title={tip}
-              >
-                {/* 9:16 mini canvas hint. Aspect ratio matches the real reel. */}
-                <div
-                  style={{
-                    width: '100%',
-                    aspectRatio: '9 / 16',
-                    background: thumbBg,
-                    position: 'relative',
-                  }}
-                >
-                  <span
-                    className="absolute inset-0 flex items-center justify-center text-2xl leading-none"
-                    aria-hidden
-                  >
-                    {p.emoji}
-                  </span>
-                  {auto && (
-                    <span
-                      className="absolute top-1 right-1 text-[8px] font-bold px-1 py-0.5 rounded-full leading-none"
-                      style={{
-                        backgroundColor: '#60A5FA',
-                        color: '#fff',
-                        boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
-                      }}
-                    >
-                      {isActive ? '✓' : 'auto'}
-                    </span>
-                  )}
-                </div>
-                <span
-                  className="text-[9px] text-center leading-tight font-medium truncate w-full px-1 py-1"
-                  style={{ color: isActive ? '#60A5FA' : tokens.text.secondary }}
-                >
-                  {p.label}
-                </span>
-              </button>
-            );
-          };
-          const styleSet = new Set<string>(STYLE_PRESET_IDS);
-          const effectSet = new Set<string>(EFFECT_PRESET_IDS);
-          // Hide deprecated/WIP presets (e.g. karaoke-captions until it's
-          // reimplemented as a native preset). Historical motions using them
-          // still render correctly — they just don't appear in the picker.
-          const styles  = STYLE_PRESETS.filter(p => styleSet.has(p.id) && !isHidden(p.id));
-          const effects = STYLE_PRESETS.filter(p => effectSet.has(p.id) && !isHidden(p.id));
-          // Active id for auto-scroll: respect manual override; otherwise
-          // anchor on the detector's recommendation so the recommended thumb
-          // is visible right after the user opens the carousel.
-          const activeId = (block.stylePresetOverride ?? detected.recommendedEffect) as string | undefined;
-          return (
-            // Single carousel — shows only the category selected via the
-            // segmented control above. activeId centers the active thumb in
-            // view as soon as the category renders. flex-1 lets it earn
-            // whatever vertical room is left after the segmented control.
-            <div className="flex-1 min-h-0 overflow-hidden">
-              <CarouselRow activeId={activeId}>
-                {(motionCategory === 'style' ? styles : effects).map(p =>
-                  renderThumb(p, { autoBadge: p.id === detected.recommendedEffect }),
-                )}
-              </CarouselRow>
-            </div>
-          );
-        })()}
-        </div>
-        {/* ─── Zone 3 (bottom): action buttons (pinned to floor) ──────── */}
-        {/* Primary: regenerate inline (no modal). Secondary: open advanced editor. */}
-        <div className="shrink-0 flex items-center gap-2">
-          {requiresAsset ? (
-            // Replace the generate button with an amber "Anexar asset" CTA when
-            // the gate is closed. Clicking it opens the AssetPickerModal — the
-            // same shortcut the card chip uses. Without this, the user sees the
-            // status strip warning but has no obvious next step.
-            <button
-              onClick={onOpenAssetPicker}
-              className="px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
-              style={{
-                backgroundColor: 'rgb(245, 158, 11)',
-                color: '#1a1a1a',
-                border: 'none',
-                cursor: 'pointer',
-              }}
-              title="A pasta do projeto tem assets, mas este bloco não tem nenhum anexado. Clique para anexar."
-            >
-              📎 Anexar asset
-            </button>
-          ) : (
-            <button
-              onClick={onGenerateMotion}
-              disabled={isBusy}
-              className="px-3 py-1.5 rounded-md text-xs font-medium transition-opacity"
-              style={{
-                backgroundColor: '#60A5FA',
-                color: '#fff',
-                border: 'none',
-                cursor: isBusy ? 'wait' : 'pointer',
-                opacity: isBusy ? 0.6 : 1,
-              }}
-            >
-              {isBusy
-                ? '⏳ Gerando…'
-                : block.motion?.status === 'ready' ? '↻ Regerar motion' : '✨ Gerar motion'}
-            </button>
-          )}
-          <button
-            onClick={onOpenMotion}
-            disabled={isBusy}
-            className="px-3 py-1.5 rounded-md text-xs"
-            style={{
-              backgroundColor: 'transparent',
-              color: tokens.text.secondary,
-              border: `1px solid ${tokens.border.subtle}`,
-              cursor: isBusy ? 'not-allowed' : 'pointer',
-              opacity: isBusy ? 0.5 : 1,
-            }}
-          >
-            Edição avançada…
-          </button>
-
-          {/* Inline PER-BLOCK model picker — choose the Gemini model for THIS
-              block, right where you generate/regenerate. The override is saved
-              on the block, so each one can use its own model. "Padrão (global)"
-              reverts to the global default. */}
-          {onSetMotionModel && (() => {
-            const globalLabel = getActiveMotionModel().label;
-            const overridden = !!motionModelOverride;
-            const effectiveLabel = overridden
-              ? (MOTION_MODEL_OPTIONS.find(o => o.id === motionModelOverride)?.label ?? motionModelOverride)
-              : globalLabel;
-            return (
-              <div className="relative ml-auto">
-                <button
-                  onClick={() => setModelMenuOpen(o => !o)}
-                  disabled={isBusy}
-                  className="px-2.5 py-1.5 rounded-md text-[11px] font-medium flex items-center gap-1.5"
-                  style={{
-                    backgroundColor: 'transparent',
-                    color: overridden ? '#60A5FA' : tokens.text.secondary,
-                    border: `1px solid ${overridden ? '#60A5FA66' : tokens.border.subtle}`,
-                    cursor: isBusy ? 'not-allowed' : 'pointer',
-                    opacity: isBusy ? 0.5 : 1,
-                  }}
-                  title="Modelo de IA deste bloco. Cada bloco pode ter o seu — o próximo Gerar/Regerar usa ele."
-                >
-                  🤖 {effectiveLabel}{!overridden && ' (global)'} ▾
-                </button>
-                {modelMenuOpen && (
-                  <>
-                    <div className="fixed inset-0 z-[40]" onClick={() => setModelMenuOpen(false)} />
-                    <div
-                      className="absolute right-0 bottom-full mb-1 z-50 min-w-[170px] rounded-lg py-1 shadow-xl"
-                      style={{ backgroundColor: tokens.bg.elevated, border: `1px solid ${tokens.border.subtle}` }}
-                    >
-                      <div className="px-3 py-1 text-[9px] uppercase tracking-wider" style={{ color: tokens.text.tertiary }}>Modelo deste bloco</div>
-                      <button
-                        onClick={() => { onSetMotionModel(undefined); setModelMenuOpen(false); }}
-                        className="w-full text-left px-3 py-1.5 text-[11px] flex items-center justify-between transition-colors"
-                        style={{ color: !overridden ? '#60A5FA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
-                      >
-                        <span>Padrão (global · {globalLabel})</span>
-                        {!overridden && <span>✓</span>}
-                      </button>
-                      {MOTION_MODEL_OPTIONS.map(opt => {
-                        const active = opt.id === motionModelOverride;
-                        return (
-                          <button
-                            key={opt.id}
-                            onClick={() => { onSetMotionModel(opt.id); setModelMenuOpen(false); }}
-                            className="w-full text-left px-3 py-1.5 text-[11px] flex items-center justify-between transition-colors"
-                            style={{ color: active ? '#60A5FA' : tokens.text.secondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer' }}
-                          >
-                            <span>{opt.label}</span>
-                            {active && <span>✓</span>}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </div>
-            );
-          })()}
-        </div>
-      </div>
-    );
-  };
+  // motionBody removed — the Motion Dock in the right panel (Script column)
+  // is the single home of motion configuration. See ReelsStudio.tsx
+  // renderMotionDockSection.
 
   const avatarBody = () => {
     if (!isAvatar || !block) return null;
@@ -847,7 +314,7 @@ export const InspectorPanel: React.FC<Props> = ({
           <div>
             <div className="flex items-center justify-between text-[10px]">
               <span style={{ color: tokens.text.tertiary }} className="uppercase tracking-wider font-semibold">Zoom</span>
-              <span className={`font-mono ${atAuto ? '' : 'text-violet-400'}`} style={atAuto ? { color: tokens.text.secondary } : undefined}>
+              <span className={`font-mono ${atAuto ? '' : 'text-blue-400'}`} style={atAuto ? { color: tokens.text.secondary } : undefined}>
                 {zoomValue.toFixed(2)}x
                 {atAuto && <span className="ml-1 opacity-60">preenche</span>}
               </span>
@@ -857,7 +324,7 @@ export const InspectorPanel: React.FC<Props> = ({
               value={clampedZoom}
               onChange={(e) => onSetAvatarZoom?.(parseFloat(e.target.value))}
               onDoubleClick={() => onSetAvatarZoom?.(defaultZoom)}
-              className="w-full h-1 accent-violet-400 cursor-pointer mt-1.5"
+              className="w-full h-1 accent-blue-400 cursor-pointer mt-1.5"
               title="Duplo-clique reseta"
             />
           </div>
@@ -873,7 +340,7 @@ export const InspectorPanel: React.FC<Props> = ({
               value={Math.max(-0.25, Math.min(0.25, offsetY))}
               onChange={(e) => onSetAvatarOffsetY?.(parseFloat(e.target.value))}
               onDoubleClick={() => onSetAvatarOffsetY?.(0)}
-              className="w-full h-1 accent-violet-400 cursor-pointer mt-1.5"
+              className="w-full h-1 accent-blue-400 cursor-pointer mt-1.5"
             />
           </div>
         </div>
@@ -1082,7 +549,9 @@ export const InspectorPanel: React.FC<Props> = ({
   const renderTabBody = () => {
     if (isEmpty || isMultiSelect) return null;
     switch (effectiveTab) {
-      case 'motion': return motionBody();
+      // 'motion' no longer has a body here — the Motion Dock lives in the
+      // right panel (Script column). Legacy sessionStorage value falls back.
+      case 'motion': return layoutBody();
       case 'avatar': return avatarBody();
       case 'layout': return layoutBody();
       case 'voz':    return vozBody();
@@ -1091,8 +560,8 @@ export const InspectorPanel: React.FC<Props> = ({
     }
   };
 
+  // Motion tab removed — its home is the Motion Dock in the right panel.
   const tabs: { id: InspectorTab; label: string; disabled: boolean }[] = [
-    { id: 'motion', label: 'Motion', disabled: false },
     { id: 'avatar', label: 'Avatar', disabled: !block || block.kind !== 'avatar' },
     { id: 'layout', label: 'Layout', disabled: !block },
     { id: 'voz',    label: 'Voz',    disabled: !block || block.kind !== 'avatar' },

@@ -98,6 +98,11 @@ export interface PersistedProject {
   motionEnergy?: ReelsState['motionEnergy'];
   appTheme?: ReelsState['appTheme'];
   lastAvatarLayout?: ReelsState['lastAvatarLayout'];
+  /** Edit-video mode — persisted so reopening keeps the base video + elements. */
+  projectMode?: ReelsState['projectMode'];
+  /** Id of the base video take (resolved back to the rebuilt take on load). */
+  baseVideoTakeId?: string | null;
+  overlayElements?: ReelsState['overlayElements'];
   savedAt: number;
 }
 
@@ -147,6 +152,9 @@ export const saveProject = async (state: ReelsState): Promise<void> => {
     motionEnergy: state.motionEnergy,
     appTheme: state.appTheme,
     lastAvatarLayout: state.lastAvatarLayout,
+    projectMode: state.projectMode,
+    baseVideoTakeId: state.baseVideoTake?.id ?? null,
+    overlayElements: state.overlayElements,
     savedAt: Date.now(),
   };
   await reqOf(STORE_PROJECT, 'readwrite', s => s.put(snapshot, PROJECT_KEY));
@@ -485,6 +493,9 @@ export const saveNamedProject = async (state: ReelsState, existingId?: string): 
     motionEnergy: state.motionEnergy,
     appTheme: state.appTheme,
     lastAvatarLayout: state.lastAvatarLayout,
+    projectMode: state.projectMode,
+    baseVideoTakeId: state.baseVideoTake?.id ?? null,
+    overlayElements: state.overlayElements,
     savedAt: Date.now(),
   };
 
