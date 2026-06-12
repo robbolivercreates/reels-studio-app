@@ -993,7 +993,9 @@ export const ReelsStudio: React.FC = () => {
       ]);
 
       setEditVideoStatus('Transcrevendo com Whisper… (1ª vez baixa o modelo)');
-      const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath });
+      // language forçado: o auto-detect do Whisper erra (já vimos cair em 'en'
+      // com voz PT-BR) e a transcrição sai embaralhada. Conteúdo do app é PT-BR.
+      const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath, language: 'pt' });
 
       // Falas nascem como 'avatar' ("🎥 Vídeo"): a footage é a pessoa falando,
       // motions flutuam por cima. Toggle pra 'broll' = motion tela cheia.
@@ -1054,7 +1056,9 @@ export const ReelsStudio: React.FC = () => {
       ]);
 
       setEditVideoStatus('Transcrevendo com Whisper… (1ª vez baixa o modelo)');
-      const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath });
+      // language forçado: o auto-detect do Whisper erra (já vimos cair em 'en'
+      // com voz PT-BR) e a transcrição sai embaralhada. Conteúdo do app é PT-BR.
+      const json = await invoke<string>('transcribe_whisper', { audioPath: wavPath, language: 'pt' });
       const { blocks, words } = importWhisperTranscript(json, { defaultKind: 'avatar' });
       if (blocks.length === 0) throw new Error('Não encontrei fala no áudio.');
 
