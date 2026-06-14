@@ -18,7 +18,7 @@
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import type { ScriptBlock, AvatarClipState, ScreenTake, BlockLayout, BlockTransition, OverlayElement } from './types';
-import { type MotionPlacement, placementOfElement, resolveMotionPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA, DEFAULT_SCRIM_SPREAD } from './motionLibrary';
+import { type MotionPlacement, placementOfElement, effectiveSplitElementAt, resolveMotionPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA, DEFAULT_SCRIM_SPREAD } from './motionLibrary';
 import { computeLayout, hitTest } from './timeline';
 import { getLayoutSlots, defaultAvatarZoom, type LayoutBox } from './layouts';
 
@@ -433,6 +433,20 @@ const frameAtProjectTime = (
     const layers: FrameLayer[] = [base];
     const decorations: FrameDecoration[] = [];
 
+    // Base-video squeeze (top/bottom-half) must be CONTINUOUS across the silent
+    // pauses between scenes. Keying it off the element that strictly contains
+    // `t` flips the base to full-frame in every gap (a vertical "jump", even
+    // when both neighbouring scenes are the same half). Use the gap-bridged
+    // split element so the squeeze + seam hold steady across the pause.
+    const squeezeEl = effectiveSplitElementAt(inputs.overlayElements ?? [], t);
+    if (squeezeEl) {
+      const { underlyingBox, seamY } = composeMotionLayer(placementOfElement(squeezeEl), '', 0, 0, 'dark');
+      if (underlyingBox && seamY !== null) {
+        base.box = underlyingBox;
+        decorations.push({ kind: 'split-seam', splitY: seamY });
+      }
+    }
+
     for (const el of inputs.overlayElements ?? []) {
       if (t < el.startSec || t >= el.startSec + el.durationSec) continue;
       const localT = t - el.startSec;
@@ -449,16 +463,13 @@ const frameAtProjectTime = (
           const motionSeek = Math.min(Math.max(0, motionLocalT), elDur - 0.05);
           const alpha = motionLocalT < 0 ? 0 : overrunAlpha(motionLocalT, elDur);
           if (alpha > 0) {
-            const { motionLayer, underlyingBox, seamY } = composeMotionLayer(placement, motionUrl, motionSeek, alpha, el.motion?.authoredMode ?? 'dark');
-            // Splits & full: reshape/hide the base video for the duration of
-            // this element. (Mutating `base` is safe — one base per frame.)
+            const { motionLayer, underlyingBox } = composeMotionLayer(placement, motionUrl, motionSeek, alpha, el.motion?.authoredMode ?? 'dark');
+            // Split base box + seam are owned by the gap-bridged squeeze above.
+            // Here we only need 'full' to hide the base (motion covers it).
             if (underlyingBox === null) {
               base.box = FULL_FRAME; // full: motion covers it; keep base as backdrop
-            } else if (seamY !== null) {
-              base.box = underlyingBox;
             }
             layers.push(motionLayer);
-            if (seamY !== null) decorations.push({ kind: 'split-seam', splitY: seamY });
           }
         }
       } else {
@@ -942,6 +953,11 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     });
     // Also include motion videos (blocks + overlay elements).
     for (const url of motionUrls.values()) allUrls.push(url);
+    // Edit-video mode: the uploaded base video is a full-frame source for the
+    // whole timeline but isn't tied to any block (blocks are all 'avatar' with
+    // no avatarClips), so it'd never make it into allUrls above. Add it
+    // explicitly or it never reaches videoMap and only the motions render.
+    if (inputs.baseVideoTake?.url) allUrls.push(inputs.baseVideoTake.url);
 
     // Diagnostic block — pinpoint missing visuals before the render
     // starts so the export modal logs reveal what's wrong.

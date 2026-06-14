@@ -32,7 +32,7 @@ import { MotionPickerModal } from './reelsStudio/MotionPickerModal';
 import { AssetPickerModal } from './reelsStudio/AssetPickerModal';
 import { MotionLayerOverlay } from './reelsStudio/MotionLayerOverlay';
 import { MotionDock } from './reelsStudio/MotionDock';
-import { createMotionFromBlock, isMotionAssetsStale, placementOfElement, placementOfMotion, layerOfPlacement, defaultPlacementFor, resolveMotionPlacement, type MotionConfig, type MotionPlacement } from './reelsStudio/motionLibrary';
+import { createMotionFromBlock, isMotionAssetsStale, placementOfElement, placementOfMotion, layerOfPlacement, defaultPlacementFor, resolveMotionPlacement, effectiveSplitElementAt, type MotionConfig, type MotionPlacement } from './reelsStudio/motionLibrary';
 import { requiresAssetAttachment } from './reelsStudio/motionGating';
 import { STYLE_PRESETS, type StylePresetId, findStylePreset } from './reelsStudio/motionStylePresets';
 import { isHidden } from './reelsStudio/presetCategory';
@@ -3991,12 +3991,9 @@ export const ReelsStudio: React.FC = () => {
                 compositor (base.box = underlyingBox + coral seam), so the
                 split doesn't read as "the panel covered my video". */}
             {state.projectMode === 'edit' && state.baseVideoTake && (() => {
-              const activeSplitEl = (state.overlayElements ?? []).find(el => {
-                if (el.kind !== 'motion' || el.motion?.status !== 'ready') return false;
-                if (playhead < el.startSec || playhead >= el.startSec + el.durationSec) return false;
-                const a = placementOfElement(el).area;
-                return a === 'top-half' || a === 'bottom-half';
-              });
+              // Gap-bridged so the base doesn't flip to full-frame (a vertical
+              // "jump") during the silent pauses between two same-half scenes.
+              const activeSplitEl = effectiveSplitElementAt(state.overlayElements ?? [], playhead);
               const splitArea = activeSplitEl ? placementOfElement(activeSplitEl).area : null;
               // Motion occupies its half; base video gets the OTHER half.
               const baseStyle: React.CSSProperties = splitArea === 'top-half'

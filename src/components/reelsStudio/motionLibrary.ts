@@ -151,6 +151,48 @@ export const placementOfElement = (el: {
 };
 
 /**
+ * Edit-video base-squeeze element at project time `t`.
+ *
+ * In edit-video mode the base video is squeezed into the complementary half
+ * while a top/bottom-half motion overlay is on screen. But the scenes (blocks)
+ * do NOT cover the silent pauses between them (a ≥0.6s gap splits the
+ * transcript into a new block), so keying the squeeze off "the element that
+ * strictly contains t" makes the base snap back to FULL frame during every
+ * pause — a vertical "jump" between scenes, even when both sides are the same
+ * half. We instead HOLD the most-recently-started motion element across an
+ * internal gap (until the next element begins), so two consecutive same-half
+ * scenes read as one continuous squeeze. Returns the split element to mirror,
+ * or null (→ base stays full frame: float / full / before-first / trailing).
+ */
+export const effectiveSplitElementAt = <T extends Parameters<typeof placementOfElement>[0] & { kind: string; motion?: { status?: string } }>(
+  elements: T[],
+  t: number,
+): T | null => {
+  const motions = elements
+    .filter(el => el.kind === 'motion' && el.motion?.status === 'ready')
+    .sort((a, b) => a.startSec - b.startSec);
+  if (motions.length === 0) return null;
+
+  // 1) Element actually on screen at t.
+  let chosen: T | null = motions.find(el => t >= el.startSec && t < el.startSec + el.durationSec) ?? null;
+
+  // 2) Internal gap (pause between scenes): hold the most recent element that
+  //    already started — but only when a later element exists, so we never
+  //    hold the squeeze past the final scene into trailing footage.
+  if (!chosen) {
+    const laterExists = motions.some(el => el.startSec > t);
+    if (laterExists) {
+      const before = motions.filter(el => el.startSec <= t);
+      chosen = before.length ? before[before.length - 1] : null;
+    }
+  }
+  if (!chosen) return null;
+
+  const area = placementOfElement(chosen).area;
+  return area === 'top-half' || area === 'bottom-half' ? chosen : null;
+};
+
+/**
  * THE default placement for a block — single source of truth shared by the
  * Motion Dock display AND the generation pipeline, so what the user SEES
  * selected is exactly what generates (fixes the "marked Flutuar but it

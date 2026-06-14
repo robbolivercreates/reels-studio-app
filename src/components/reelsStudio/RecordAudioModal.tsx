@@ -133,7 +133,7 @@ export const RecordAudioModal: React.FC<Props> = ({ open, onClose, onConfirm }) 
   const ss = Math.floor(elapsed % 60).toString().padStart(2, '0');
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[75] p-6" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[110] p-6" onClick={onClose}>
       <div className="bg-[#141416] border border-white/10 rounded-2xl shadow-2xl max-w-md w-full p-6" onClick={e => e.stopPropagation()}>
         <div className="text-base font-semibold text-zinc-100">🎙 Começar com meu áudio</div>
         <div className="text-xs text-zinc-500 mt-1 leading-relaxed">
