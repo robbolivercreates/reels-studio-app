@@ -94,7 +94,7 @@ export const SaveVoiceModal: React.FC<Props> = ({ onClose, onSaved }) => {
               value={name}
               onChange={e => setName(e.target.value)}
               placeholder="Ex: Rob, Minha voz, Voz do podcast..."
-              className="mt-1 w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors"
+              className="mt-1 w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50 transition-colors"
             />
           </div>
 
@@ -104,7 +104,7 @@ export const SaveVoiceModal: React.FC<Props> = ({ onClose, onSaved }) => {
               value={voiceId}
               onChange={e => { setVoiceId(e.target.value); setTestResult('idle'); }}
               placeholder="Cole aqui o voice_id do Minimax"
-              className="mt-1 w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50 transition-colors font-mono"
+              className="mt-1 w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50 transition-colors font-mono"
             />
             <div className="mt-1 text-[10px] text-zinc-600">Geralmente começa com letras maiúsculas/números. Ex: <span className="font-mono text-zinc-400">moss_audio_xxxxxxxx</span></div>
           </div>
@@ -118,7 +118,7 @@ export const SaveVoiceModal: React.FC<Props> = ({ onClose, onSaved }) => {
                   onClick={() => setModel(m.id)}
                   className={`px-2 py-2 rounded-lg border text-left transition-colors ${
                     model === m.id
-                      ? 'bg-violet-500/15 border-violet-400/50 text-violet-200'
+                      ? 'bg-blue-500/15 border-blue-400/50 text-blue-200'
                       : 'bg-black/20 border-white/10 text-zinc-400 hover:border-white/20'
                   }`}
                 >
@@ -162,7 +162,7 @@ export const SaveVoiceModal: React.FC<Props> = ({ onClose, onSaved }) => {
           <button
             onClick={handleSave}
             disabled={!canSave}
-            className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
+            className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
           >
             Salvar voz
           </button>

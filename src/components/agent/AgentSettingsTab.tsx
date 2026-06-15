@@ -113,7 +113,7 @@ export const AgentSettingsTab: React.FC = () => {
             <button
               onClick={() => void handleRegister()}
               disabled={registering}
-              className="text-[10px] px-2 py-1 rounded-md bg-violet-500/20 hover:bg-violet-500/30 border border-violet-500/40 text-violet-100 disabled:opacity-50"
+              className="text-[10px] px-2 py-1 rounded-md bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/40 text-blue-100 disabled:opacity-50"
             >
               {registering ? 'Registrando…' : 'Registrar'}
             </button>
@@ -148,7 +148,7 @@ export const AgentSettingsTab: React.FC = () => {
           <button
             onClick={handleCopy}
             disabled={!port}
-            className="text-[10px] px-2 py-0.5 rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/30 text-violet-200 disabled:opacity-40 shrink-0"
+            className="text-[10px] px-2 py-0.5 rounded-md bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30 text-blue-200 disabled:opacity-40 shrink-0"
           >
             {copied ? 'Copiado!' : 'Copiar'}
           </button>
@@ -266,13 +266,13 @@ export const AgentSettingsTab: React.FC = () => {
                       onClick={() => setTextProvider(opt.id)}
                       className={`w-full text-left px-3 py-2 rounded-lg transition-colors flex items-start gap-2.5 ${
                         active
-                          ? 'bg-violet-500/15 border border-violet-500/40'
+                          ? 'bg-blue-500/15 border border-blue-500/40'
                           : 'bg-black/20 border border-white/5 hover:bg-white/[0.04]'
                       }`}
                     >
                       <div
                         className={`w-3.5 h-3.5 rounded-full mt-0.5 shrink-0 border ${
-                          active ? 'border-violet-400 bg-violet-500' : 'border-zinc-500'
+                          active ? 'border-blue-400 bg-blue-500' : 'border-zinc-500'
                         }`}
                       >
                         {active && (
@@ -335,13 +335,13 @@ export const AgentSettingsTab: React.FC = () => {
                       onClick={() => setMotionProvider(opt.id)}
                       className={`w-full text-left px-3 py-2 rounded-lg transition-colors flex items-start gap-2.5 ${
                         active
-                          ? 'bg-violet-500/15 border border-violet-500/40'
+                          ? 'bg-blue-500/15 border border-blue-500/40'
                           : 'bg-black/20 border border-white/5 hover:bg-white/[0.04]'
                       }`}
                     >
                       <div
                         className={`w-3.5 h-3.5 rounded-full mt-0.5 shrink-0 border ${
-                          active ? 'border-violet-400 bg-violet-500' : 'border-zinc-500'
+                          active ? 'border-blue-400 bg-blue-500' : 'border-zinc-500'
                         }`}
                       >
                         {active && (
@@ -394,7 +394,7 @@ export const AgentSettingsTab: React.FC = () => {
                       onClick={() => setMaxBlockSec(opt.id)}
                       className={`text-[11.5px] font-medium py-1.5 rounded-lg transition-colors ${
                         active
-                          ? 'bg-violet-500/15 border border-violet-500/40 text-violet-100'
+                          ? 'bg-blue-500/15 border border-blue-500/40 text-blue-100'
                           : 'bg-black/20 border border-white/5 text-zinc-400 hover:bg-white/[0.04]'
                       }`}
                     >
@@ -434,7 +434,7 @@ export const AgentSettingsTab: React.FC = () => {
                       window.localStorage.removeItem('reels.agent.skipReelSetup');
                     }
                   }}
-                  className="w-3.5 h-3.5 accent-violet-500"
+                  className="w-3.5 h-3.5 accent-blue-500"
                 />
                 <div className="text-[11.5px] text-zinc-100">
                   Sempre pular o card de setup

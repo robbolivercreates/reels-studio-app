@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { confirmDialog } from './confirmService';
 import {
   ensureProfiles,
   upsertProfile,
@@ -74,9 +75,9 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
     setEditing(fresh);
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (profiles.length <= 1) return;
-    if (!confirm('Apagar este perfil?')) return;
+    if (!(await confirmDialog('Apagar este perfil?'))) return;
     const next = deleteProfile(id);
     setProfiles(next);
     refresh();
@@ -117,7 +118,7 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
               <button
                 onClick={e => { e.stopPropagation(); handleSelectActive(p.id); }}
                 className={`w-3 h-3 rounded-full shrink-0 border transition-colors ${
-                  activeId === p.id ? 'bg-violet-500 border-violet-300' : 'border-zinc-600 hover:border-zinc-400'
+                  activeId === p.id ? 'bg-blue-500 border-blue-300' : 'border-zinc-600 hover:border-zinc-400'
                 }`}
                 title={activeId === p.id ? 'Perfil ativo' : 'Ativar este perfil'}
               />
@@ -148,7 +149,7 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
             value={editing.name}
             onChange={e => patch('name', e.target.value)}
             placeholder="Nome do perfil"
-            className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50"
+            className="flex-1 px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50"
           />
           {activeId !== editing.id && (
             <button
@@ -168,7 +169,7 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
           <select
             value={editing.outputLanguage}
             onChange={e => patch('outputLanguage', e.target.value as OutputLanguage)}
-            className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-violet-400/50"
+            className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-sm text-zinc-100 outline-none focus:border-blue-400/50"
           >
             {LANGUAGE_OPTIONS.map(o => (
               <option key={o.value} value={o.value}>{o.label}</option>
@@ -191,7 +192,7 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
                 onClick={() => patch('rewriteLevel', level)}
                 className={`text-left px-3 py-2 rounded-lg border transition-colors ${
                   editing.rewriteLevel === level
-                    ? 'bg-violet-500/15 border-violet-500/40'
+                    ? 'bg-blue-500/15 border-blue-500/40'
                     : 'bg-black/20 border-white/10 hover:border-white/20'
                 }`}
               >
@@ -214,7 +215,7 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
                 onClick={() => patch('simpleLanguage', level)}
                 className={`text-left px-3 py-2 rounded-lg border transition-colors ${
                   editing.simpleLanguage === level
-                    ? 'bg-violet-500/15 border-violet-500/40'
+                    ? 'bg-blue-500/15 border-blue-500/40'
                     : 'bg-black/20 border-white/10 hover:border-white/20'
                 }`}
               >
@@ -232,10 +233,12 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
           </label>
           <textarea
             value={editing.extraInstructions}
-            onChange={e => patch('extraInstructions', e.target.value.slice(0, EXTRA_INSTRUCTIONS_MAX_CHARS))}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    onChange={e => patch('extraInstructions', e.target.value.slice(0, EXTRA_INSTRUCTIONS_MAX_CHARS))}
             rows={3}
             placeholder='Ex: "Comece sempre com uma pergunta direta. Use tu, não você. Termine com `salva e segue` em vez de `like e share`."'
-            className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50 leading-relaxed resize-y"
+            className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs text-zinc-100 outline-none focus:border-blue-400/50 leading-relaxed resize-y"
           />
           <div className="flex justify-end text-[9px] text-zinc-600 font-mono mt-0.5">
             {editing.extraInstructions.length} / {EXTRA_INSTRUCTIONS_MAX_CHARS}
@@ -250,8 +253,8 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
             </label>
             <div className="flex items-center gap-2">
               <button
-                onClick={() => {
-                  if (editing.voiceDoc.trim().length > 0 && !confirm('Substituir o conteúdo atual pela Voz do Rob?')) return;
+                onClick={async () => {
+                  if (editing.voiceDoc.trim().length > 0 && !(await confirmDialog('Substituir o conteúdo atual pela Voz do Rob?', { danger: false, confirmLabel: 'Substituir' }))) return;
                   setEditing({ ...editing, voiceDoc: VOZ_ROB_BOLIVER });
                 }}
                 className="text-[10px] text-emerald-300 hover:text-emerald-200 underline font-medium"
@@ -260,11 +263,11 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
                 🎤 Voz do Rob
               </button>
               <button
-                onClick={() => {
-                  if (editing.voiceDoc.trim().length > 0 && !confirm('Substituir o conteúdo atual pelo template em branco?')) return;
+                onClick={async () => {
+                  if (editing.voiceDoc.trim().length > 0 && !(await confirmDialog('Substituir o conteúdo atual pelo template em branco?', { danger: false, confirmLabel: 'Substituir' }))) return;
                   setEditing({ ...editing, voiceDoc: VOICE_DOC_TEMPLATE });
                 }}
-                className="text-[10px] text-violet-300 hover:text-violet-200 underline"
+                className="text-[10px] text-blue-300 hover:text-blue-200 underline"
                 title="Esqueleto vazio pra preencher com sua própria voz"
               >
                 📝 Template em branco
@@ -300,10 +303,12 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
           </div>
           <textarea
             value={editing.voiceDoc}
-            onChange={e => patch('voiceDoc', e.target.value.slice(0, VOICE_DOC_MAX_CHARS))}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    onChange={e => patch('voiceDoc', e.target.value.slice(0, VOICE_DOC_MAX_CHARS))}
             rows={12}
             placeholder="Clique em 📝 Inserir template pra começar com a estrutura recomendada, ou cole seu próprio doc."
-            className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-100 outline-none focus:border-violet-400/50 leading-relaxed resize-y"
+            className="w-full px-3 py-2 rounded-lg bg-black/30 border border-white/10 text-xs font-mono text-zinc-100 outline-none focus:border-blue-400/50 leading-relaxed resize-y"
           />
           <div className="flex justify-between text-[9px] text-zinc-600 font-mono mt-0.5">
             <span>Quanto mais específico (com exemplos REAIS de reels seus), melhor o resultado.</span>
@@ -314,7 +319,7 @@ export const VoiceProfilesPanel: React.FC<Props> = ({ onActiveChange, onClose })
         <div className="flex items-center gap-2 pt-2 border-t border-white/5">
           <button
             onClick={handleSave}
-            className="flex-1 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all"
+            className="flex-1 py-2 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all"
           >
             {savedFlash ? '✓ Salvo' : 'Salvar perfil'}
           </button>

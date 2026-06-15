@@ -146,7 +146,7 @@ export const ProductionPlanModal: React.FC<Props> = ({ blocks, analysis, project
       onClick={() => setView(id)}
       className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${
         view === id
-          ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40'
+          ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40'
           : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'
       }`}
       title={hint}
@@ -259,7 +259,7 @@ export const ProductionPlanModal: React.FC<Props> = ({ blocks, analysis, project
                           <div className="flex items-center justify-between mb-2">
                             <div className="flex items-center gap-2.5">
                               <span className={`text-[10px] font-semibold tracking-wider uppercase ${
-                                isAvatar ? 'text-violet-300' : 'text-emerald-300'
+                                isAvatar ? 'text-blue-300' : 'text-emerald-300'
                               }`}>
                                 {isAvatar ? 'Avatar' : 'B-roll'}
                               </span>
@@ -347,7 +347,7 @@ export const ProductionPlanModal: React.FC<Props> = ({ blocks, analysis, project
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-2.5">
                             <span className={`text-[10px] font-semibold tracking-wider uppercase ${
-                              isAvatar ? 'text-violet-300' : 'text-emerald-300'
+                              isAvatar ? 'text-blue-300' : 'text-emerald-300'
                             }`}>
                               {isAvatar ? 'Avatar' : 'B-roll'}
                             </span>
@@ -427,7 +427,7 @@ export const ProductionPlanModal: React.FC<Props> = ({ blocks, analysis, project
           </button>
           <button
             onClick={() => copyToClipboard(markdown, 'all')}
-            className="px-4 py-2 rounded-lg bg-violet-500 hover:bg-violet-400 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.4)] transition-all"
+            className="px-4 py-2 rounded-lg bg-blue-500 hover:bg-blue-400 text-[12px] font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.4)] transition-all"
           >
             {copyState === 'all' ? '✓ Copiado' : 'Copiar plano completo'}
           </button>

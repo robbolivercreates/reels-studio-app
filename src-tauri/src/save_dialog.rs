@@ -153,13 +153,15 @@ pub async fn mux_video_audio_ffmpeg(
 
     let output = Command::new(ffmpeg)
         .args([
-            "-y",                    // overwrite output
-            "-i", &video_path,       // silent video
-            "-i", &audio_path,       // audio track
-            "-c:v", "copy",          // copy video stream — no re-encode
-            "-c:a", "aac",           // encode audio to AAC
+            "-y",                      // overwrite output
+            "-i", &video_path,         // silent video
+            "-i", &audio_path,         // audio track
+            "-c:v", "copy",            // copy video stream — no re-encode
+            "-c:a", "aac",             // encode audio to AAC
             "-b:a", "192k",
-            "-shortest",             // trim to the shorter of the two streams
+            "-ar", "48000",            // explicit resample — sources vary (44.1k TTS mp3 / wav); implicit handling is player roulette
+            "-movflags", "+faststart", // moov at the START — players/socials open the file before it's fully read
+            "-shortest",               // trim to the shorter of the two streams
             &output_path,
         ])
         .output()

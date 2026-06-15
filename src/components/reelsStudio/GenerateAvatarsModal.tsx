@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { confirmDialog } from './confirmService';
 import {
   loadAvatarPhotos,
   uploadAvatarPhotoFromFile,
@@ -34,7 +35,8 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
   const [selectedPhotoId, setSelectedPhotoId] = useState<string | null>(
     initialPhotoId ?? photos[0]?.id ?? null,
   );
-  const [model, setModel] = useState<HeyGenModelChoice>(initialModel);
+  // avatar4 saiu da UI (mesmo custo do V) — clamp pra não abrir sem seleção.
+  const [model, setModel] = useState<HeyGenModelChoice>(initialModel === 'avatar4' ? 'avatar5' : initialModel);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [pasteOpen, setPasteOpen] = useState(false);
@@ -73,8 +75,8 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
     setPasteName('');
   };
 
-  const handleDelete = (id: string) => {
-    if (!confirm('Remover esta foto?')) return;
+  const handleDelete = async (id: string) => {
+    if (!(await confirmDialog('Remover esta foto?'))) return;
     deleteAvatarPhoto(id);
     refresh();
     if (selectedPhotoId === id) setSelectedPhotoId(null);
@@ -103,7 +105,7 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
               <div className="flex items-center gap-1.5">
                 <button
                   onClick={() => setFetchOpen(true)}
-                  className="text-[10px] px-2 py-1 rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-500/30 text-violet-200 transition-colors flex items-center gap-1"
+                  className="text-[10px] px-2 py-1 rounded-md bg-blue-500/15 hover:bg-blue-500/25 border border-blue-500/30 text-blue-200 transition-colors flex items-center gap-1"
                   title="Buscar avatares cadastrados no HeyGen"
                 >
                   🔄 Buscar do HeyGen
@@ -124,7 +126,7 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
                   <button
                     onClick={() => fileRef.current?.click()}
                     disabled={uploading}
-                    className="px-3 py-1.5 rounded-md bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-xs font-medium text-violet-200 transition-colors disabled:opacity-50"
+                    className="px-3 py-1.5 rounded-md bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/40 text-xs font-medium text-blue-200 transition-colors disabled:opacity-50"
                   >
                     {uploading ? '⏳ Enviando...' : '📤 Upload de foto'}
                   </button>
@@ -146,7 +148,7 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
                         onClick={() => setSelectedPhotoId(p.id)}
                         className={`relative w-full aspect-square rounded-lg overflow-hidden border-2 transition-all ${
                           isSelected
-                            ? 'border-violet-400 shadow-[0_0_24px_rgba(167,139,250,0.4)] scale-[1.02]'
+                            ? 'border-blue-400 shadow-[0_0_24px_rgba(10,132,255,0.4)] scale-[1.02]'
                             : 'border-white/10 hover:border-white/30'
                         }`}
                       >
@@ -160,15 +162,15 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
                           />
                         ) : null}
                         {!p.thumbnailBase64 && !p.previewUrl && (
-                          <div className="w-full h-full bg-gradient-to-br from-violet-500/20 to-violet-700/20 flex items-center justify-center">
-                            <span className="text-xl font-bold text-violet-200">{p.name.slice(0, 1).toUpperCase()}</span>
+                          <div className="w-full h-full bg-gradient-to-br from-blue-500/20 to-blue-700/20 flex items-center justify-center">
+                            <span className="text-xl font-bold text-blue-200">{p.name.slice(0, 1).toUpperCase()}</span>
                           </div>
                         )}
                         <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-1.5">
                           <div className="text-[10px] font-semibold text-white truncate text-left">{p.name}</div>
                         </div>
                         {isSelected && (
-                          <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-violet-500 flex items-center justify-center shadow-lg">
+                          <div className="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-blue-500 flex items-center justify-center shadow-lg">
                             <svg className="w-3 h-3 text-white" fill="currentColor" viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
                           </div>
                         )}
@@ -187,7 +189,7 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
                 <button
                   onClick={() => fileRef.current?.click()}
                   disabled={uploading}
-                  className="aspect-square rounded-lg border-2 border-dashed border-white/15 hover:border-violet-400/50 hover:bg-violet-500/5 transition-all flex flex-col items-center justify-center gap-1 text-zinc-500 hover:text-violet-300 disabled:opacity-50"
+                  className="aspect-square rounded-lg border-2 border-dashed border-white/15 hover:border-blue-400/50 hover:bg-blue-500/5 transition-all flex flex-col items-center justify-center gap-1 text-zinc-500 hover:text-blue-300 disabled:opacity-50"
                 >
                   {uploading ? (
                     <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" /><path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
@@ -203,7 +205,7 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
             {photos.length > 0 && (
               <button
                 onClick={() => setPasteOpen(true)}
-                className="mt-2 text-[10px] text-zinc-500 hover:text-violet-300 underline transition-colors"
+                className="mt-2 text-[10px] text-zinc-500 hover:text-blue-300 underline transition-colors"
               >
                 Ou colar um talking_photo_id existente do HeyGen
               </button>
@@ -224,23 +226,23 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
 
           {/* Paste talking_photo_id */}
           {pasteOpen && (
-            <div className="rounded-lg bg-black/30 border border-violet-500/30 p-3 space-y-2">
-              <div className="text-[10px] uppercase tracking-wider text-violet-300 font-semibold">Colar talking_photo_id</div>
+            <div className="rounded-lg bg-black/30 border border-blue-500/30 p-3 space-y-2">
+              <div className="text-[10px] uppercase tracking-wider text-blue-300 font-semibold">Colar talking_photo_id</div>
               <input
                 value={pasteName}
                 onChange={e => setPasteName(e.target.value)}
                 placeholder="Nome (ex: Rob v2)"
-                className="w-full px-2.5 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50"
+                className="w-full px-2.5 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-blue-400/50"
               />
               <input
                 value={pasteId}
                 onChange={e => setPasteId(e.target.value)}
                 placeholder="talking_photo_id do HeyGen"
-                className="w-full px-2.5 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50 font-mono"
+                className="w-full px-2.5 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-blue-400/50 font-mono"
               />
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setPasteOpen(false)} className="flex-1 py-1.5 rounded-md bg-white/5 hover:bg-white/10 text-[11px] text-zinc-300 transition-colors">Cancelar</button>
-                <button onClick={handlePaste} disabled={!pasteId.trim()} className="flex-1 py-1.5 rounded-md bg-violet-500 hover:bg-violet-400 text-[11px] font-semibold text-white transition-colors disabled:opacity-40">Adicionar</button>
+                <button onClick={handlePaste} disabled={!pasteId.trim()} className="flex-1 py-1.5 rounded-md bg-blue-500 hover:bg-blue-400 text-[11px] font-semibold text-white transition-colors disabled:opacity-40">Adicionar</button>
               </div>
             </div>
           )}
@@ -252,42 +254,27 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
               <button
                 onClick={() => setModel('avatar5')}
                 className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all ${
-                  model === 'avatar5' ? 'bg-violet-500/15 border-violet-400/50' : 'bg-black/20 border-white/10 hover:border-white/20'
+                  model === 'avatar5' ? 'bg-blue-500/15 border-blue-400/50' : 'bg-black/20 border-white/10 hover:border-white/20'
                 }`}
               >
-                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${model === 'avatar5' ? 'border-violet-400 bg-violet-400' : 'border-zinc-500'}`}>
+                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${model === 'avatar5' ? 'border-blue-400 bg-blue-400' : 'border-zinc-500'}`}>
                   {model === 'avatar5' && <div className="w-1.5 h-1.5 bg-white rounded-full m-auto mt-[3px]"></div>}
                 </div>
                 <div className="text-left flex-1">
                   <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
-                    Avatar V <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 uppercase tracking-wider">Novo</span>
+                    Avatar V <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 uppercase tracking-wider">Recomendado</span>
                   </div>
                   <div className="text-[10px] text-zinc-500 mt-0.5">Mais realista · sem drift em vídeos longos · 1080p · ${PRICE_PER_SECOND.avatar5.toFixed(3)}/s · requer foto compatível</div>
                 </div>
               </button>
-              <button
-                onClick={() => setModel('avatar4')}
-                className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all ${
-                  model === 'avatar4' ? 'bg-violet-500/15 border-violet-400/50' : 'bg-black/20 border-white/10 hover:border-white/20'
-                }`}
-              >
-                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${model === 'avatar4' ? 'border-violet-400 bg-violet-400' : 'border-zinc-500'}`}>
-                  {model === 'avatar4' && <div className="w-1.5 h-1.5 bg-white rounded-full m-auto mt-[3px]"></div>}
-                </div>
-                <div className="text-left flex-1">
-                  <div className="text-xs font-semibold text-zinc-100 flex items-center gap-1.5">
-                    Avatar 4 <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 uppercase tracking-wider">Recomendado</span>
-                  </div>
-                  <div className="text-[10px] text-zinc-500 mt-0.5">Mais novo · expressões naturais · 1080p · ${PRICE_PER_SECOND.avatar4.toFixed(3)}/s</div>
-                </div>
-              </button>
+              {/* Avatar 4 retirado: mesmo custo do V ($0.058/s), qualidade inferior. */}
               <button
                 onClick={() => setModel('avatar3')}
                 className={`w-full flex items-start gap-3 px-3 py-2.5 rounded-lg border transition-all ${
-                  model === 'avatar3' ? 'bg-violet-500/15 border-violet-400/50' : 'bg-black/20 border-white/10 hover:border-white/20'
+                  model === 'avatar3' ? 'bg-blue-500/15 border-blue-400/50' : 'bg-black/20 border-white/10 hover:border-white/20'
                 }`}
               >
-                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${model === 'avatar3' ? 'border-violet-400 bg-violet-400' : 'border-zinc-500'}`}>
+                <div className={`shrink-0 w-4 h-4 rounded-full border-2 mt-0.5 ${model === 'avatar3' ? 'border-blue-400 bg-blue-400' : 'border-zinc-500'}`}>
                   {model === 'avatar3' && <div className="w-1.5 h-1.5 bg-white rounded-full m-auto mt-[3px]"></div>}
                 </div>
                 <div className="text-left flex-1">
@@ -303,14 +290,14 @@ export const GenerateAvatarsModal: React.FC<Props> = ({
         <div className="px-6 py-4 mt-4 border-t border-white/5 bg-black/30 shrink-0">
           <div className="flex items-center justify-between text-xs mb-3">
             <span className="text-zinc-500">Total estimado</span>
-            <span className="text-violet-300 font-bold text-sm">${cost.toFixed(2)}</span>
+            <span className="text-blue-300 font-bold text-sm">${cost.toFixed(2)}</span>
           </div>
           <div className="flex gap-2">
             <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Cancelar</button>
             <button
               onClick={() => selected && onConfirm(selected.id, model)}
               disabled={!canGenerate}
-              className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
+              className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:shadow-none"
             >
               Gerar agora
             </button>

@@ -56,7 +56,7 @@ export const SilenceWarningModal: React.FC<Props> = ({
         <div className="px-6 py-4 flex flex-col gap-2">
           <button
             onClick={onApplyAndGenerate}
-            className="w-full py-2.5 rounded-lg bg-violet-500 hover:bg-violet-400 text-white text-[12.5px] font-semibold transition-colors"
+            className="w-full py-2.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-white text-[12.5px] font-semibold transition-colors"
           >
             Aplicar corte e gerar (recomendado)
           </button>

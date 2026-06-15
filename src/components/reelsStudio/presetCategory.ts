@@ -24,7 +24,7 @@
 
 import type { StylePresetId } from './motionStylePresets';
 
-export type PresetCategory = 'style' | 'effect' | 'native';
+export type PresetCategory = 'style' | 'effect' | 'native' | 'template';
 
 /** Style presets — full palette + typography + motion grammar definers.
  *
@@ -86,6 +86,25 @@ export const EFFECT_PRESET_IDS = [
 export const NATIVE_PRESET_IDS = ['claude-ui'] as const satisfies readonly StylePresetId[];
 
 /**
+ * Template presets — motion-pack static HTML templates. Gemini only fills the
+ * variable values (or the router pre-fills them); the animation itself is
+ * hand-built and guaranteed to pass lint. Shown in the picker as the FIRST
+ * tab — fastest + most reliable path to a motion.
+ */
+export const TEMPLATE_PICKER_IDS = [
+  'stat-counter',
+  'typewriter-terminal',
+  'imessage-notif',
+  'audio-waveform',
+  'app-icon-launcher',
+  'wastebasket-trash',
+  'toggle-flip',
+  'progress-bar',
+  'apple-maps-route',
+  'claude-bloom-steps',
+] as const satisfies readonly StylePresetId[];
+
+/**
  * Exhaustive categorization. Each preset id maps to exactly one category.
  * If a new preset is added to `StylePresetId` but not handled here, the
  * `_exhaustive: never` line below fails compile — that's the safety net.
@@ -117,6 +136,19 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
       return 'effect';
     case 'claude-ui':
       return 'native';
+    case 'stat-counter':
+    case 'typewriter-terminal':
+    case 'imessage-notif':
+    case 'audio-waveform':
+    case 'app-icon-launcher':
+    case 'wastebasket-trash':
+    case 'toggle-flip':
+    case 'progress-bar':
+    case 'apple-maps-route':
+    case 'claude-bloom-steps':
+      return 'template';
+    case 'rob-boliver':
+      return 'style';
     default: {
       const _exhaustive: never = id;
       void _exhaustive;
@@ -128,5 +160,6 @@ export const categoryOf = (id: StylePresetId): PresetCategory => {
 export const isStyle = (id: StylePresetId): boolean => categoryOf(id) === 'style';
 export const isEffect = (id: StylePresetId): boolean => categoryOf(id) === 'effect';
 export const isNative = (id: StylePresetId): boolean => categoryOf(id) === 'native';
+export const isTemplate = (id: StylePresetId): boolean => categoryOf(id) === 'template';
 export const isHidden = (id: StylePresetId): boolean =>
   (HIDDEN_PRESET_IDS as readonly StylePresetId[]).includes(id);

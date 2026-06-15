@@ -1,12 +1,15 @@
 import React, { useReducer, useCallback, useEffect, useRef, useState } from 'react';
 import type { ScriptBlock, BlockKind, ToneOption, LanguageOption, RegenerateContext, ContentMode } from './types';
 import { suggestContentMode } from '../../services/contentMode';
+import { loadSpeechStyleConfig, saveSpeechStyleConfig, type SpeechStyleConfig } from '../../services/speechStyle';
 import {
   generateCarouselScript,
   carouselSlidesToBlocks,
   CAROUSEL_TONE_OPTIONS,
   type CarouselTone,
 } from '../../services/carouselScriptService';
+import { generateCoverImage, hasCoverImageKey } from '../../services/openaiImageService';
+import { CoverSlideEditor } from './CoverSlideEditor';
 import {
   generateReelFromContent,
   fetchArticleFromUrl,
@@ -92,6 +95,16 @@ interface WizardState {
   // Carousel config
   slideCount: number;
   carouselTone: CarouselTone;
+  /** Rob Boliver cover prompt generated alongside the slides (editable before generating). */
+  coverImagePrompt: string | null;
+  /** User-edited version of the cover prompt (starts as coverImagePrompt, then user can tweak). */
+  coverImageEditedPrompt: string | null;
+  /** Base64 data-URI of the creator's reference photo for the cover. */
+  coverImageReferencePhoto: string | null;
+  /** URL or data-URI of the generated cover image. */
+  coverImageDataUrl: string | null;
+  coverImageGenerating: boolean;
+  coverImageError: string | null;
 
   // Source 'topic'
   topicText: string;
@@ -126,6 +139,8 @@ interface WizardState {
   contentMode: ContentMode;
   /** True until the user changes contentMode manually — lets the auto-suggest update silently. */
   contentModeAuto: boolean;
+  /** Per-generation speech style (Padrão vs Yap + subtipo + vivência). Persisted on generate. */
+  speechStyle: SpeechStyleConfig;
 
   // Interactive preview (replaces the old static generatedBlocks)
   previewBlocks: ScriptBlock[] | null;
@@ -178,6 +193,12 @@ const INITIAL: WizardState = {
   reelDuration: 30,
   slideCount: 5,
   carouselTone: 'educativo',
+  coverImagePrompt: null,
+  coverImageEditedPrompt: null,
+  coverImageReferencePhoto: null,
+  coverImageDataUrl: null,
+  coverImageGenerating: false,
+  coverImageError: null,
   topicText: '',
   scriptText: '',
   useHeuristic: false,
@@ -200,6 +221,9 @@ const INITIAL: WizardState = {
   rewriteOverride: null,
   contentMode: 'adapt',
   contentModeAuto: true,
+  // Placeholder — the real last choice is loaded lazily at mount (useReducer
+  // init below) so it reflects changes made elsewhere (e.g. GuidedWizard).
+  speechStyle: { style: 'default' },
   previewBlocks: null,
   previewBusy: undefined,
   previewHeader: {},
@@ -364,6 +388,8 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
       : initialFormat
         ? { ...INITIAL, format: initialFormat, step: 'source' as const }
         : INITIAL,
+    // Lazy init: seed the speech style from the last choice at mount time.
+    (base) => ({ ...base, speechStyle: loadSpeechStyleConfig() }),
   );
   const [profiles, setProfiles] = useState<VoiceProfile[]>([]);
   const { refs: libraryRefs, folder: libraryFolder, refresh: refreshLibrary } = useReferenceLibrary();
@@ -421,7 +447,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
 
   const activeProfile: VoiceProfile | undefined = profiles.find(p => p.id === ws.voiceProfileId);
 
-  /** Returns a profile clone with rewriteOverride + languageOverride applied. */
+  /** Returns a profile clone with rewriteOverride + languageOverride + speechStyle applied. */
   const profileForCall = useCallback((): VoiceProfile | undefined => {
     if (!activeProfile) return undefined;
     return {
@@ -430,8 +456,9 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
       outputLanguage: ws.languageOverride === 'auto'
         ? activeProfile.outputLanguage
         : (ws.languageOverride as VoiceProfile['outputLanguage']),
+      speechStyle: ws.speechStyle,
     };
-  }, [activeProfile, ws.rewriteOverride, ws.languageOverride]);
+  }, [activeProfile, ws.rewriteOverride, ws.languageOverride, ws.speechStyle]);
 
   // Word count for source 'script'.
   const scriptWordCount = ws.scriptText.trim().split(/\s+/).filter(Boolean).length;
@@ -453,6 +480,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
 
   const handleAnalyseUpload = useCallback(async () => {
     if (!ws.videoFile) return;
+    saveSpeechStyleConfig(ws.speechStyle);
     dispatch({ type: 'start-generate' });
     set('busyMessage', 'Salvando na pasta…');
     set('downloadProgress', null);
@@ -485,6 +513,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
 
   const handleDownloadAndAnalyse = useCallback(async () => {
     if (!ws.videoUrl.trim()) return;
+    saveSpeechStyleConfig(ws.speechStyle);
     dispatch({ type: 'start-generate' });
     set('busyMessage', 'Baixando…');
     set('downloadProgress', null);
@@ -569,6 +598,8 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     // Video source uses dedicated handlers (above) — never reach here.
     if (ws.source === 'video') return;
 
+    // Persist the speech-style choice so timeline/agent regeneration keeps it.
+    saveSpeechStyleConfig(ws.speechStyle);
     dispatch({ type: 'start-generate' });
     try {
       let blocks: ScriptBlock[];
@@ -590,6 +621,11 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
         const result = await generateCarouselScript(content, ws.slideCount, ws.carouselTone);
         blocks = carouselSlidesToBlocks(result.slides);
         header = { format: `${blocks.length} slides`, durationSec: 0 };
+        // Store the Rob Boliver cover prompt for GPT Image 2 generation.
+        dispatch({ type: 'set-field', key: 'coverImagePrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageEditedPrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageDataUrl', value: null });
+        dispatch({ type: 'set-field', key: 'coverImageError', value: null });
 
       } else {
         // reel
@@ -668,6 +704,23 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ws, profileForCall, scriptEstimatedSec, activeProfile]);
 
+  // ─── COVER IMAGE HANDLER ───────────────────────────────────────────────
+
+  const handleGenerateCoverImage = useCallback(async () => {
+    const prompt = ws.coverImageEditedPrompt?.trim() || ws.coverImagePrompt;
+    if (!prompt) return;
+    dispatch({ type: 'set-field', key: 'coverImageGenerating', value: true });
+    dispatch({ type: 'set-field', key: 'coverImageError', value: null });
+    try {
+      const url = await generateCoverImage(prompt, ws.coverImageReferencePhoto ?? undefined);
+      dispatch({ type: 'set-field', key: 'coverImageDataUrl', value: url });
+    } catch (e) {
+      dispatch({ type: 'set-field', key: 'coverImageError', value: e instanceof Error ? e.message : 'Erro ao gerar imagem.' });
+    } finally {
+      dispatch({ type: 'set-field', key: 'coverImageGenerating', value: false });
+    }
+  }, [ws.coverImageEditedPrompt, ws.coverImagePrompt, ws.coverImageReferencePhoto]);
+
   // ─── PREVIEW PANEL HANDLERS ────────────────────────────────────────────
 
   const handleRegenerateAll = async (extra: string, tone: ToneOption, language: LanguageOption) => {
@@ -687,6 +740,10 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
         if (ws.source === 'article') content = ws.articleText.trim() || ws.articleUrl.trim();
         const result = await generateCarouselScript(content, ws.slideCount, ws.carouselTone);
         dispatch({ type: 'set-preview-blocks', blocks: carouselSlidesToBlocks(result.slides) });
+        dispatch({ type: 'set-field', key: 'coverImagePrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageEditedPrompt', value: result.coverImagePrompt ?? null });
+        dispatch({ type: 'set-field', key: 'coverImageDataUrl', value: null });
+        dispatch({ type: 'set-field', key: 'coverImageError', value: null });
 
       } else if (ws.source === 'video' && ws.videoPreview) {
         const { bytes, mimeType } = await ws.videoPreview.bytesGetter();
@@ -827,7 +884,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
             <div className="flex items-center gap-1.5 mt-1">
               {STEP_LABELS.map((label, i) => (
                 <React.Fragment key={label}>
-                  <span className={`text-[10px] font-medium ${i === stepIndex ? 'text-violet-400' : i < stepIndex ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                  <span className={`text-[10px] font-medium ${i === stepIndex ? 'text-blue-400' : i < stepIndex ? 'text-zinc-400' : 'text-zinc-600'}`}>
                     {label}
                   </span>
                   {i < STEP_LABELS.length - 1 && (
@@ -856,8 +913,8 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                     label: 'Reel',
                     sub: 'Vídeo vertical único',
                     icon: (
-                      <div className="w-8 h-14 rounded-md border-2 border-violet-400/60 bg-violet-500/10 flex items-center justify-center">
-                        <div className="w-3 h-3 rounded-full bg-violet-400/80" />
+                      <div className="w-8 h-14 rounded-md border-2 border-blue-400/60 bg-blue-500/10 flex items-center justify-center">
+                        <div className="w-3 h-3 rounded-full bg-blue-400/80" />
                       </div>
                     ),
                   },
@@ -868,7 +925,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                     icon: (
                       <div className="flex gap-1 items-end">
                         {[14, 12, 10].map((h, i) => (
-                          <div key={i} className="w-5 rounded-sm border border-violet-400/60 bg-violet-500/10" style={{ height: `${h * 1.25}px` }} />
+                          <div key={i} className="w-5 rounded-sm border border-blue-400/60 bg-blue-500/10" style={{ height: `${h * 1.25}px` }} />
                         ))}
                       </div>
                     ),
@@ -877,11 +934,11 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   <button
                     key={opt.value}
                     onClick={() => dispatch({ type: 'set-format', format: opt.value })}
-                    className="flex flex-col items-center gap-3 p-5 rounded-xl border border-white/10 hover:border-violet-500/50 hover:bg-violet-500/[0.06] transition-all group"
+                    className="flex flex-col items-center gap-3 p-5 rounded-xl border border-white/10 hover:border-blue-500/50 hover:bg-blue-500/[0.06] transition-all group"
                   >
                     {opt.icon}
                     <div className="text-center">
-                      <div className="text-sm font-semibold text-zinc-100 group-hover:text-violet-200">{opt.label}</div>
+                      <div className="text-sm font-semibold text-zinc-100 group-hover:text-blue-200">{opt.label}</div>
                       <div className="text-[10px] text-zinc-500 mt-0.5">{opt.sub}</div>
                     </div>
                   </button>
@@ -904,11 +961,11 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   <button
                     key={opt.value}
                     onClick={() => dispatch({ type: 'set-source', source: opt.value })}
-                    className="flex items-start gap-3 p-4 rounded-xl border border-white/10 hover:border-violet-500/50 hover:bg-violet-500/[0.06] transition-all text-left group"
+                    className="flex items-start gap-3 p-4 rounded-xl border border-white/10 hover:border-blue-500/50 hover:bg-blue-500/[0.06] transition-all text-left group"
                   >
                     <span className="text-xl mt-0.5">{opt.emoji}</span>
                     <div>
-                      <div className="text-xs font-semibold text-zinc-100 group-hover:text-violet-200">{opt.label}</div>
+                      <div className="text-xs font-semibold text-zinc-100 group-hover:text-blue-200">{opt.label}</div>
                       <div className="text-[10px] text-zinc-500 mt-0.5">{opt.sub}</div>
                     </div>
                   </button>
@@ -930,6 +987,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   rewriteOverride={ws.rewriteOverride}
                   contentMode={ws.contentMode}
                   contentModeAuto={ws.contentModeAuto}
+                  speechStyle={ws.speechStyle}
                   disabled={ws.generating}
                   onSelectProfile={(id) => {
                     setActiveProfileId(id);
@@ -941,6 +999,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                     dispatch({ type: 'set-field', key: 'contentMode', value: mode });
                     dispatch({ type: 'set-field', key: 'contentModeAuto', value: false });
                   }}
+                  onChangeSpeechStyle={(cfg) => dispatch({ type: 'set-field', key: 'speechStyle', value: cfg })}
                   onEditProfiles={() => set('profilesPanelOpen', true)}
                 />
               )}
@@ -952,10 +1011,12 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   <textarea
                     autoFocus
                     value={ws.topicText}
+                    spellCheck={false}
+                    autoCorrect="off"
                     onChange={e => set('topicText', e.target.value)}
                     placeholder={ws.format === 'carousel' ? 'Ex: 5 erros que impedem você de perder peso…' : 'Ex: Como usar o Notion para organizar projetos…'}
                     rows={3}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2.5 text-[12px] text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-violet-500/50 transition-colors"
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2.5 text-[12px] text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-blue-500/50 transition-colors"
                   />
                 </div>
               )}
@@ -970,11 +1031,11 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                           type="checkbox"
                           checked={!ws.useHeuristic}
                           onChange={e => set('useHeuristic', !e.target.checked)}
-                          className="w-3.5 h-3.5 accent-violet-500"
+                          className="w-3.5 h-3.5 accent-blue-500"
                         />
                         <span className="text-[11px] text-zinc-200">Marcar com IA</span>
                       </label>
-                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300 uppercase tracking-wider">Recomendado</span>
+                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 uppercase tracking-wider">Recomendado</span>
                     </div>
                     <span className="text-[10px] text-zinc-500 truncate">
                       {ws.useHeuristic
@@ -987,10 +1048,12 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   <textarea
                     autoFocus
                     value={ws.scriptText}
+                    spellCheck={false}
+                    autoCorrect="off"
                     onChange={e => set('scriptText', e.target.value)}
                     placeholder="Cole aqui o roteiro completo…"
                     rows={6}
-                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2.5 text-[12px] text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-violet-500/50 transition-colors"
+                    className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2.5 text-[12px] text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-blue-500/50 transition-colors"
                   />
                   {ws.scriptText.trim() && (
                     <div className="text-[10px] text-zinc-500 tabular-nums">
@@ -1007,13 +1070,13 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   <div className="flex items-center gap-1.5">
                     <button
                       onClick={() => set('videoTab', 'new')}
-                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.videoTab === 'new' ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.videoTab === 'new' ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
                     >
                       Novo
                     </button>
                     <button
                       onClick={() => set('videoTab', 'saved')}
-                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.videoTab === 'saved' ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.videoTab === 'saved' ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
                     >
                       Salvos {libraryRefs.length > 0 && <span className="opacity-60">({libraryRefs.length})</span>}
                     </button>
@@ -1059,13 +1122,13 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => set('articleSourceMode', 'url')}
-                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.articleSourceMode === 'url' ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.articleSourceMode === 'url' ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
                     >
                       🔗 URL
                     </button>
                     <button
                       onClick={() => set('articleSourceMode', 'text')}
-                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.articleSourceMode === 'text' ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
+                      className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${ws.articleSourceMode === 'text' ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border border-transparent'}`}
                     >
                       ✍ Texto colado
                     </button>
@@ -1090,7 +1153,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                       value={ws.articleUrl}
                       onChange={e => set('articleUrl', e.target.value)}
                       placeholder="https://exemplo.com/artigo"
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-500/50 transition-colors"
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 transition-colors"
                     />
                   ) : (
                     <>
@@ -1099,14 +1162,16 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                         value={ws.articleTitle}
                         onChange={e => set('articleTitle', e.target.value)}
                         placeholder="Título (opcional)"
-                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-violet-500/50 transition-colors"
+                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-blue-500/50 transition-colors"
                       />
                       <textarea
                         value={ws.articleText}
-                        onChange={e => set('articleText', e.target.value)}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    onChange={e => set('articleText', e.target.value)}
                         placeholder="Cole o artigo, transcrição de vídeo longo, ou notas. O Gemini reduz pra reel de alta retenção."
                         rows={6}
-                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-[12px] text-zinc-200 placeholder-zinc-600 resize-y focus:outline-none focus:border-violet-500/50 transition-colors"
+                        className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2.5 text-[12px] text-zinc-200 placeholder-zinc-600 resize-y focus:outline-none focus:border-blue-500/50 transition-colors"
                       />
                       <div className="text-[10px] text-zinc-600 font-mono text-right">
                         {ws.articleText.length.toLocaleString()} caracteres
@@ -1124,7 +1189,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                           onClick={() => set('articleStyle', s.value)}
                           className={`text-left px-3 py-2 rounded-lg border transition-colors ${
                             ws.articleStyle === s.value
-                              ? 'bg-violet-500/15 border-violet-500/40'
+                              ? 'bg-blue-500/15 border-blue-500/40'
                               : 'bg-black/20 border-white/10 hover:border-white/20'
                           }`}
                           title={s.hint}
@@ -1146,7 +1211,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                       <select
                         value={ws.articleFramework}
                         onChange={e => set('articleFramework', e.target.value as Framework)}
-                        className="w-full px-2 py-2 rounded-lg bg-black/30 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-500/50"
+                        className="w-full px-2 py-2 rounded-lg bg-black/30 border border-white/10 text-xs text-zinc-100 outline-none focus:border-blue-500/50"
                       >
                         {FRAMEWORK_OPTIONS.map(f => (
                           <option key={f.value} value={f.value}>{f.label}</option>
@@ -1165,7 +1230,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                             onClick={() => set('articleDuration', d)}
                             className={`py-2 rounded-md text-[11px] font-mono transition-colors ${
                               ws.articleDuration === d
-                                ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40'
+                                ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40'
                                 : 'bg-black/20 text-zinc-400 hover:text-zinc-200 border border-white/10'
                             }`}
                           >
@@ -1180,10 +1245,12 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                     <div className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 mb-1.5">Instruções extras pro Gemini</div>
                     <textarea
                       value={ws.articleExtraInstr}
-                      onChange={e => set('articleExtraInstr', e.target.value)}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    onChange={e => set('articleExtraInstr', e.target.value)}
                       rows={2}
                       placeholder='Ex: "comece com pergunta provocativa", "termine com convite pra DM".'
-                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-600 resize-y focus:outline-none focus:border-violet-500/50 transition-colors"
+                      className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-xs text-zinc-200 placeholder-zinc-600 resize-y focus:outline-none focus:border-blue-500/50 transition-colors"
                     />
                   </div>
                 </div>
@@ -1207,11 +1274,16 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                         <button
                           key={t.value}
                           onClick={() => set('carouselTone', t.value)}
-                          className={`text-[10px] px-2 py-1.5 rounded-md transition-colors text-left flex items-center gap-1 border ${ws.carouselTone === t.value ? 'bg-violet-500/25 text-violet-200 border-violet-500/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border-transparent'}`}
+                          className={`text-[10px] px-2 py-1.5 rounded-md transition-colors text-left flex flex-col gap-0.5 border ${ws.carouselTone === t.value ? 'bg-blue-500/25 text-blue-200 border-blue-500/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border-transparent'}`}
                           title={t.hint}
                         >
-                          <span>{t.emoji}</span>
-                          <span className="truncate">{t.label}</span>
+                          <div className="flex items-center gap-1">
+                            <span>{t.emoji}</span>
+                            <span className="truncate">{t.label}</span>
+                          </div>
+                          {t.advanced && (
+                            <span className="text-[7px] text-amber-400/80 uppercase tracking-wide leading-none">+ Google Search</span>
+                          )}
                         </button>
                       ))}
                     </div>
@@ -1229,7 +1301,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                         <button
                           key={s.value}
                           onClick={() => set('reelStyle', s.value)}
-                          className={`text-[10px] px-2 py-1.5 rounded-md transition-colors text-left flex items-center gap-1 border ${ws.reelStyle === s.value ? 'bg-violet-500/25 text-violet-200 border-violet-500/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border-transparent'}`}
+                          className={`text-[10px] px-2 py-1.5 rounded-md transition-colors text-left flex items-center gap-1 border ${ws.reelStyle === s.value ? 'bg-blue-500/25 text-blue-200 border-blue-500/40' : 'bg-white/5 text-zinc-400 hover:bg-white/10 border-transparent'}`}
                           title={s.hint}
                         >
                           <span>{s.emoji}</span>
@@ -1244,7 +1316,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                       <select
                         value={ws.reelFramework}
                         onChange={e => set('reelFramework', e.target.value as Framework)}
-                        className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-[11px] text-zinc-200 focus:outline-none focus:border-violet-500/50 transition-colors"
+                        className="w-full bg-white/5 border border-white/10 rounded-md px-2 py-1.5 text-[11px] text-zinc-200 focus:outline-none focus:border-blue-500/50 transition-colors"
                       >
                         {FRAMEWORK_OPTIONS.map(f => <option key={f.value} value={f.value}>{f.label}</option>)}
                       </select>
@@ -1256,7 +1328,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                           <button
                             key={d.value}
                             onClick={() => set('reelDuration', d.value)}
-                            className={`flex-1 py-1.5 rounded-md text-[9px] font-medium transition-colors border ${ws.reelDuration === d.value ? 'bg-violet-500/25 text-violet-200 border-violet-500/40' : 'bg-white/5 text-zinc-500 hover:bg-white/10 border-transparent'}`}
+                            className={`flex-1 py-1.5 rounded-md text-[9px] font-medium transition-colors border ${ws.reelDuration === d.value ? 'bg-blue-500/25 text-blue-200 border-blue-500/40' : 'bg-white/5 text-zinc-500 hover:bg-white/10 border-transparent'}`}
                           >
                             {d.label}
                           </button>
@@ -1280,10 +1352,12 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                   {ws.extraOpen && (
                     <textarea
                       value={ws.extraInstr}
-                      onChange={e => set('extraInstr', e.target.value)}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    onChange={e => set('extraInstr', e.target.value)}
                       placeholder="Ex: Foco em iniciantes, evitar jargão técnico…"
                       rows={2}
-                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-violet-500/50 transition-colors"
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-zinc-200 placeholder-zinc-600 resize-none focus:outline-none focus:border-blue-500/50 transition-colors"
                     />
                   )}
                 </div>
@@ -1296,7 +1370,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
             <>
               {ws.generating && (
                 <div className="flex flex-col items-center justify-center py-12 gap-3">
-                  <div className="w-8 h-8 border-2 border-violet-500 border-t-transparent rounded-full animate-spin" />
+                  <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
                   <p className="text-[11px] text-zinc-400">
                     {ws.busyMessage ?? (ws.format === 'carousel' ? `Gerando ${ws.slideCount} slides…` : 'Gerando roteiro…')}
                   </p>
@@ -1309,7 +1383,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                       {ws.downloadProgress.percent !== null && (
                         <div className="h-1 rounded-full bg-white/10 overflow-hidden">
                           <div
-                            className="h-full bg-gradient-to-r from-violet-400 to-violet-500 transition-all"
+                            className="h-full bg-gradient-to-r from-blue-400 to-blue-500 transition-all"
                             style={{ width: `${Math.min(100, Math.max(0, ws.downloadProgress.percent))}%` }}
                           />
                         </div>
@@ -1332,13 +1406,28 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
                           set('useHeuristic', true);
                           setTimeout(() => handleGenerate(), 0);
                         }}
-                        className="mt-2 text-[10px] text-violet-300 hover:text-violet-200 underline"
+                        className="mt-2 text-[10px] text-blue-300 hover:text-blue-200 underline"
                       >
                         Importar sem IA (modo heurístico)
                       </button>
                     )}
                   </div>
                 </div>
+              )}
+
+              {/* ── CAROUSEL COVER SLIDE (GPT Image 2 via fal.ai) ── */}
+              {ws.format === 'carousel' && ws.coverImagePrompt && !ws.generating && (
+                <CoverSlideEditor
+                  editedPrompt={ws.coverImageEditedPrompt ?? ws.coverImagePrompt}
+                  referencePhoto={ws.coverImageReferencePhoto}
+                  generatedImageUrl={ws.coverImageDataUrl}
+                  generating={ws.coverImageGenerating}
+                  error={ws.coverImageError}
+                  hasKey={hasCoverImageKey()}
+                  onPromptChange={v => dispatch({ type: 'set-field', key: 'coverImageEditedPrompt', value: v })}
+                  onReferencePhotoChange={v => dispatch({ type: 'set-field', key: 'coverImageReferencePhoto', value: v })}
+                  onGenerate={handleGenerateCoverImage}
+                />
               )}
 
               {ws.previewBlocks && !ws.generating && (
@@ -1400,7 +1489,7 @@ export const CreationWizard: React.FC<CreationWizardProps> = ({
               <button
                 onClick={handleGenerate}
                 disabled={!canGenerate(ws)}
-                className="px-5 py-2 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-[0_0_20px_rgba(124,58,237,0.4)]"
+                className="px-5 py-2 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-[0_0_20px_rgba(10,132,255,0.4)]"
               >
                 <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 Gerar

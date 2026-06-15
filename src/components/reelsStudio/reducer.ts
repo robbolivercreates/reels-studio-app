@@ -29,7 +29,7 @@ export const INITIAL_STATE: ReelsState = {
   selectedVoiceId: 'Wise_Woman',
   aspect: '9:16',
   avatarClips: {},
-  avatarModel: 'avatar4',
+  avatarModel: 'avatar5',
   selectedPhotoId: null,
   takes: [],
   activeTakeId: null,
@@ -40,6 +40,7 @@ export const INITIAL_STATE: ReelsState = {
   motionEnergy: 'energetic',
   appTheme: 'dark',
   lastAvatarLayout: 'avatar-top',
+  projectMode: 'generate',
 };
 
 const ANALYSIS_HISTORY_LIMIT = 20;
@@ -574,6 +575,20 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
       return { ...state, blocks };
     }
 
+    case 'set-block-motion-setup': {
+      return {
+        ...state,
+        blocks: state.blocks.map(b => {
+          if (b.id !== action.id) return b;
+          if (action.setup === null) {
+            const { motionSetup: _, ...rest } = b;
+            return rest;
+          }
+          return { ...b, motionSetup: action.setup };
+        }),
+      };
+    }
+
     case 'set-block-transition': {
       return {
         ...state,
@@ -650,6 +665,102 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
           detectingSilence: false,
         },
         avatarClips: {}, // audio changed → previous clips no longer line up
+      };
+    }
+
+    case 'enter-edit-mode': {
+      // Reuse the active take (or the first take) as the base video. Keeps
+      // blocks/audio/overlayElements as-is — just flips the mode so the base
+      // video + overlay-elements path takes over.
+      const base = state.takes.find(t => t.id === state.activeTakeId) ?? state.takes[0];
+      if (!base) return state; // nothing to use as a base video
+      return {
+        ...state,
+        projectMode: 'edit',
+        baseVideoTake: base,
+        activeTakeId: base.id,
+        overlayElements: state.overlayElements ?? [],
+      };
+    }
+
+    case 'add-overlay-element':
+      return { ...state, overlayElements: [...(state.overlayElements ?? []), action.element] };
+
+    case 'update-overlay-element':
+      return {
+        ...state,
+        overlayElements: (state.overlayElements ?? []).map(el =>
+          el.id === action.id ? { ...el, ...action.patch } : el,
+        ),
+      };
+
+    case 'remove-overlay-element':
+      return {
+        ...state,
+        overlayElements: (state.overlayElements ?? []).filter(el => el.id !== action.id),
+      };
+
+    case 'set-overlay-motion':
+      return {
+        ...state,
+        overlayElements: (state.overlayElements ?? []).map(el =>
+          el.id === action.id ? { ...el, motion: action.motion } : el,
+        ),
+      };
+
+    case 'edit-video-loaded': {
+      // "Editar vídeo pronto": the uploaded video becomes the base track and
+      // its extracted audio becomes the master. We mirror `audio-success`
+      // (status ready + words + peaks) but the source is the video, not TTS —
+      // so voiceId is null. Blocks arrive pre-segmented from the transcript.
+      return {
+        ...state,
+        projectMode: 'edit',
+        baseVideoTake: action.baseVideoTake,
+        takes: [action.baseVideoTake, ...state.takes.filter(t => t.id !== action.baseVideoTake.id)],
+        activeTakeId: action.baseVideoTake.id,
+        blocks: action.blocks,
+        overlayElements: [],
+        avatarClips: {},
+        audio: {
+          status: 'ready',
+          url: action.audioUrl,
+          duration: action.duration,
+          peaks: action.peaks,
+          words: action.words,
+          voiceId: null,
+          error: null,
+          silenceCut: state.audio.silenceCut,
+          silencePreset: state.audio.silencePreset,
+          keepSegments: [],
+          detectedSilenceSec: 0,
+          detectingSilence: false,
+        },
+      };
+    }
+
+    case 'audio-project-loaded': {
+      // "Começar com meu áudio": the user's own voice is the master audio.
+      // Mirrors edit-video-loaded minus the base video — normal creation
+      // project (avatars will lip-sync this audio per block).
+      return {
+        ...state,
+        blocks: action.blocks,
+        avatarClips: {},
+        audio: {
+          status: 'ready',
+          url: action.audioUrl,
+          duration: action.duration,
+          peaks: action.peaks,
+          words: action.words,
+          voiceId: null,
+          error: null,
+          silenceCut: state.audio.silenceCut,
+          silencePreset: state.audio.silencePreset,
+          keepSegments: [],
+          detectedSilenceSec: 0,
+          detectingSilence: false,
+        },
       };
     }
 
@@ -803,6 +914,11 @@ export function reducer(state: ReelsState, action: ReelsAction): ReelsState {
         ...state,
         takes: state.takes.map(t => t.id === action.id ? { ...t, name: action.name } : t),
       };
+
+    case 'set-base-video-offset-y':
+      return state.baseVideoTake
+        ? { ...state, baseVideoTake: { ...state.baseVideoTake, offsetY: action.offsetY } }
+        : state;
 
     case 'update-take':
       return {

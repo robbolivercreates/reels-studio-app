@@ -51,7 +51,7 @@ export const VideoLibraryList: React.FC<Props> = ({ refs, folder, disabled, onRe
               <button
                 onClick={() => onReanalyze(r)}
                 disabled={disabled}
-                className="px-2 py-1 rounded-md bg-violet-500/15 hover:bg-violet-500/25 border border-violet-400/40 text-[10px] text-violet-200 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                className="px-2 py-1 rounded-md bg-blue-500/15 hover:bg-blue-500/25 border border-blue-400/40 text-[10px] text-blue-200 disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
               >
                 Re-analisar
               </button>

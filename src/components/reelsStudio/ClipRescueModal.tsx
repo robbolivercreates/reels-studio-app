@@ -16,6 +16,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { loadAllClipBlobs, renameClipBlob, deleteClipBlob } from './persistence';
 import { useModalChrome } from './modalChrome';
+import { confirmDialog } from './confirmService';
 import type { AppTheme } from './theme';
 import type { ScriptBlock, ReelsAction } from './types';
 
@@ -33,7 +34,29 @@ interface OrphanClip {
   blob: Blob;
   url: string;
   durationSec: number | null;
+  /** Timestamp extracted from the blockId, or 0 if not parseable. */
+  createdAt: number;
 }
+
+/** Extract Unix ms timestamp from a blockId like "block_1717850000000_abc". */
+const tsFromId = (id: string): number => {
+  const m = id.match(/_(\d{13})(?:_|$)/);
+  return m ? parseInt(m[1], 10) : 0;
+};
+
+const fmtRelative = (ts: number): string => {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  const min = Math.floor(diff / 60_000);
+  const h   = Math.floor(diff / 3_600_000);
+  const d   = Math.floor(diff / 86_400_000);
+  if (min < 1)   return 'agora';
+  if (min < 60)  return `${min}min atrás`;
+  if (h   < 24)  return `${h}h atrás`;
+  if (d   === 1) return 'ontem';
+  if (d   < 7)   return `${d} dias atrás`;
+  return new Date(ts).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' });
+};
 
 export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatarClips, dispatch, appTheme }) => {
   const chrome = useModalChrome(appTheme);
@@ -64,12 +87,14 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
         for (const [oldBlockId, blob] of Object.entries(all)) {
           if (referencedIds.has(oldBlockId)) continue;
           const url = URL.createObjectURL(blob);
-          items.push({ oldBlockId, blob, url, durationSec: null });
+          items.push({ oldBlockId, blob, url, durationSec: null, createdAt: tsFromId(oldBlockId) });
         }
         if (cancelled) {
           items.forEach(i => URL.revokeObjectURL(i.url));
           return;
         }
+        // Most recent first
+        items.sort((a, b) => b.createdAt - a.createdAt);
         setOrphans(items);
       } catch (err) {
         console.error('[ClipRescue] load failed:', err);
@@ -93,7 +118,7 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
   const handleAssign = async (oldBlockId: string, newBlockId: string, url: string) => {
     // If the target block already has a clip, warn before overwriting.
     if (blocksWithClip.has(newBlockId)) {
-      const ok = confirm(
+      const ok = await confirmDialog(
         'Este bloco já tem um clip atribuído. Reatribuir vai SUBSTITUIR o clip atual.\n\n' +
         'O clip antigo continua salvo no dispositivo e aparece aqui como órfão na próxima vez que abrir.\n\n' +
         'Deseja continuar?'
@@ -123,7 +148,7 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
   };
 
   const handleDelete = async (oldBlockId: string, url: string) => {
-    if (!confirm('Apagar este clip permanentemente do dispositivo?')) return;
+    if (!(await confirmDialog('Apagar este clip permanentemente do dispositivo?'))) return;
     try {
       await deleteClipBlob(oldBlockId);
       try { URL.revokeObjectURL(url); } catch { /* ignore */ }
@@ -170,11 +195,21 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
                     src={o.url}
                     controls
                     muted
+                    playsInline
+                    preload="auto"
                     className="w-full rounded-lg bg-black aspect-video object-contain"
                     style={{ maxHeight: 240 }}
                   />
-                  <div className="text-[10px] mt-2 font-mono opacity-50">id antigo: {o.oldBlockId}</div>
-                  <div className="text-[10px] opacity-70">tamanho: {(o.blob.size / 1024 / 1024).toFixed(2)} MB</div>
+                  <div className="flex items-center gap-2 mt-2 text-[10px] opacity-70">
+                    <span>{(o.blob.size / 1024 / 1024).toFixed(1)} MB</span>
+                    {o.createdAt > 0 && (
+                      <>
+                        <span className="opacity-40">·</span>
+                        <span>{fmtRelative(o.createdAt)}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="text-[9px] mt-0.5 font-mono opacity-30 truncate">{o.oldBlockId}</div>
 
                   <div className="mt-3 space-y-1">
                     {candidateBlocks.length === 0 ? (
@@ -194,7 +229,7 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
                               className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs border disabled:opacity-40 ${
                                 hasClip
                                   ? 'border-amber-400/30 hover:bg-amber-500/15'
-                                  : 'border-white/10 hover:bg-violet-500/20'
+                                  : 'border-white/10 hover:bg-blue-500/20'
                               }`}
                               title={hasClip ? 'Este bloco já tem um clip — vai substituir' : 'Atribuir este clip ao bloco'}
                             >
@@ -234,7 +269,7 @@ export const ClipRescueModal: React.FC<Props> = ({ open, onClose, blocks, avatar
           </div>
           <button
             onClick={onClose}
-            className="px-4 py-1.5 rounded-md bg-violet-500 hover:bg-violet-400 text-white font-medium"
+            className="px-4 py-1.5 rounded-md bg-blue-500 hover:bg-blue-400 text-white font-medium"
           >
             Fechar
           </button>

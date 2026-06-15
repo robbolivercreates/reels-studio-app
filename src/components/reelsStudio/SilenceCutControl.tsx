@@ -44,7 +44,7 @@ export const SilenceCutControl: React.FC<Props> = ({
 
   return (
     <div className={`rounded-xl border transition-all ${
-      enabled ? 'bg-violet-500/[0.06] border-violet-500/30' : 'bg-white/[0.02] border-white/10'
+      enabled ? 'bg-blue-500/[0.06] border-blue-500/30' : 'bg-white/[0.02] border-white/10'
     } ${disabled ? 'opacity-50' : ''}`}>
       {/* Compact header row */}
       <div className="px-3 py-2 flex items-center gap-2">
@@ -62,7 +62,7 @@ export const SilenceCutControl: React.FC<Props> = ({
           {enabled && !detecting && !applying && (
             <>
               <span className="text-zinc-600 shrink-0">·</span>
-              <span className={`text-[10px] font-medium shrink-0 ${expanded ? 'text-violet-300' : 'text-zinc-400'}`}>
+              <span className={`text-[10px] font-medium shrink-0 ${expanded ? 'text-blue-300' : 'text-zinc-400'}`}>
                 {activePreset.emoji} {activePreset.label}
               </span>
             </>
@@ -78,10 +78,10 @@ export const SilenceCutControl: React.FC<Props> = ({
           )}
 
           {detecting && (
-            <span className="text-[9px] text-violet-300 animate-pulse shrink-0">analisando…</span>
+            <span className="text-[9px] text-blue-300 animate-pulse shrink-0">analisando…</span>
           )}
           {applying && (
-            <span className="text-[9px] text-violet-300 animate-pulse shrink-0">aplicando…</span>
+            <span className="text-[9px] text-blue-300 animate-pulse shrink-0">aplicando…</span>
           )}
 
           {enabled && !disabled && (
@@ -99,7 +99,7 @@ export const SilenceCutControl: React.FC<Props> = ({
           type="button"
           onClick={handleToggle}
           disabled={disabled}
-          className={`relative shrink-0 w-9 h-5 rounded-full transition-colors ${enabled ? 'bg-violet-500' : 'bg-zinc-700'}`}
+          className={`relative shrink-0 w-9 h-5 rounded-full transition-colors ${enabled ? 'bg-blue-500' : 'bg-zinc-700'}`}
         >
           <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow-md transition-all ${enabled ? 'left-[18px]' : 'left-0.5'}`} />
         </button>
@@ -115,7 +115,7 @@ export const SilenceCutControl: React.FC<Props> = ({
               disabled={disabled}
               className={`px-2 py-2 rounded-lg border text-left transition-all ${
                 preset === p.id
-                  ? 'bg-violet-500/20 border-violet-400/60 shadow-[0_0_12px_rgba(167,139,250,0.25)]'
+                  ? 'bg-blue-500/20 border-blue-400/60 shadow-[0_0_12px_rgba(10,132,255,0.25)]'
                   : 'bg-black/20 border-white/5 hover:border-white/15'
               }`}
             >

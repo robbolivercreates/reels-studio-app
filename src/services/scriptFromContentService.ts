@@ -3,6 +3,7 @@ import type { ScriptBlock, BlockKind, RegenerateContext } from '../components/re
 import { buildVoicePromptSection, type VoiceProfile } from '../components/reelsStudio/voiceProfile';
 import { buildRegenPromptSection } from './regenPrompt';
 import { buildContentModeSection } from './contentMode';
+import { buildSpeechStyleStructureSection } from './speechStyle';
 import { logActualCost } from './costPredictor';
 
 // ─── STYLES ─────────────────────────────────────────────────────────────
@@ -194,14 +195,22 @@ export const generateReelFromContent = async (
 
   const styleDef  = STYLE_OPTIONS.find(s => s.value === options.style)!;
   const frameworkInstr = FRAMEWORK_INSTRUCTION[options.framework];
+  const speech = options.voiceProfile?.speechStyle;
+  const isYap = speech?.style === 'yap';
 
   const promptLines: string[] = [];
   promptLines.push(SYSTEM_PROMPT);
   promptLines.push('');
   promptLines.push('--- TARGET ---');
   promptLines.push(`durationSec target: ${options.durationSec}s (HARD CAP — never exceed ${options.durationSec * 1.1} seconds of spoken content).`);
-  promptLines.push(`style: ${styleDef.label} — ${styleDef.hint}`);
-  promptLines.push(`framework: ${frameworkInstr}`);
+  // Yap takes over both dimensions: its voice rule lives in the voice section,
+  // its structure in the FLUXO YAP section below — copywriting frameworks would fight it.
+  promptLines.push(isYap
+    ? `style: Yap — monólogo conversacional em 1ª pessoa (ver seção FLUXO YAP abaixo).`
+    : `style: ${styleDef.label} — ${styleDef.hint}`);
+  promptLines.push(isYap
+    ? `framework: Yap flow (a seção FLUXO YAP dita a estrutura; ignore frameworks de copywriting).`
+    : `framework: ${frameworkInstr}`);
   if (options.extraInstructions?.trim()) {
     promptLines.push('');
     promptLines.push('--- EXTRA INSTRUCTIONS (highest priority) ---');
@@ -210,6 +219,11 @@ export const generateReelFromContent = async (
   if (options.voiceProfile) {
     promptLines.push('');
     promptLines.push(buildVoicePromptSection(options.voiceProfile));
+  }
+  const yapFlow = buildSpeechStyleStructureSection(speech);
+  if (yapFlow) {
+    promptLines.push('');
+    promptLines.push(yapFlow);
   }
   const regenSection = buildRegenPromptSection(regen);
   if (regenSection) {
@@ -241,7 +255,7 @@ export const generateReelFromContent = async (
           // Higher temp when regenerating (force divergence) or for viral/opinion styles.
           temperature: regen
             ? 0.9
-            : options.style === 'viral' || options.style === 'opinion' ? 0.85 : 0.55,
+            : isYap || options.style === 'viral' || options.style === 'opinion' ? 0.85 : 0.55,
           // Habilita raciocínio (Thinking) para evitar respostas vazias ou rasas na leitura de posts/artigos.
           thinkingConfig: { thinkingBudget: 2048 },
         },
@@ -315,6 +329,48 @@ const CORS_PROXIES = [
   (u: string) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
 ];
 
+/**
+ * Last-resort fetch: Gemini's URL Context tool — Google fetches and RENDERS
+ * the page server-side, so it gets past Cloudflare bot-walls and JS-only SPAs
+ * (e.g. canva.com/newsroom) that defeat both the direct fetch and the CORS
+ * proxies above. Plain-text output (urlContext can't combine with JSON mode):
+ * first line `TITLE: …`, then the article body verbatim.
+ */
+const fetchArticleViaGemini = async (url: string): Promise<FetchedArticle> => {
+  const ai = new GoogleGenAI({ apiKey: getApiKey() });
+  const prompt = [
+    `Open this URL and extract the main article from it: ${url}`,
+    '',
+    'Output format (plain text, nothing else):',
+    'TITLE: <the article title>',
+    '<the FULL article body text, verbatim, in its original language — no summary, no commentary, no markdown. Skip navigation, captions, related-articles and footer noise.>',
+  ].join('\n');
+
+  let lastError: unknown;
+  for (const model of MODEL_CANDIDATES) {
+    try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: { parts: [{ text: prompt }] },
+        config: {
+          tools: [{ urlContext: {} }],
+          temperature: 0.1,
+        },
+      });
+      logActualCost('Article via URL Context', model, response.usageMetadata, 0);
+      const raw = (response.text ?? '').trim();
+      const titleMatch = raw.match(/^TITLE:\s*(.+)$/m);
+      const title = titleMatch?.[1]?.trim() ?? '';
+      const text = raw.replace(/^TITLE:.*$/m, '').replace(/\s+/g, ' ').trim();
+      if (text.length < 100) throw new Error('URL Context não retornou texto suficiente.');
+      return { title, text, sourceUrl: url };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('URL Context falhou.');
+};
+
 export const fetchArticleFromUrl = async (url: string): Promise<FetchedArticle> => {
   let html = '';
   let fetched = false;
@@ -346,7 +402,14 @@ export const fetchArticleFromUrl = async (url: string): Promise<FetchedArticle> 
     }
   }
 
-  if (!fetched) throw new Error('Não consegui acessar a URL. Cole o texto direto.');
+  if (!fetched) {
+    // Cloudflare/bot-wall blocked every HTTP path — let Gemini fetch it.
+    try {
+      return await fetchArticleViaGemini(url);
+    } catch {
+      throw new Error('Não consegui acessar a URL (nem via Gemini). Cole o texto direto.');
+    }
+  }
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(html, 'text/html');
@@ -375,7 +438,13 @@ export const fetchArticleFromUrl = async (url: string): Promise<FetchedArticle> 
   const text = (root?.textContent ?? '').replace(/\s+/g, ' ').trim();
 
   if (text.length < 100) {
-    throw new Error('Página sem texto legível. Cole o conteúdo direto.');
+    // HTML came back but it's a JS-rendered shell with no readable text —
+    // Gemini's URL Context renders the page, so it can still extract it.
+    try {
+      return await fetchArticleViaGemini(url);
+    } catch {
+      throw new Error('Página sem texto legível (nem via Gemini). Cole o conteúdo direto.');
+    }
   }
 
   return { title, text, sourceUrl: url };

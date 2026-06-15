@@ -11,6 +11,7 @@
 import React from 'react';
 import type { LanguageOption, ContentMode } from '../types';
 import { REWRITE_LABELS, LANGUAGE_OPTIONS, type VoiceProfile, type RewriteLevel } from '../voiceProfile';
+import { YAP_TYPE_OPTIONS, type SpeechStyleConfig, type YapType } from '../../../services/speechStyle';
 
 interface Props {
   activeProfile: VoiceProfile;
@@ -19,11 +20,13 @@ interface Props {
   rewriteOverride: RewriteLevel | null;
   contentMode: ContentMode;
   contentModeAuto: boolean;
+  speechStyle: SpeechStyleConfig;
   disabled?: boolean;
   onSelectProfile: (id: string) => void;
   onChangeLanguage: (lang: LanguageOption) => void;
   onChangeRewrite: (level: RewriteLevel | null) => void;
   onChangeContentMode: (mode: ContentMode) => void;
+  onChangeSpeechStyle: (cfg: SpeechStyleConfig) => void;
   onEditProfiles: () => void;
 }
 
@@ -40,23 +43,25 @@ export const VoiceProfileBar: React.FC<Props> = ({
   rewriteOverride,
   contentMode,
   contentModeAuto,
+  speechStyle,
   disabled = false,
   onSelectProfile,
   onChangeLanguage,
   onChangeRewrite,
   onChangeContentMode,
+  onChangeSpeechStyle,
   onEditProfiles,
 }) => {
   const effectiveRewrite = rewriteOverride ?? activeProfile.rewriteLevel;
   return (
-    <div className="px-3 py-2.5 rounded-lg bg-violet-500/[0.06] border border-violet-500/20 flex items-center gap-3 text-[11px] flex-wrap">
-      <span className="text-violet-300">🎙</span>
+    <div className="px-3 py-2.5 rounded-lg bg-blue-500/[0.06] border border-blue-500/20 flex items-center gap-3 text-[11px] flex-wrap">
+      <span className="text-blue-300">🎙</span>
       <span className="text-zinc-400">Perfil:</span>
       <select
         value={activeProfile.id}
         onChange={e => onSelectProfile(e.target.value)}
         disabled={disabled}
-        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50"
       >
         {profiles.map(p => (
           <option key={p.id} value={p.id}>{p.name}</option>
@@ -67,7 +72,7 @@ export const VoiceProfileBar: React.FC<Props> = ({
         value={languageOverride}
         onChange={e => onChangeLanguage(e.target.value as LanguageOption)}
         disabled={disabled}
-        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50"
         title="Idioma de saída desta importação"
       >
         <option value="auto">
@@ -89,7 +94,7 @@ export const VoiceProfileBar: React.FC<Props> = ({
           onChangeRewrite(v === activeProfile.rewriteLevel ? null : v);
         }}
         disabled={disabled}
-        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50"
+        className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50"
         title={REWRITE_LABELS[effectiveRewrite].hint}
       >
         {(['faithful', 'translate', 'adapt', 'reimagine'] as RewriteLevel[]).map(level => (
@@ -101,7 +106,7 @@ export const VoiceProfileBar: React.FC<Props> = ({
         value={contentMode}
         onChange={e => onChangeContentMode(e.target.value as ContentMode)}
         disabled={disabled}
-        className={`bg-black/30 border rounded px-2 py-1 text-[11px] outline-none focus:border-violet-400/50 disabled:opacity-50 ${
+        className={`bg-black/30 border rounded px-2 py-1 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50 ${
           contentMode === 'trailer'
             ? 'border-amber-400/40 text-amber-200'
             : 'border-white/10 text-zinc-100'
@@ -112,6 +117,48 @@ export const VoiceProfileBar: React.FC<Props> = ({
         <option value="adapt">✍ Adapt</option>
         <option value="trailer">🎬 Trailer</option>
       </select>
+      <span className="text-zinc-500">·</span>
+      <select
+        value={speechStyle.style}
+        onChange={e => onChangeSpeechStyle(e.target.value === 'yap'
+          ? { style: 'yap', yapType: speechStyle.yapType ?? 'storytime', yapLived: speechStyle.yapLived !== false }
+          : { style: 'default' })}
+        disabled={disabled}
+        className={`bg-black/30 border rounded px-2 py-1 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50 ${
+          speechStyle.style === 'yap' ? 'border-sky-400/40 text-sky-200' : 'border-white/10 text-zinc-100'
+        }`}
+        title="Estilo de fala do roteiro. Yap = monólogo conversacional em 1ª pessoa, papo reto."
+      >
+        <option value="default">Fala padrão</option>
+        <option value="yap">🗣️ Yap</option>
+      </select>
+      {speechStyle.style === 'yap' && (
+        <>
+          <select
+            value={speechStyle.yapType ?? 'storytime'}
+            onChange={e => onChangeSpeechStyle({ ...speechStyle, yapType: e.target.value as YapType })}
+            disabled={disabled}
+            className="bg-black/30 border border-white/10 rounded px-2 py-1 text-zinc-100 text-[11px] outline-none focus:border-blue-400/50 disabled:opacity-50"
+            title={YAP_TYPE_OPTIONS.find(y => y.id === (speechStyle.yapType ?? 'storytime'))?.desc}
+          >
+            {YAP_TYPE_OPTIONS.map(y => (
+              <option key={y.id} value={y.id}>{y.emoji} {y.label}</option>
+            ))}
+          </select>
+          <button
+            onClick={() => onChangeSpeechStyle({ ...speechStyle, yapLived: speechStyle.yapLived === false })}
+            disabled={disabled}
+            className={`px-2 py-1 rounded border text-[11px] font-medium disabled:opacity-50 ${
+              speechStyle.yapLived !== false
+                ? 'border-sky-400/40 bg-sky-500/10 text-sky-200'
+                : 'border-amber-400/40 bg-amber-500/10 text-amber-200'
+            }`}
+            title='"Vivi isso" = história pessoal. "Só comentando" = reage/anuncia sem inventar vivência.'
+          >
+            {speechStyle.yapLived !== false ? '✅ Vivi isso' : '💬 Só comentando'}
+          </button>
+        </>
+      )}
       <button
         onClick={onEditProfiles}
         disabled={disabled}

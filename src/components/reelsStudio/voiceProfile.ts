@@ -6,6 +6,12 @@
  * `reels_voice_profile_active_v1`.
  */
 
+import {
+  buildSpeechStyleVoiceSection,
+  loadSpeechStyleConfig,
+  type SpeechStyleConfig,
+} from '../../services/speechStyle';
+
 const STORAGE_KEY = 'reels_voice_profiles_v1';
 const ACTIVE_KEY = 'reels_voice_profile_active_v1';
 
@@ -297,6 +303,12 @@ export interface VoiceProfile {
   extraInstructions: string;
   /** User's personal voice doc in Markdown. Optional. Capped at VOICE_DOC_MAX_CHARS. */
   voiceDoc: string;
+  /**
+   * Transient, per-generation speech style (e.g. Yap) attached by wizards on
+   * their ephemeral profile copies. Never persisted with the profile —
+   * saveProfiles strips it.
+   */
+  speechStyle?: SpeechStyleConfig;
   createdAt: number;
   updatedAt: number;
 }
@@ -349,7 +361,9 @@ export const loadProfiles = (): VoiceProfile[] => {
 };
 
 export const saveProfiles = (profiles: VoiceProfile[]): void => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(profiles));
+  // speechStyle is a per-generation carrier — must not leak into the store.
+  const clean = profiles.map(({ speechStyle: _ss, ...p }) => p);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(clean));
 };
 
 export const getActiveProfileId = (): string | null => localStorage.getItem(ACTIVE_KEY);
@@ -375,6 +389,17 @@ export const ensureProfiles = (): { profiles: VoiceProfile[]; activeId: string }
     setActiveProfileId(activeId);
   }
   return { profiles, activeId };
+};
+
+/**
+ * Active profile with the last speech-style choice (localStorage) attached —
+ * for regeneration paths outside the wizards (timeline, agent) so they keep
+ * the voice the script was generated with.
+ */
+export const activeProfileWithSpeechStyle = (): VoiceProfile => {
+  const { profiles, activeId } = ensureProfiles();
+  const profile = profiles.find(p => p.id === activeId) ?? profiles[0];
+  return { ...profile, speechStyle: loadSpeechStyleConfig() };
 };
 
 export const upsertProfile = (profile: VoiceProfile): VoiceProfile[] => {
@@ -561,5 +586,12 @@ Voice document follows below:`);
       lines.push('Reminder: use the document for vocabulary and tone, NOT as a script template. Do not paste self-intros or long sign-offs unless the source content needs them.');
     }
   }
+
+  const speechVoice = buildSpeechStyleVoiceSection(profile.speechStyle);
+  if (speechVoice) {
+    lines.push('');
+    lines.push(speechVoice);
+  }
+
   return lines.join('\n');
 };

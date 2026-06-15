@@ -3,12 +3,14 @@ mod motions;
 mod assets;
 mod capcut;
 mod save_dialog;
+mod transcription;
 mod agent;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             agent::init(&app.handle());
             Ok(())
@@ -20,6 +22,7 @@ pub fn run() {
             references::read_reference_bytes,
             references::save_imported_video,
             references::download_video,
+            references::fetch_video_info,
             references::reveal_references_dir,
             motions::motions_dir,
             motions::save_motion_html,
@@ -47,6 +50,9 @@ pub fn run() {
             save_dialog::append_chunk_to_file,
             save_dialog::mux_video_audio_ffmpeg,
             save_dialog::copy_file,
+            transcription::extract_audio,
+            transcription::extract_audio_playback,
+            transcription::transcribe_whisper,
             agent::agent_publish_state,
             agent::agent_mcp_port,
             agent::agent_health,

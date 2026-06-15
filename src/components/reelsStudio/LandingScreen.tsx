@@ -10,6 +10,7 @@
  * Purely presentational: all state/handlers live in ReelsStudio.
  */
 
+import { useEffect } from 'react';
 import type { ThemeTokens } from './theme';
 
 interface LandingScreenProps {
@@ -19,11 +20,29 @@ interface LandingScreenProps {
   projectCount?: number;
   onOpenProject: () => void;
   onNewProject: () => void;
+  /** "Editar vídeo pronto" — upload a finished video, cut silences, add motions. */
+  onEditVideo: () => void;
+  /** "Começar com meu áudio" — record/upload a voice that drives the whole reel. */
+  onStartWithAudio: () => void;
+  /**
+   * Dismiss the landing back to the current editor. Provided when the landing
+   * is opened mid-session via the top-bar "Início" button (so the user can
+   * change their mind without losing the open project). Omitted on cold start.
+   */
+  onClose?: () => void;
 }
 
-const VIOLET = '#A78BFA';
+const VIOLET = '#60A5FA';
 
-export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, onNewProject }: LandingScreenProps) {
+export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, onNewProject, onEditVideo, onStartWithAudio, onClose }: LandingScreenProps) {
+  // ESC returns to the editor when the landing is dismissible.
+  useEffect(() => {
+    if (!onClose) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
     <div
       className="fixed inset-0 z-[90] flex flex-col items-center justify-center p-8"
@@ -33,6 +52,23 @@ export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, on
         fontFamily: '"Inter", -apple-system, BlinkMacSystemFont, system-ui, sans-serif',
       }}
     >
+      {/* Close (only when dismissible — i.e. opened mid-session). Returns to
+          the current editor. ESC does the same. */}
+      {onClose && (
+        <button
+          onClick={onClose}
+          title="Fechar (Esc) — voltar pro projeto"
+          className="absolute top-5 right-5 w-9 h-9 rounded-full flex items-center justify-center transition-colors"
+          style={{ color: tokens.text.secondary, backgroundColor: tokens.bg.surface, border: `1px solid ${tokens.border.subtle}` }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = VIOLET; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = tokens.border.subtle; }}
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      )}
+
       <div className="text-center mb-10">
         <div
           className="text-[28px] font-extrabold tracking-tight"
@@ -87,6 +123,48 @@ export function LandingScreen({ tokens, isLight, projectCount, onOpenProject, on
           </div>
           <div className="text-xs leading-relaxed" style={{ color: tokens.text.tertiary }}>
             Começar do zero a partir de um texto, link de artigo ou vídeo.
+          </div>
+        </button>
+
+        {/* Editar vídeo pronto */}
+        <button
+          onClick={onEditVideo}
+          className="w-[260px] text-left rounded-2xl p-7 transition-all hover:-translate-y-0.5"
+          style={{
+            backgroundColor: tokens.bg.surface,
+            border: `1px solid ${tokens.border.subtle}`,
+            cursor: 'pointer',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = VIOLET; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = tokens.border.subtle; }}
+        >
+          <div className="text-[32px] mb-3.5 leading-none">🎞️</div>
+          <div className="text-[17px] font-bold mb-1.5" style={{ color: tokens.text.primary }}>
+            Editar vídeo
+          </div>
+          <div className="text-xs leading-relaxed" style={{ color: tokens.text.tertiary }}>
+            Subir um vídeo pronto, transcrever, cortar silêncios e ilustrar com motions.
+          </div>
+        </button>
+
+        {/* Começar com meu áudio */}
+        <button
+          onClick={onStartWithAudio}
+          className="w-[260px] text-left rounded-2xl p-7 transition-all hover:-translate-y-0.5"
+          style={{
+            backgroundColor: tokens.bg.surface,
+            border: `1px solid ${tokens.border.subtle}`,
+            cursor: 'pointer',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.borderColor = VIOLET; }}
+          onMouseLeave={e => { e.currentTarget.style.borderColor = tokens.border.subtle; }}
+        >
+          <div className="text-[32px] mb-3.5 leading-none">🎙</div>
+          <div className="text-[17px] font-bold mb-1.5" style={{ color: tokens.text.primary }}>
+            Começar com meu áudio
+          </div>
+          <div className="text-xs leading-relaxed" style={{ color: tokens.text.tertiary }}>
+            Grave (ou suba) sua voz — ela vira os blocos e o avatar fala com ela.
           </div>
         </button>
       </div>

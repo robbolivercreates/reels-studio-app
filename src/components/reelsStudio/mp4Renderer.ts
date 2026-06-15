@@ -16,8 +16,9 @@
  */
 
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
-import { convertFileSrc } from '@tauri-apps/api/core';
-import type { ScriptBlock, AvatarClipState, ScreenTake, BlockLayout, BlockTransition } from './types';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import type { ScriptBlock, AvatarClipState, ScreenTake, BlockLayout, BlockTransition, OverlayElement } from './types';
+import { type MotionPlacement, placementOfElement, effectiveSplitElementAt, resolveMotionPlacement, FLOAT_CARD_CENTER, DEFAULT_SCRIM_ALPHA, DEFAULT_SCRIM_SPREAD } from './motionLibrary';
 import { computeLayout, hitTest } from './timeline';
 import { getLayoutSlots, defaultAvatarZoom, type LayoutBox } from './layouts';
 
@@ -31,6 +32,16 @@ export interface RenderInputs {
   quality: 'high' | 'lite';
   /** When true, render video track only — no AAC encoding. Use for ffmpeg mux path. */
   videoOnly?: boolean;
+  /**
+   * "Editar vídeo pronto" mode. When set, this video is the full-frame base
+   * layer for the WHOLE project (mapped by project time through its
+   * keepSegments), and blocks contribute only motion overlays on top — no
+   * per-block avatar/take rendering. Carry the project's cut state on the
+   * take (cutSilence + keepSegments) so silence cuts skip the video too.
+   */
+  baseVideoTake?: ScreenTake | null;
+  /** Edit-video overlay elements (text/captions) drawn over the base video. */
+  overlayElements?: OverlayElement[];
 }
 
 export interface RenderProgress {
@@ -45,6 +56,9 @@ export interface RenderProgress {
 export interface RenderHandle {
   promise: Promise<Blob>;
   cancel: () => void;
+  /** Live freeze accounting — read after `promise` resolves to warn the
+   *  user when frames rendered frozen (slow/broken source clips). */
+  health: { frozenFrames: number; brokenSources: Set<string> };
 }
 
 const FRAMERATE = 30;
@@ -88,14 +102,34 @@ interface FrameLayer {
   filter?: string;
   /** Optional RGB split for glitch transitions — offsets in pixels for R, G, B channels. */
   rgbSplit?: { r: number; g: number; b: number };
+  /**
+   * Fade the layer's top/bottom edges to transparent (~7% of frame height).
+   * Used by shifted float overlays: when the full-frame blend layer is
+   * translated, any non-black pixel at the frame boundary (atmosphere glow,
+   * gradients) would otherwise show as a hard seam.
+   */
+  featherY?: boolean;
+  /**
+   * Contrast scrim painted UNDER this layer (over whatever is already on the
+   * canvas): a soft black vertical gradient centered at `centerY` (0..1).
+   * Float overlays need it — screen blend can only lighten, so light text
+   * over bright footage washes out without a dark backdrop.
+   */
+  scrim?: { centerY: number; alpha: number; spread: number; tone: 'dark' | 'light' };
 }
 
 interface FrameDecoration {
-  kind: 'bottom-gradient' | 'split-seam' | 'vignette' | 'flash';
+  kind: 'bottom-gradient' | 'split-seam' | 'vignette' | 'flash' | 'overlay-text';
   splitY?: number; // for split-seam only (0..1 normalized)
   /** Flash overlay: hex colour + alpha 0..1. */
   flashColor?: string;
   flashAlpha?: number;
+  /** overlay-text (edit-video elements): wrapped caption drawn over the frame. */
+  text?: string;
+  textY?: number;            // vertical anchor 0..1 (centered horizontally)
+  textMode?: 'overlay' | 'fullscreen';
+  textColor?: string;
+  textFontScale?: number;    // multiplier on base size
 }
 
 interface FrameComposition {
@@ -105,6 +139,87 @@ interface FrameComposition {
 }
 
 const FULL_FRAME: LayoutBox = { x: 0, y: 0, w: 1, h: 1 };
+
+// Subtle grading applied to every user-footage layer (takes + base video).
+// Raw uploaded video next to designed motion graphics reads flat; this nudge
+// keeps both in the same color world without looking like a filter.
+const TAKE_GRADING = 'contrast(1.06) saturate(1.08)';
+
+/**
+ * THE unified motion compositor — translates a MotionPlacement into frame
+ * layers, identically for both pipelines (block motion in creation, overlay
+ * elements in edit-video mode). Returns the motion layer plus, for splits,
+ * the box the UNDERLYING content (avatar/take/base video) should occupy.
+ *
+ * float  → screen-blend band at (y, height); underlying keeps full frame
+ * full   → motion covers everything; underlying box = null (hidden)
+ * top/bottom-half → motion in one half, underlying compressed into the other
+ */
+const composeMotionLayer = (
+  placement: MotionPlacement,
+  motionUrl: string,
+  motionSeek: number,
+  motionAlpha: number,
+  authoredMode: 'dark' | 'light' = 'dark',
+): { motionLayer: FrameLayer; underlyingBox: LayoutBox | null; seamY: number | null } => {
+  switch (placement.area) {
+    case 'full':
+      return {
+        motionLayer: { videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME, alpha: motionAlpha },
+        underlyingBox: null,
+        seamY: null,
+      };
+    case 'top-half':
+      return {
+        motionLayer: { videoUrl: motionUrl, sourceSeek: motionSeek, box: { x: 0, y: 0, w: 1, h: 0.5 }, alpha: motionAlpha },
+        underlyingBox: { x: 0, y: 0.5, w: 1, h: 0.5 },
+        seamY: 0.5,
+      };
+    case 'bottom-half':
+      return {
+        motionLayer: { videoUrl: motionUrl, sourceSeek: motionSeek, box: { x: 0, y: 0.5, w: 1, h: 0.5 }, alpha: motionAlpha },
+        underlyingBox: { x: 0, y: 0, w: 1, h: 0.5 },
+        seamY: 0.5,
+      };
+    case 'float':
+    default: {
+      // Full-frame blend float. Two physical duals, picked by the mode the
+      // art was AUTHORED for:
+      //   dark  → black canvas, SCREEN blend (black = transparent)
+      //   light → white canvas, MULTIPLY blend (white = transparent) — the
+      //           "float claro": dark content over the footage with a light
+      //           scrim band (white gradient + house grid) behind it.
+      // floatShiftY translates the layer (instant repositioning); feather
+      // hides any edge when shifted.
+      const isLightFloat = authoredMode === 'light';
+      return {
+        motionLayer: {
+          videoUrl: motionUrl,
+          sourceSeek: motionSeek,
+          box: FULL_FRAME,
+          alpha: motionAlpha,
+          blend: isLightFloat ? 'multiply' : 'screen',
+          filter: isLightFloat ? 'contrast(1.18) brightness(0.99)' : 'contrast(1.35) brightness(1.05)',
+          offsetY: placement.floatShiftY ?? 0,
+          featherY: Math.abs(placement.floatShiftY ?? 0) > 0.005,
+          // Contrast scrim under the blend, centered on the card and
+          // following the shift. Multiplied by motionAlpha so the scrim
+          // fades in/out together with the motion's time window.
+          scrim: (placement.scrimAlpha ?? DEFAULT_SCRIM_ALPHA) > 0.01
+            ? {
+                centerY: FLOAT_CARD_CENTER + (placement.floatShiftY ?? 0),
+                alpha: (placement.scrimAlpha ?? DEFAULT_SCRIM_ALPHA) * motionAlpha,
+                spread: placement.scrimSpread ?? DEFAULT_SCRIM_SPREAD,
+                tone: isLightFloat ? 'light' : 'dark',
+              }
+            : undefined,
+        },
+        underlyingBox: FULL_FRAME,
+        seamY: null,
+      };
+    }
+  }
+};
 
 // Avatar tail-cut was an early misdiagnosis: the assumption was that HeyGen
 // freezes the avatar's last frames into a "robot pose" after the audio ends.
@@ -161,24 +276,6 @@ const composeForBlock = (
   motionUrls: Map<string, string>,
   clipDurations: Map<string, number>,
 ): { layers: FrameLayer[]; decorations: FrameDecoration[] } => {
-  // Derive motion layer from block.layout — the layout is the user's current
-  // intent, while motion.layer was captured at generation time (often before
-  // the user chose the final layout). Without this, generating a motion under
-  // "split-bottom" and later switching to "avatar-only" would still render
-  // 50/50 in the export, mismatching what the preview shows. Mirrors the
-  // preview's derivation in ReelsStudio.tsx so preview and export agree.
-  const motionLayer: NonNullable<ScriptBlock['motion']>['layer'] | undefined = (() => {
-    const raw = block.motion?.layer;
-    if (!raw) return undefined;
-    if (block.kind === 'broll') return raw;
-    switch (block.layout) {
-      case 'avatar-only': return 'overlay';
-      case 'avatar-top':  return 'split-bottom';
-      case 'media-top':   return 'split-top';
-      case 'media-only':  return 'replace';
-      default:            return raw;
-    }
-  })();
   const motionUrl = motionUrls.get(block.id);
   // ACTUAL measured MP4 duration of the motion clip — when the Hyperframes
   // timeline is shorter than the block (frequent: Gemini animates 3-4s but
@@ -187,25 +284,35 @@ const composeForBlock = (
   // Falls back to the configured value if the URL hasn't been measured yet.
   const measuredMotionDur = motionUrl ? clipDurations.get(motionUrl) : undefined;
   const motionDur = measuredMotionDur ?? (block.motion?.durationSec || 4);
+
+  // Unified placement — THE same resolution the live preview uses, so preview
+  // and export can never diverge (explicit placement wins; legacy motions
+  // derive from the block's current layout).
+  const placement = resolveMotionPlacement(block);
+
+  // Visibility window inside the block: the scene director (or the Dock's
+  // "Quando" sliders) can anchor the motion at a keyword instead of spanning
+  // the whole block. Outside [startOffset, startOffset+visibleDur) the motion
+  // is simply not drawn and the avatar/take underneath shows through.
+  const blockDur = block.end - block.start;
+  const startOffset = placement?.startOffsetSec ?? 0;
+  const visibleDur = Math.max(0, Math.min(placement?.durationSec ?? (blockDur - startOffset), blockDur - startOffset));
+  const motionLocalT = localT - startOffset;
+  const inWindow = motionLocalT >= 0 && motionLocalT < visibleDur;
+
   // Seek is clamped slightly before clip end to avoid WebKit seek-to-end
   // timeouts; the fade is done via motionAlpha (overrunAlpha) so the visible
-  // last-frame freeze becomes a fade-out instead of a hard hold.
-  const motionSeek = Math.min(localT, motionDur - 0.05);
-  // Skip the overrun fade entirely when the motion clip is at least as long
-  // as the block — the clip has frames for every moment of the block, so
-  // there's nothing to mask and the artificial dimming was reading as a
-  // "piscada" on every transition (the screen briefly darkens in the last
-  // 200ms of each block before the cross-dissolve catches up). The fade
-  // remains active only when the clip is genuinely shorter than the block,
-  // which is the case the helper was originally designed for.
-  //
-  // 0.05s tolerance (~1.5 frame) absorbs float mismatch between the
-  // configured durationSec and the measured MP4 length from HyperFrames.
-  const blockDur = block.end - block.start;
-  const motionCoversBlock = motionDur >= blockDur - 0.05;
-  const motionAlpha = motionCoversBlock
-    ? 1
-    : overrunAlpha(localT, motionDur, motionDur);
+  // last-frame freeze becomes a fade-out instead of a hard hold. The fade is
+  // skipped when the clip covers the whole window (0.05s ≈ 1.5-frame
+  // tolerance absorbs durationSec vs measured-MP4 float mismatch) — the
+  // artificial dimming read as a "piscada" on every transition.
+  const motionSeek = Math.min(Math.max(0, motionLocalT), motionDur - 0.05);
+  const motionCoversWindow = motionDur >= visibleDur - 0.05;
+  const motionAlpha = !inWindow
+    ? 0
+    : motionCoversWindow
+      ? 1
+      : overrunAlpha(motionLocalT, motionDur, motionDur);
 
   // Hide the avatar in the last AVATAR_TAIL_CUT_FRAMES of every block. HeyGen
   // freezes the avatar's last frames after the audio ends (no more lipsync
@@ -218,37 +325,35 @@ const composeForBlock = (
   const avatarCutBeforeSec = AVATAR_TAIL_CUT_FRAMES / FRAMERATE;
   const avatarEarlyCut = localT >= Math.max(0, avatarVisibleDur - avatarCutBeforeSec);
 
-  // Motion-replace: full frame.
-  if (motionLayer === 'replace' && motionUrl) {
-    if (motionAlpha <= 0) return { layers: [], decorations: [] };
-    return { layers: [{ videoUrl: motionUrl, sourceSeek: motionSeek, box: FULL_FRAME, alpha: motionAlpha }], decorations: [] };
+  // Motion full-frame: covers everything WHILE inside its time window.
+  // Outside the window we fall through to the normal layout render so a
+  // keyword-anchored full-frame motion shows the avatar/take instead of
+  // black frames before/after its moment.
+  if (placement?.area === 'full' && motionUrl && motionAlpha > 0) {
+    const { motionLayer: ml } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha, block.motion?.authoredMode ?? 'dark');
+    return { layers: [ml], decorations: [] };
   }
 
-  // Motion split: avatar occupies one half, motion the other.
-  if ((motionLayer === 'split-bottom' || motionLayer === 'split-top') && motionUrl) {
-    const avatarBox: LayoutBox = motionLayer === 'split-bottom'
-      ? { x: 0, y: 0,   w: 1, h: 0.5 }
-      : { x: 0, y: 0.5, w: 1, h: 0.5 };
-    const motionBox: LayoutBox = motionLayer === 'split-bottom'
-      ? { x: 0, y: 0.5, w: 1, h: 0.5 }
-      : { x: 0, y: 0,   w: 1, h: 0.5 };
+  // Motion split: avatar (or take) occupies one half, motion the other.
+  if ((placement?.area === 'top-half' || placement?.area === 'bottom-half') && motionUrl) {
+    const { motionLayer: ml, underlyingBox, seamY } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha, block.motion?.authoredMode ?? 'dark');
+    const avatarBox = underlyingBox!;
     const layers: FrameLayer[] = [];
     const clip = block.kind === 'avatar' ? inputs.avatarClips[block.id] : null;
     if (clip?.videoUrl && !avatarEarlyCut) {
       const zoom = block.avatarZoom ?? 1;
-      // Fallback: block's intended avatar visibility (avatarVisibleSec or full
-      // block). Without this fallback, an unmeasured avatar clip would skip
-      // the overrun fade entirely and freeze on its last frame at boundary.
       const avatarFallbackDur = block.avatarVisibleSec ?? (block.end - block.start);
       const alpha = overrunAlpha(localT, clipDurations.get(clip.videoUrl), avatarFallbackDur);
       if (alpha > 0) {
         layers.push({ videoUrl: clip.videoUrl, sourceSeek: localT, box: avatarBox, zoom, offsetY: block.avatarOffsetY, alpha });
       }
+    } else if (inputs.activeTake) {
+      // No avatar (broll block or avatar not ready) — fill the opposite half
+      // with the active take so the split has content on both sides.
+      layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localT, inputs.activeTake), box: avatarBox, filter: TAKE_GRADING });
     }
-    if (motionAlpha > 0) {
-      layers.push({ videoUrl: motionUrl, sourceSeek: motionSeek, box: motionBox, alpha: motionAlpha });
-    }
-    return { layers, decorations: [{ kind: 'split-seam', splitY: 0.5 }] };
+    if (motionAlpha > 0) layers.push(ml);
+    return { layers, decorations: [{ kind: 'split-seam', splitY: seamY ?? 0.5 }] };
   }
 
   const blockLayout: BlockLayout = block.kind === 'avatar' ? (block.layout ?? 'avatar-only') : 'media-only';
@@ -272,32 +377,20 @@ const composeForBlock = (
     } else if (inputs.activeTake) {
       // B-roll loops via mapBrollTime — never freezes, so no overrun fade.
       const localBroll = localT - (block.avatarVisibleSec ?? 0);
-      layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localBroll, inputs.activeTake), box: slots.avatar });
+      layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localBroll, inputs.activeTake), box: slots.avatar, filter: TAKE_GRADING });
     }
   }
 
   // Media layer (B-roll take). B-roll loops, no overrun fade needed.
   if (slots.media && inputs.activeTake) {
-    layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localT, inputs.activeTake), box: slots.media });
+    layers.push({ videoUrl: inputs.activeTake.url, sourceSeek: mapBrollTime(localT, inputs.activeTake), box: slots.media, filter: TAKE_GRADING });
   }
 
-  // Motion overlay — lower-third style: lives in the bottom 33% so the
-  // avatar's face stays clean (TV news kicker pattern). Screen blend + contrast
-  // tweak makes the motion's black backdrop disappear so the type/graphics
-  // float over the bottom of the frame like a real broadcast lower-third.
-  if (motionLayer === 'overlay' && motionUrl && motionAlpha > 0) {
-    // Floating overlay band (NOT a TV-style lower-third). Lives at y:0.58–0.80
-    // of the frame — center-lower, above the platform UI zone (bottom 15-20%
-    // of Reels/TikTok/Shorts is occluded by likes/comments/caption rail).
-    const LOWER_THIRD: LayoutBox = { x: 0, y: 0.58, w: 1, h: 0.22 };
-    layers.push({
-      videoUrl: motionUrl,
-      sourceSeek: motionSeek,
-      box: LOWER_THIRD,
-      alpha: motionAlpha,
-      blend: 'screen',
-      filter: 'contrast(1.35) brightness(1.05)',
-    });
+  // Motion float — full-frame screen blend over the avatar/take (same
+  // compositor as the edit-video pipeline).
+  if (placement?.area === 'float' && motionUrl && motionAlpha > 0) {
+    const { motionLayer: ml } = composeMotionLayer(placement, motionUrl, motionSeek, motionAlpha, block.motion?.authoredMode ?? 'dark');
+    layers.push(ml);
   }
 
   // Decorations.
@@ -316,6 +409,85 @@ const frameAtProjectTime = (
   clipDurations: Map<string, number>,
 ): FrameComposition => {
   const empty: FrameComposition = { layers: [], decorations: [], fadeAlpha: 1 };
+
+  // ─── Edit-video mode: single base video full-frame for the whole timeline.
+  // The video is ONE continuous source mapped by PROJECT time (through its
+  // keepSegments, so applied silence cuts skip the video in lockstep with the
+  // re-encoded audio). No per-block avatar/take, no inter-block transitions —
+  // it's a continuous clip. (Wave 2 adds the active block's motion overlay.)
+  if (inputs.baseVideoTake) {
+    const base: FrameLayer = {
+      videoUrl: inputs.baseVideoTake.url,
+      sourceSeek: mapBrollTime(t, inputs.baseVideoTake),
+      box: FULL_FRAME,
+      // Anti-"AI-edited" treatment: a raw static full-frame video is the #1
+      // tell of machine editing. Subtle grading (richer contrast/saturation)
+      // + a continuous Ken Burns drift (1.00 → 1.025 across the whole video)
+      // keeps the frame alive without being noticeable as an effect.
+      filter: 'contrast(1.06) saturate(1.08)',
+      zoom: 1 + 0.025 * Math.min(1, t / Math.max(1, inputs.duration)),
+      // User framing shift (↕ Vídeo): positive pulls the footage down,
+      // revealing black at the top — room for floating overlays.
+      offsetY: inputs.baseVideoTake.offsetY ?? 0,
+    };
+    const layers: FrameLayer[] = [base];
+    const decorations: FrameDecoration[] = [];
+
+    // Base-video squeeze (top/bottom-half) must be CONTINUOUS across the silent
+    // pauses between scenes. Keying it off the element that strictly contains
+    // `t` flips the base to full-frame in every gap (a vertical "jump", even
+    // when both neighbouring scenes are the same half). Use the gap-bridged
+    // split element so the squeeze + seam hold steady across the pause.
+    const squeezeEl = effectiveSplitElementAt(inputs.overlayElements ?? [], t);
+    if (squeezeEl) {
+      const { underlyingBox, seamY } = composeMotionLayer(placementOfElement(squeezeEl), '', 0, 0, 'dark');
+      if (underlyingBox && seamY !== null) {
+        base.box = underlyingBox;
+        decorations.push({ kind: 'split-seam', splitY: seamY });
+      }
+    }
+
+    for (const el of inputs.overlayElements ?? []) {
+      if (t < el.startSec || t >= el.startSec + el.durationSec) continue;
+      const localT = t - el.startSec;
+
+      if (el.kind === 'motion') {
+        // AI-generated motion clip — placed via the unified compositor, so
+        // float/split/full behave exactly like in the creation pipeline.
+        const motionUrl = motionUrls.get(el.id);
+        if (motionUrl) {
+          const placement = placementOfElement(el);
+          const startOffset = placement.startOffsetSec ?? 0;
+          const motionLocalT = localT - startOffset;
+          const elDur = el.motion?.durationSec ?? el.durationSec;
+          const motionSeek = Math.min(Math.max(0, motionLocalT), elDur - 0.05);
+          const alpha = motionLocalT < 0 ? 0 : overrunAlpha(motionLocalT, elDur);
+          if (alpha > 0) {
+            const { motionLayer, underlyingBox } = composeMotionLayer(placement, motionUrl, motionSeek, alpha, el.motion?.authoredMode ?? 'dark');
+            // Split base box + seam are owned by the gap-bridged squeeze above.
+            // Here we only need 'full' to hide the base (motion covers it).
+            if (underlyingBox === null) {
+              base.box = FULL_FRAME; // full: motion covers it; keep base as backdrop
+            }
+            layers.push(motionLayer);
+          }
+        }
+      } else {
+        // Text caption element. Split modes don't apply to text — clamp to
+        // the two text presentation modes.
+        decorations.push({
+          kind: 'overlay-text',
+          text: el.text,
+          textY: el.y,
+          textMode: el.mode === 'fullscreen' ? 'fullscreen' : 'overlay',
+          textColor: el.color,
+          textFontScale: el.fontScale,
+        });
+      }
+    }
+    return { layers, decorations, fadeAlpha: 1 };
+  }
+
   const hit = hitTest(layout, t);
   if (hit.kind !== 'block') return empty;
   const block = inputs.blocks.find(b => b.id === hit.slot.blockId);
@@ -588,35 +760,68 @@ const loadVideoElement = (url: string): Promise<HTMLVideoElement> =>
     v.onerror = () => reject(new Error(`Failed to load video: ${url}`));
   });
 
-// Hard cap on a single seek. Healthy seeks finish in <50ms. The previous
-// 1.5s ceiling let a single broken clip burn ~18s per crossfade frame
-// (multiple video layers × 1.5s). 400ms keeps us forgiving but kills
-// the "trava 2s no segundo X" pattern fast.
-const SEEK_TIMEOUT_MS = 400;
-/** After this many consecutive timeouts on the SAME video, we mark it
- * broken and short-circuit future seeks (renders last good frame).
- * Prevents one bad HEVC/fragmented MP4 from stalling an entire export. */
-const MAX_TIMEOUTS_BEFORE_GIVEUP = 3;
+// Seek budget: healthy seeks finish in <50ms. The PREVIOUS policy (flat
+// 400ms × 3 strikes → PERMANENTLY broken, silently) was the root cause of
+// Rob's "vídeo congela em partes": a merely-SLOW clip (HeyGen 1080p under
+// I/O pressure) ate its 3 strikes early and every later frame of it
+// rendered frozen on the last good frame — with zero warning. New policy:
+//   1. Progressive timeout per consecutive miss (400 → 800 → 1600ms): a
+//      slow-but-alive clip gets real room to land before being condemned.
+//   2. Block-boundary amnesty: the broken mark is LIFTED at each new block
+//      (fresh chance), unless the same video failed in several blocks
+//      (global strikes) — then it stays broken to protect the export time.
+//   3. Nothing is silent: frozen frames are counted per export and surfaced
+//      in the Export modal as a warning.
+const SEEK_TIMEOUTS_MS = [400, 800, 1600] as const;
+const MAX_TIMEOUTS_BEFORE_GIVEUP = SEEK_TIMEOUTS_MS.length;
+/** A video that got condemned in this many DIFFERENT blocks stays broken
+ *  for the rest of the export (genuinely corrupt file). */
+const MAX_BROKEN_BLOCKS_BEFORE_PERMANENT = 3;
 const brokenVideoUrls = new WeakSet<HTMLVideoElement>();
+const permanentlyBroken = new WeakSet<HTMLVideoElement>();
 const timeoutCount = new WeakMap<HTMLVideoElement, number>();
+const brokenBlockStrikes = new WeakMap<HTMLVideoElement, number>();
+
+/** Per-export freeze accounting — how many frames were drawn while a video
+ *  was marked broken (i.e. potentially frozen on the last good frame). */
+export interface RenderHealth {
+  frozenFrames: number;
+  brokenSources: Set<string>;
+}
+let activeHealth: RenderHealth | null = null;
 
 /** Reset on each new export so a previous broken-clip mark doesn't
  *  poison a retry. Called once at the start of renderMp4. */
 const resetVideoHealth = (videos: HTMLVideoElement[]) => {
   for (const v of videos) {
-    if (brokenVideoUrls.has(v)) {
-      // WeakSet has no delete? — yes it does.
-      brokenVideoUrls.delete(v);
-    }
+    brokenVideoUrls.delete(v);
+    permanentlyBroken.delete(v);
     timeoutCount.delete(v);
+    brokenBlockStrikes.delete(v);
+  }
+};
+
+/** Block-boundary amnesty: give every condemned video a fresh chance in the
+ *  new block — unless it already burned its global strikes. */
+const forgiveBrokenVideos = (videos: HTMLVideoElement[]) => {
+  for (const v of videos) {
+    if (brokenVideoUrls.has(v) && !permanentlyBroken.has(v)) {
+      brokenVideoUrls.delete(v);
+      timeoutCount.delete(v);
+    }
   }
 };
 
 const seekVideo = (v: HTMLVideoElement, t: number, signal?: { cancelled: boolean }): Promise<void> =>
   new Promise((resolve) => {
     // Already known broken — skip the seek entirely. The renderer will
-    // draw whatever the last successfully-seeked frame is.
+    // draw whatever the last successfully-seeked frame is. COUNTED so the
+    // export modal can warn instead of failing silently.
     if (brokenVideoUrls.has(v)) {
+      if (activeHealth) {
+        activeHealth.frozenFrames += 1;
+        activeHealth.brokenSources.add(v.src.slice(0, 120));
+      }
       resolve();
       return;
     }
@@ -637,7 +842,12 @@ const seekVideo = (v: HTMLVideoElement, t: number, signal?: { cancelled: boolean
         timeoutCount.set(v, n);
         if (n >= MAX_TIMEOUTS_BEFORE_GIVEUP) {
           brokenVideoUrls.add(v);
-          console.warn('[render] giving up on broken video after', n, 'timeouts · src=', v.src.slice(0, 80));
+          const strikes = (brokenBlockStrikes.get(v) ?? 0) + 1;
+          brokenBlockStrikes.set(v, strikes);
+          if (strikes >= MAX_BROKEN_BLOCKS_BEFORE_PERMANENT) permanentlyBroken.add(v);
+          console.warn('[render] giving up on slow/broken video after', n, 'timeouts',
+            '· blocoStrikes=', strikes, strikes >= MAX_BROKEN_BLOCKS_BEFORE_PERMANENT ? '(PERMANENTE)' : '(anistia no próximo bloco)',
+            '· src=', v.src.slice(0, 80));
         }
       } else {
         // Reset count on a successful seek — only consecutive misses count.
@@ -646,10 +856,15 @@ const seekVideo = (v: HTMLVideoElement, t: number, signal?: { cancelled: boolean
       resolve();
     };
     const onSeeked = () => finish(false);
+    // Progressive budget: each consecutive miss on the SAME video gets a
+    // longer window — a slow clip lands on the 2nd/3rd try instead of
+    // being condemned.
+    const attempt = Math.min(timeoutCount.get(v) ?? 0, SEEK_TIMEOUTS_MS.length - 1);
+    const budget = SEEK_TIMEOUTS_MS[attempt];
     const timer = setTimeout(() => {
-      console.warn('[render] seek timeout · target=', target, '· dur=', v.duration, '· cur=', v.currentTime);
+      console.warn('[render] seek timeout · budget=', budget, 'ms · target=', target, '· dur=', v.duration, '· cur=', v.currentTime);
       finish(true);
-    }, SEEK_TIMEOUT_MS);
+    }, budget);
     // Poll the cancel flag every 50ms — lets the user-facing Cancel
     // button break out of a seek that's still within budget.
     const cancelPoll = signal
@@ -693,6 +908,12 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
   const cancelSignal = { cancelled: false };
   let cancelled = false;
 
+  // Freeze accounting for THIS export — surfaced live via the handle so the
+  // Export modal can warn ("N trechos podem ter congelado") instead of the
+  // old silent freeze.
+  const health: RenderHealth = { frozenFrames: 0, brokenSources: new Set() };
+  activeHealth = health;
+
   const promise = (async (): Promise<Blob> => {
     const { width, height } = dimensionsFor(inputs.aspect, inputs.quality);
 
@@ -718,14 +939,25 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         motionUrls.set(block.id, convertFileSrc(block.motion.videoPath));
       }
     }
+    // Also include overlay elements that have a rendered motion MP4.
+    for (const el of inputs.overlayElements ?? []) {
+      if (el.kind === 'motion' && el.motion?.videoPath) {
+        motionUrls.set(el.id, convertFileSrc(el.motion.videoPath));
+      }
+    }
 
     // Pre-load all unique source videos so seeks are fast.
     const allUrls: (string | null)[] = inputs.blocks.map(b => {
       if (b.kind === 'avatar') return inputs.avatarClips[b.id]?.videoUrl ?? null;
       return inputs.activeTake?.url ?? null;
     });
-    // Also include motion videos.
+    // Also include motion videos (blocks + overlay elements).
     for (const url of motionUrls.values()) allUrls.push(url);
+    // Edit-video mode: the uploaded base video is a full-frame source for the
+    // whole timeline but isn't tied to any block (blocks are all 'avatar' with
+    // no avatarClips), so it'd never make it into allUrls above. Add it
+    // explicitly or it never reaches videoMap and only the motions render.
+    if (inputs.baseVideoTake?.url) allUrls.push(inputs.baseVideoTake.url);
 
     // Diagnostic block — pinpoint missing visuals before the render
     // starts so the export modal logs reveal what's wrong.
@@ -761,6 +993,52 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
     const clipDurations = new Map<string, number>();
     for (const [url, v] of videoMap.entries()) {
       if (Number.isFinite(v.duration) && v.duration > 0) clipDurations.set(url, v.duration);
+    }
+    // [DESYNC-DIAG] Temporary diagnostic (Fase 0 do plano de sync) — REMOVER depois.
+    // Compara, por bloco de avatar, o comprimento do bloco vs a fatia de áudio enviada
+    // ao HeyGen (block + TAIL_PADDING_SEC=0.18) vs a duração real do MP4 devolvido.
+    // delta(clip-slice) ≈ 0  → HeyGen fiel (1:1), sync ok por aqui.
+    // delta varia por bloco / lead-in consistente → causa #1 (clip não mapeia 1:1).
+    {
+      const TAIL = 0.18;
+      const diagRows: Array<Record<string, unknown>> = [];
+      for (const b of inputs.blocks) {
+        if (b.kind !== 'avatar') continue;
+        const url = inputs.avatarClips[b.id]?.videoUrl;
+        if (!url) continue;
+        const blockLen = b.end - b.start;
+        const sliceLen = blockLen + TAIL;
+        const clipDur = clipDurations.get(url) ?? null;
+        const row = {
+          blockId: b.id,
+          start: +b.start.toFixed(3),
+          end: +b.end.toFixed(3),
+          blockLen: +blockLen.toFixed(3),
+          sliceLen: +sliceLen.toFixed(3),
+          clipDur: clipDur != null ? +clipDur.toFixed(3) : null,
+          deltaClipBlock: clipDur != null ? +(clipDur - blockLen).toFixed(3) : null,
+          deltaClipSlice: clipDur != null ? +(clipDur - sliceLen).toFixed(3) : null,
+        };
+        diagRows.push(row);
+        console.log('[DESYNC-DIAG/export]', JSON.stringify(row));
+      }
+      // Auto-save to disk so it can be inspected without copy-pasting the console.
+      // Reuses the same file commands the MP4 writer uses. Best-effort; never blocks export.
+      try {
+        const payload = JSON.stringify({
+          note: 'Reels desync diagnostic — clipDur vs blockLen(+0.18 tail). deltaClipSlice≈0 em todos => HeyGen fiel (1:1). Se varia por bloco/tem offset => clip nao mapeia 1:1.',
+          totalAudioDuration: +inputs.duration.toFixed(3),
+          projectDuration: +layout.totalDuration.toFixed(3),
+          avatarBlocks: diagRows,
+        }, null, 2);
+        const b64 = btoa(unescape(encodeURIComponent(payload)));
+        const path = '/tmp/reels-desync-diag.json';
+        await invoke('truncate_file', { targetPath: path });
+        await invoke('append_chunk_to_file', { targetPath: path, base64Chunk: b64 });
+        console.log('[DESYNC-DIAG] salvo em', path);
+      } catch (e) {
+        console.warn('[DESYNC-DIAG] falha ao salvar arquivo (segue normal):', e);
+      }
     }
     // Reset per-video timeout counters so retries don't inherit prior broken-marks.
     resetVideoHealth(Array.from(videoMap.values()));
@@ -948,7 +1226,10 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       ctx.fillRect(0, gradY, width, height - gradY);
     };
 
-    /** Draw gradient seam between two halves (split layout). */
+    /** Draw gradient seam between two halves (split layout).
+     *  Gradient softens the cut; the thin accent scan line on top makes the
+     *  boundary read as a deliberate design choice instead of a raw video
+     *  edge (a razor-sharp 50% cut is a known tell of machine editing). */
     const drawSplitSeam = (splitY: number, seamHeight = 80) => {
       const grad = ctx.createLinearGradient(0, splitY - seamHeight / 2, 0, splitY + seamHeight / 2);
       grad.addColorStop(0, 'rgba(0,0,0,0)');
@@ -956,6 +1237,57 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       grad.addColorStop(1, 'rgba(0,0,0,0)');
       ctx.fillStyle = grad;
       ctx.fillRect(0, splitY - seamHeight / 2, width, seamHeight);
+      ctx.fillStyle = 'rgba(217,119,87,0.65)';
+      ctx.fillRect(0, splitY - 1, width, 2);
+    };
+
+    /** Draw an edit-video overlay text element: centered, wrapped, with a
+     *  legibility shadow. fullscreen mode fills a dark backdrop first so the
+     *  element "takes over" the frame for its window. */
+    const drawOverlayText = (
+      text: string | undefined,
+      yAnchor: number,
+      mode: 'overlay' | 'fullscreen',
+      color?: string,
+      fontScale = 1,
+    ) => {
+      if (mode === 'fullscreen') {
+        const grad = ctx.createLinearGradient(0, 0, width, height);
+        grad.addColorStop(0, '#0a0a0c');
+        grad.addColorStop(1, '#16161a');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, width, height);
+      }
+      const txt = (text ?? '').trim();
+      if (!txt) return;
+      const fontSize = Math.round(height * 0.05 * (fontScale || 1));
+      ctx.font = `800 ${fontSize}px -apple-system, "Helvetica Neue", "Segoe UI", sans-serif`;
+      ctx.fillStyle = color || '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.shadowColor = 'rgba(0,0,0,0.65)';
+      ctx.shadowBlur = 14;
+      ctx.shadowOffsetY = 2;
+      const maxLineWidth = width * 0.86;
+      const words = txt.split(/\s+/);
+      const lines: string[] = [];
+      let line = '';
+      for (const w of words) {
+        const tentative = line ? `${line} ${w}` : w;
+        if (ctx.measureText(tentative).width > maxLineWidth && line) { lines.push(line); line = w; }
+        else line = tentative;
+      }
+      if (line) lines.push(line);
+      const lineHeight = fontSize * 1.2;
+      const totalH = lines.length * lineHeight;
+      const cy = (mode === 'fullscreen' ? 0.5 : yAnchor) * height;
+      const startY = cy - totalH / 2 + lineHeight / 2;
+      for (let i = 0; i < lines.length; i++) ctx.fillText(lines[i], width / 2, startY + i * lineHeight);
+      ctx.shadowColor = 'transparent';
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.textAlign = 'start';
+      ctx.textBaseline = 'alphabetic';
     };
 
     /** Draw subtle edge vignette over the full frame. */
@@ -967,7 +1299,12 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       ctx.fillRect(0, 0, width, height);
     };
 
-    /** Draw a video frame into a normalized box with cover-fit (crop). Respects alpha + blend + offsetY/X + filter + rgbSplit. */
+    // Offscreen scratch canvas for edge-feathered layers (shifted floats).
+    // Created lazily once and reused every frame — never per-frame allocation.
+    let featherCanvas: OffscreenCanvas | null = null;
+    let featherCtx: OffscreenCanvasRenderingContext2D | null = null;
+
+    /** Draw a video frame into a normalized box with cover-fit (crop). Respects alpha + blend + offsetY/X + filter + rgbSplit + featherY. */
     const drawIntoBox = (
       v: HTMLVideoElement,
       box: LayoutBox,
@@ -978,6 +1315,7 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       offsetX = 0,
       filter?: string,
       rgbSplit?: { r: number; g: number; b: number },
+      featherY = false,
     ) => {
       const srcW = v.videoWidth;
       const srcH = v.videoHeight;
@@ -1007,6 +1345,42 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
         sy += (sh - newSh) / 2;
         sw = newSw;
         sh = newSh;
+      }
+      if (featherY && !rgbSplit) {
+        // Shifted float: draw into the scratch canvas, erase a soft gradient
+        // at the layer's top/bottom bounds (destination-out), then composite
+        // the result with the requested blend. Any atmosphere glow that
+        // reaches the frame boundary fades out instead of cutting a seam.
+        if (!featherCanvas) {
+          featherCanvas = new OffscreenCanvas(width, height);
+          featherCtx = featherCanvas.getContext('2d');
+        }
+        const fc = featherCtx;
+        if (fc) {
+          fc.clearRect(0, 0, width, height);
+          if (filter) fc.filter = filter;
+          fc.drawImage(v, sx, sy, sw, sh, dx, dy, dw, dh);
+          fc.filter = 'none';
+          const f = Math.max(8, Math.round(height * 0.07));
+          fc.globalCompositeOperation = 'destination-out';
+          const gTop = fc.createLinearGradient(0, dy, 0, dy + f);
+          gTop.addColorStop(0, 'rgba(0,0,0,1)');
+          gTop.addColorStop(1, 'rgba(0,0,0,0)');
+          fc.fillStyle = gTop;
+          fc.fillRect(0, dy - 1, width, f + 1);
+          const gBot = fc.createLinearGradient(0, dy + dh - f, 0, dy + dh);
+          gBot.addColorStop(0, 'rgba(0,0,0,0)');
+          gBot.addColorStop(1, 'rgba(0,0,0,1)');
+          fc.fillStyle = gBot;
+          fc.fillRect(0, dy + dh - f, width, f + 1);
+          fc.globalCompositeOperation = 'source-over';
+          ctx.globalAlpha = alpha;
+          ctx.globalCompositeOperation = blend;
+          ctx.drawImage(featherCanvas, 0, 0);
+          ctx.globalAlpha = 1;
+          ctx.globalCompositeOperation = 'source-over';
+          return;
+        }
       }
       ctx.globalAlpha = alpha;
       ctx.globalCompositeOperation = blend;
@@ -1061,8 +1435,6 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       // "broken video" classification scoped to a single block — a video
       // that timed-out once at a transition is given a fresh budget at the
       // next block instead of being silently skipped for the whole export.
-      // `brokenVideoUrls` is intentionally NOT cleared: a video that hits 3
-      // consecutive timeouts within a single block is genuinely broken.
       const frameHit = hitTest(layout, projT);
       const currentBlockId = frameHit.kind === 'block' ? frameHit.slot.blockId : null;
       // Capture the boundary BEFORE we mutate lastFrameBlockId so the encoder
@@ -1072,6 +1444,10 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       const blockBoundaryNow = currentBlockId !== lastFrameBlockId;
       if (blockBoundaryNow) {
         for (const v of videoMap.values()) timeoutCount.delete(v);
+        // Block-boundary amnesty: condemned-but-not-permanent videos get a
+        // fresh chance (the "frozen rest of the export" came from the old
+        // never-forgive policy).
+        forgiveBrokenVideos(Array.from(videoMap.values()));
         lastFrameBlockId = currentBlockId;
       }
 
@@ -1121,7 +1497,44 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
             await seekVideo(v, lyr.sourceSeek, cancelSignal);
           }
         }
-        drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0, lyr.offsetX ?? 0, lyr.filter, lyr.rgbSplit);
+        // Contrast scrim — painted UNDER the layer (over whatever is already
+        // composited): soft black vertical gradient centered on the float
+        // card. 0% → max → 0%, no hard cut. Must happen here (not as a
+        // decoration) so it lands below the screen-blended motion.
+        if (lyr.scrim && lyr.scrim.alpha > 0.005) {
+          const cy = lyr.scrim.centerY * height;
+          const spread = height * lyr.scrim.spread;
+          const core = spread * 0.36; // full-alpha core scales with the band
+          const a = Math.min(0.85, lyr.scrim.alpha);
+          const light = lyr.scrim.tone === 'light';
+          const rgb = light ? '255,255,255' : '0,0,0';
+          const g = ctx.createLinearGradient(0, cy - spread, 0, cy + spread);
+          g.addColorStop(0, `rgba(${rgb},0)`);
+          g.addColorStop((spread - core) / (2 * spread), `rgba(${rgb},${a.toFixed(3)})`);
+          g.addColorStop((spread + core) / (2 * spread), `rgba(${rgb},${a.toFixed(3)})`);
+          g.addColorStop(1, `rgba(${rgb},0)`);
+          ctx.fillStyle = g;
+          ctx.fillRect(0, Math.max(0, cy - spread), width, spread * 2);
+          if (light) {
+            // House grid lines inside the light band (44px tile @ 1920-scale),
+            // clipped to the core so they fade with the gradient edges.
+            const tile = Math.max(8, Math.round(height * (44 / 1920)));
+            ctx.save();
+            ctx.beginPath();
+            ctx.rect(0, Math.max(0, cy - core), width, core * 2);
+            ctx.clip();
+            ctx.strokeStyle = `rgba(0,0,0,${(a * 0.12).toFixed(3)})`;
+            ctx.lineWidth = 1;
+            for (let x = 0; x <= width; x += tile) {
+              ctx.beginPath(); ctx.moveTo(x + 0.5, cy - core); ctx.lineTo(x + 0.5, cy + core); ctx.stroke();
+            }
+            for (let y = Math.ceil((cy - core) / tile) * tile; y <= cy + core; y += tile) {
+              ctx.beginPath(); ctx.moveTo(0, y + 0.5); ctx.lineTo(width, y + 0.5); ctx.stroke();
+            }
+            ctx.restore();
+          }
+        }
+        drawIntoBox(v, lyr.box, lyr.zoom ?? 1, lyr.alpha ?? 1, lyr.blend ?? 'source-over', lyr.offsetY ?? 0, lyr.offsetX ?? 0, lyr.filter, lyr.rgbSplit, lyr.featherY ?? false);
       }
 
       // Draw decorations (gradients, seam, vignette, transition flash) on top of video layers.
@@ -1134,6 +1547,9 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
           ctx.fillStyle = dec.flashColor ?? '#ffffff';
           ctx.fillRect(0, 0, width, height);
           ctx.globalAlpha = 1;
+        }
+        else if (dec.kind === 'overlay-text') {
+          drawOverlayText(dec.text, dec.textY ?? 0.82, dec.textMode ?? 'overlay', dec.textColor, dec.textFontScale);
         }
       }
 
@@ -1285,6 +1701,10 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       v.load();
     }
 
+    if (health.frozenFrames > 0) {
+      console.warn('[render/health] frames congelados:', health.frozenFrames,
+        '· fontes:', Array.from(health.brokenSources));
+    }
     return blob;
   })();
 
@@ -1294,5 +1714,6 @@ export const renderMp4 = (inputs: RenderInputs, onProgress: (p: RenderProgress) 
       cancelled = true;
       cancelSignal.cancelled = true;
     },
+    health,
   };
 };

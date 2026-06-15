@@ -62,7 +62,7 @@ export const ClipPreviewLightbox: React.FC<Props> = ({ videoUrl, blockText, dura
               <div className="text-[11px] text-zinc-500 text-center font-mono break-all max-w-xs">{errorMessage}</div>
               <button
                 onClick={handleOpenInTab}
-                className="px-4 py-2 rounded-lg bg-violet-500 hover:bg-violet-400 text-xs font-semibold text-white transition-colors"
+                className="px-4 py-2 rounded-lg bg-blue-500 hover:bg-blue-400 text-xs font-semibold text-white transition-colors"
               >
                 Abrir em nova aba ↗
               </button>
@@ -98,7 +98,7 @@ export const ClipPreviewLightbox: React.FC<Props> = ({ videoUrl, blockText, dura
               </button>
               <button
                 onClick={handleDownload}
-                className="px-3 py-1.5 rounded-md bg-violet-500/20 hover:bg-violet-500/30 border border-violet-400/40 text-[11px] font-medium text-violet-200 transition-colors"
+                className="px-3 py-1.5 rounded-md bg-blue-500/20 hover:bg-blue-500/30 border border-blue-400/40 text-[11px] font-medium text-blue-200 transition-colors"
                 title="Baixar MP4"
               >
                 ↓ Baixar

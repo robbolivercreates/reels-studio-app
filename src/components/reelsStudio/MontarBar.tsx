@@ -27,12 +27,17 @@ interface MontarBarProps {
   motionDone: number;       // blocks that already have a rendered motion
   motionTotal: number;      // blocks that should have a motion
   batch: { current: number; total: number } | null;
+  /** Cancel the running motion batch — stops after the current block. */
+  onCancelBatch?: () => void;
   onAudio: () => void;
   onAvatars: () => void;
   onMotions: () => void;
+  onExport?: () => void;
+  /** Prontidão por bloco de avatar (pra mostrar B1✓ B2✓ B3⏳ na trilha). */
+  avatarChips?: Array<'done' | 'running' | 'error' | 'pending'>;
 }
 
-const VIOLET = '#A78BFA';
+const VIOLET = '#60A5FA';
 const EMERALD = '#34D399';
 const RED = '#F87171';
 
@@ -40,8 +45,8 @@ type PhaseState = 'locked' | 'pending' | 'running' | 'done' | 'error';
 
 export function MontarBar({
   tokens, audioStatus, avatarTotal, avatarReady, generatingClips,
-  motionCandidates, motionDone, motionTotal, batch,
-  onAudio, onAvatars, onMotions,
+  motionCandidates, motionDone, motionTotal, batch, onCancelBatch,
+  onAudio, onAvatars, onMotions, onExport, avatarChips,
 }: MontarBarProps) {
   const audioReady = audioStatus === 'ready';
 
@@ -66,6 +71,7 @@ export function MontarBar({
   const phases: Array<{
     key: string; icon: string; title: string; sub: string;
     state: PhaseState; pct: number; onClick: () => void;
+    chips?: Array<'done' | 'running' | 'error' | 'pending'>;
   }> = [
     {
       key: 'audio', icon: '🎙', title: 'Áudio',
@@ -81,6 +87,7 @@ export function MontarBar({
         : `${avatarReady}/${avatarTotal} prontos`,
       state: avatarPhase, pct: avatarTotal > 0 ? Math.round((avatarReady / avatarTotal) * 100) : 0,
       onClick: onAvatars,
+      chips: avatarChips,
     },
     {
       key: 'motion', icon: '✨', title: 'Motions',
@@ -94,6 +101,23 @@ export function MontarBar({
   ];
 
   const accent = (s: PhaseState) => s === 'done' ? EMERALD : s === 'error' ? RED : VIOLET;
+
+  // Próximo passo recomendado — um único CTA que mata o "e agora?".
+  // Complementa (não substitui) os botões de fase: eles dão acesso manual a
+  // qualquer etapa; este destaca a única ação que faz sentido agora.
+  const nextStep: { label: string; onClick: () => void; disabled?: boolean; busy?: boolean } | null = (() => {
+    if (audioPhase === 'running') return { label: 'Gerando áudio…', onClick: () => {}, disabled: true, busy: true };
+    if (audioPhase === 'error')   return { label: 'Tentar áudio de novo', onClick: onAudio };
+    if (audioPhase !== 'done')     return { label: 'Gerar áudio', onClick: onAudio };
+    if (avatarPhase === 'running') return { label: 'Gerando avatares…', onClick: () => {}, disabled: true, busy: true };
+    if (avatarPhase === 'pending' && avatarTotal > 0)
+      return { label: avatarReady > 0 ? `Gerar avatares · faltam ${avatarTotal - avatarReady}` : 'Gerar avatares', onClick: onAvatars };
+    if (motionPhase === 'running') return { label: 'Gerando motions…', onClick: () => {}, disabled: true, busy: true };
+    if (motionPhase === 'pending' && motionCandidates > 0)
+      return { label: `Gerar motions (${motionCandidates})`, onClick: onMotions };
+    if (onExport) return { label: 'Exportar reel', onClick: onExport };
+    return null;
+  })();
 
   return (
     <div className="px-5 py-2.5 border-t border-white/5 flex items-center gap-3 shrink-0" style={{ backgroundColor: tokens.bg.surface }}>
@@ -130,16 +154,79 @@ export function MontarBar({
                     {done ? '✓' : running ? '…' : p.state === 'error' ? '!' : `${i + 1}`}
                   </div>
                 </div>
-                <div className="text-[10px] mt-0.5 truncate" style={{ color: tokens.text.tertiary }}>{p.sub}</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <div className="text-[10px] truncate flex-1 min-w-0" style={{ color: tokens.text.tertiary }}>{p.sub}</div>
+                  {/* Explicit action affordance — the whole card is clickable,
+                      but a card with a progress bar reads as a status indicator.
+                      This pill makes the action discoverable. */}
+                  {p.state === 'pending' && (
+                    <span
+                      className="shrink-0 text-[9.5px] font-bold px-2 py-0.5 rounded-md"
+                      style={{ backgroundColor: VIOLET, color: '#fff' }}
+                    >
+                      {p.key === 'motion' ? `⚡ Gerar todos (${motionCandidates})` : p.key === 'avatar' ? `Gerar (${avatarTotal - avatarReady})` : 'Gerar'}
+                    </span>
+                  )}
+                  {/* Cancel pill — visible while the motion batch runs. Stops
+                      after the block currently generating (in-flight call
+                      finishes; the loop doesn't start the next one). */}
+                  {p.key === 'motion' && p.state === 'running' && batch && onCancelBatch && (
+                    <span
+                      role="button"
+                      onClick={(e) => { e.stopPropagation(); onCancelBatch(); }}
+                      className="shrink-0 text-[9.5px] font-bold px-2 py-0.5 rounded-md cursor-pointer"
+                      style={{ backgroundColor: 'rgba(239,68,68,0.18)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.4)' }}
+                      title="Para depois do bloco atual terminar"
+                    >
+                      ✕ Cancelar
+                    </span>
+                  )}
+                </div>
                 <div className="mt-1.5 h-1 rounded overflow-hidden" style={{ backgroundColor: tokens.border.subtle }}>
                   <div className="h-full rounded" style={{ width: `${p.pct}%`, backgroundColor: accent(p.state), transition: 'width 0.3s' }} />
                 </div>
+                {p.chips && p.chips.length > 0 && (
+                  <div className="flex items-center gap-1 mt-1.5 flex-wrap">
+                    {p.chips.slice(0, 14).map((c, ci) => (
+                      <span
+                        key={ci}
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        title={`Bloco ${ci + 1}: ${c === 'done' ? 'pronto' : c === 'running' ? 'gerando' : c === 'error' ? 'erro' : 'pendente'}`}
+                        style={{ backgroundColor: c === 'done' ? EMERALD : c === 'error' ? RED : c === 'running' ? VIOLET : tokens.border.default }}
+                      />
+                    ))}
+                    {p.chips.length > 14 && (
+                      <span className="text-[8px] font-semibold" style={{ color: tokens.text.tertiary }}>+{p.chips.length - 14}</span>
+                    )}
+                  </div>
+                )}
               </button>
               {i < phases.length - 1 && <span className="shrink-0 text-[13px]" style={{ color: tokens.text.tertiary }}>→</span>}
             </div>
           );
         })}
       </div>
+
+      {/* Próximo passo — único CTA recomendado */}
+      {nextStep && (
+        <div className="shrink-0 flex items-center gap-2 pl-3 ml-1 border-l" style={{ borderColor: tokens.border.subtle }}>
+          <span className="text-[9px] uppercase tracking-wider font-semibold hidden xl:block" style={{ color: tokens.text.tertiary }}>Próximo</span>
+          <button
+            onClick={nextStep.onClick}
+            disabled={nextStep.disabled}
+            className="px-4 py-2 rounded-lg text-[12px] font-bold transition-opacity flex items-center gap-1.5 whitespace-nowrap"
+            style={{
+              backgroundColor: nextStep.busy ? tokens.bg.active : tokens.accent.bg,
+              color: nextStep.busy ? tokens.text.secondary : tokens.accent.fg,
+              opacity: nextStep.disabled ? 0.7 : 1,
+              cursor: nextStep.disabled ? 'default' : 'pointer',
+            }}
+            title="Próximo passo recomendado"
+          >
+            {nextStep.label}{!nextStep.disabled && <span>→</span>}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

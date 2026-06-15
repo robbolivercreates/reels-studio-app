@@ -66,27 +66,27 @@ export const AddBrollModal: React.FC<Props> = ({ open, onClose, onTake, onChoose
             disabled={uploading}
             className={`relative aspect-square rounded-xl border-2 transition-all p-4 flex flex-col items-center justify-center gap-2 text-center ${
               dragOver
-                ? 'border-violet-400 bg-violet-500/15 scale-[1.02]'
-                : 'border-violet-400/40 bg-violet-500/[0.05] hover:bg-violet-500/10'
+                ? 'border-blue-400 bg-blue-500/15 scale-[1.02]'
+                : 'border-blue-400/40 bg-blue-500/[0.05] hover:bg-blue-500/10'
             } ${uploading ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             {uploading ? (
-              <svg className="w-8 h-8 animate-spin text-violet-300" fill="none" viewBox="0 0 24 24">
+              <svg className="w-8 h-8 animate-spin text-blue-300" fill="none" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" opacity="0.25" />
                 <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
               </svg>
             ) : (
               <>
-                <div className="w-12 h-12 rounded-xl bg-violet-500/20 flex items-center justify-center text-violet-200">
+                <div className="w-12 h-12 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-200">
                   <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                   </svg>
                 </div>
-                <div className="text-sm font-semibold text-violet-100">Upload de vídeo</div>
-                <div className="text-[10px] text-violet-300/70 leading-tight">
+                <div className="text-sm font-semibold text-blue-100">Upload de vídeo</div>
+                <div className="text-[10px] text-blue-300/70 leading-tight">
                   {dragOver ? 'Solte o arquivo aqui' : 'MP4 / MOV / WebM\nou arraste pra cá'}
                 </div>
-                <span className="absolute top-2 right-2 text-[8px] px-1.5 py-0.5 rounded bg-violet-500/30 text-violet-100 uppercase tracking-wider font-bold">recomendado</span>
+                <span className="absolute top-2 right-2 text-[8px] px-1.5 py-0.5 rounded bg-blue-500/30 text-blue-100 uppercase tracking-wider font-bold">recomendado</span>
               </>
             )}
           </button>

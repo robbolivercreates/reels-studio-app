@@ -131,7 +131,7 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
           <div>
             <div className="flex items-center justify-between mb-2">
               <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">Cortar bordas</div>
-              <button onClick={handlePreview} className="text-[10px] text-violet-300 hover:text-violet-200 transition-colors">
+              <button onClick={handlePreview} className="text-[10px] text-blue-300 hover:text-blue-200 transition-colors">
                 ▶ Preview do trecho
               </button>
             </div>
@@ -150,14 +150,14 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
 
               {/* Active range (between trim handles) */}
               <div
-                className="absolute top-0 bottom-0 bg-violet-500/20 border-y-2 border-violet-400/60"
+                className="absolute top-0 bottom-0 bg-blue-500/20 border-y-2 border-blue-400/60"
                 style={{ left: `${startPct}%`, width: `${widthPct}%` }}
               ></div>
 
               {/* Start handle */}
               <button
                 onMouseDown={(e) => { e.preventDefault(); setDraggingHandle('start'); }}
-                className="absolute top-0 bottom-0 w-2 -ml-1 bg-violet-400 hover:bg-violet-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(167,139,250,0.6)]"
+                className="absolute top-0 bottom-0 w-2 -ml-1 bg-blue-400 hover:bg-blue-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(10,132,255,0.6)]"
                 style={{ left: `${startPct}%` }}
                 title="Início"
               ></button>
@@ -165,14 +165,14 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
               {/* End handle */}
               <button
                 onMouseDown={(e) => { e.preventDefault(); setDraggingHandle('end'); }}
-                className="absolute top-0 bottom-0 w-2 -ml-1 bg-violet-400 hover:bg-violet-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(167,139,250,0.6)]"
+                className="absolute top-0 bottom-0 w-2 -ml-1 bg-blue-400 hover:bg-blue-300 cursor-ew-resize rounded shadow-[0_0_12px_rgba(10,132,255,0.6)]"
                 style={{ left: `${endPct}%` }}
                 title="Fim"
               ></button>
 
               {/* Time labels */}
-              <div className="absolute -top-5 text-[9px] font-mono text-violet-300 -translate-x-1/2" style={{ left: `${startPct}%` }}>{formatSec(trimStart)}</div>
-              <div className="absolute -top-5 text-[9px] font-mono text-violet-300 -translate-x-1/2" style={{ left: `${endPct}%` }}>{formatSec(trimEnd)}</div>
+              <div className="absolute -top-5 text-[9px] font-mono text-blue-300 -translate-x-1/2" style={{ left: `${startPct}%` }}>{formatSec(trimStart)}</div>
+              <div className="absolute -top-5 text-[9px] font-mono text-blue-300 -translate-x-1/2" style={{ left: `${endPct}%` }}>{formatSec(trimEnd)}</div>
             </div>
             <div className="mt-2 flex items-center justify-between text-[10px] text-zinc-500 font-mono">
               <span>0:00</span>
@@ -194,7 +194,7 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
               <div className="flex-1">
                 <div className="text-xs font-medium text-zinc-200 flex items-center gap-2">
                   Remover silêncios automaticamente
-                  {analyzing && <span className="text-[10px] text-violet-300">analisando áudio...</span>}
+                  {analyzing && <span className="text-[10px] text-blue-300">analisando áudio...</span>}
                 </div>
                 <div className="text-[11px] text-zinc-500 mt-1">
                   {analyzed && silenceTotal > 0.1 ? (
@@ -221,14 +221,14 @@ export const TakeReviewModal: React.FC<Props> = ({ take, onClose, onSave }) => {
             </div>
             <div className="rounded-lg bg-white/[0.03] border border-white/5 p-3">
               <div className="text-[9px] uppercase tracking-wider text-zinc-500 font-semibold">Economizou</div>
-              <div className="text-sm font-bold text-violet-300 mt-1 font-mono">−{formatSec(durationSec - effectiveDuration)}</div>
+              <div className="text-sm font-bold text-blue-300 mt-1 font-mono">−{formatSec(durationSec - effectiveDuration)}</div>
             </div>
           </div>
         </div>
 
         <div className="px-6 py-4 border-t border-white/5 bg-black/30 flex gap-2">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-semibold text-zinc-300 transition-colors">Cancelar</button>
-          <button onClick={handleSave} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(124,58,237,0.5)] transition-all">
+          <button onClick={handleSave} className="flex-1 py-2.5 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_20px_rgba(10,132,255,0.5)] transition-all">
             Aplicar
           </button>
         </div>

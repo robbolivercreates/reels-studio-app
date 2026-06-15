@@ -10,6 +10,7 @@ import {
   saveNamedProject,
   loadNamedProject,
   listNamedProjects,
+  deleteNamedProject,
   type PersistedProject,
 } from './persistence';
 import { computePeaks } from './audioEngine';
@@ -126,10 +127,21 @@ export const buildStateFromSnapshot = async (
     return next;
   });
 
+  // Migrate pre-role edit projects: transcript blocks used to be created as
+  // 'broll' across the board (before kind meant anything in edit mode). Under
+  // the per-fala role semantics, 'broll' now means "motion takes the whole
+  // frame" — an all-broll old project would render every overlay full-screen.
+  // If EVERY block is broll in an edit project, it's the old default → flip
+  // to 'avatar' ("🎥 Vídeo"). Mixed kinds = user already chose; leave alone.
+  const isEditProject = (snapshot.projectMode ?? 'generate') === 'edit';
+  const finalBlocks = isEditProject && migratedBlocks.length > 0 && migratedBlocks.every(b => b.kind === 'broll')
+    ? migratedBlocks.map(b => ({ ...b, kind: 'avatar' as const }))
+    : migratedBlocks;
+
   return {
     activeProjectId,
     projectName: snapshot.projectName,
-    blocks: migratedBlocks,
+    blocks: finalBlocks,
     audio: {
       ...snapshot.audio,
       silenceCut: snapshot.audio.silenceCut ?? false,
@@ -151,7 +163,8 @@ export const buildStateFromSnapshot = async (
     selectedVoiceId: snapshot.selectedVoiceId,
     aspect: snapshot.aspect,
     avatarClips: restoredClips,
-    avatarModel: snapshot.avatarModel,
+    // avatar4 saiu das opções (mesmo custo do 5) — projetos antigos migram pro 5.
+    avatarModel: snapshot.avatarModel === 'avatar4' ? 'avatar5' : snapshot.avatarModel,
     selectedPhotoId: snapshot.selectedPhotoId,
     takes: restoredTakes,
     activeTakeId: snapshot.activeTakeId && restoredTakes.some(t => t.id === snapshot.activeTakeId)
@@ -165,6 +178,13 @@ export const buildStateFromSnapshot = async (
     motionEnergy: (snapshot as { motionEnergy?: ReelsState['motionEnergy'] }).motionEnergy ?? 'energetic',
     appTheme: snapshot.appTheme ?? 'dark',
     lastAvatarLayout: (snapshot as { lastAvatarLayout?: ReelsState['lastAvatarLayout'] }).lastAvatarLayout ?? 'avatar-top',
+    // Edit-video mode: restore the flag, overlay elements, and resolve the base
+    // video take from the rebuilt takes (so its url is fresh, not the null-ed one).
+    projectMode: snapshot.projectMode ?? 'generate',
+    baseVideoTake: snapshot.baseVideoTakeId
+      ? restoredTakes.find(t => t.id === snapshot.baseVideoTakeId)
+      : undefined,
+    overlayElements: snapshot.overlayElements ?? [],
   };
 };
 
@@ -291,6 +311,21 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
   // state change so they always close over the latest snapshot.
   useEffect(() => {
     if (!hydratedRef.current) return;
+    // Don't persist an UNTOUCHED draft (no project id yet AND zero content):
+    // a fresh INITIAL_STATE carries one empty block, so without this guard the
+    // cold-start AND the "deleted my last project" reset would silently
+    // auto-create a phantom "Reel · …" entry — the user deletes a project and
+    // a blank one immediately reappears in the list ("não some / não deleta").
+    // The moment real content exists (typed text, audio, takes, overlays,
+    // clips) it saves and adopts an id exactly as before.
+    const isUntouchedDraft =
+      state.activeProjectId === null &&
+      state.audio.status !== 'ready' && !state.audio.url &&
+      state.takes.length === 0 &&
+      (state.overlayElements?.length ?? 0) === 0 &&
+      Object.keys(state.avatarClips ?? {}).length === 0 &&
+      state.blocks.every(b => !b.text.trim());
+    if (isUntouchedDraft) { setSaving(false); return; }
     setSaving(true);
     const handle = setTimeout(async () => {
       try {
@@ -403,7 +438,20 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.audio.url, state.audio.status, state.audio.cutsApplied]);
 
-  const clearProject = async (): Promise<void> => {
+  const clearProject = async (opts?: { deleteActiveNamed?: boolean }): Promise<void> => {
+    // "Limpar projeto atual" must actually REMOVE the current project. The
+    // legacy clearAllProjectData only wipes the old 'current' slot + global
+    // blobs — it never touched the named_projects store (where projects live
+    // today), so the project reloaded on the next boot ("limpei e não sumiu").
+    // Drop the named record AND the active-id pointer so the post-reload boot
+    // lands on the hub (appView reads activeProjectId from localStorage), not a
+    // blank editor pointing at a project whose media we just deleted.
+    if (opts?.deleteActiveNamed) {
+      if (state.activeProjectId) {
+        try { await deleteNamedProject(state.activeProjectId); } catch { /* non-fatal */ }
+      }
+      try { window.localStorage.removeItem(ACTIVE_PROJECT_KEY); } catch { /* ignore */ }
+    }
     await clearAllProjectData();
     setSavedAt(null);
   };

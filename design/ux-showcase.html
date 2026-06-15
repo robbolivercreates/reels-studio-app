@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Reels Studio · Auditoria UX/UI (nível Apple)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  /* ─── Tokens reais do app (theme.ts) — MENOS o roxo ─────────────────── */
+  :root{
+    --canvas:#0A0A0B; --surface:#141416; --elevated:#1C1C1F;
+    --hover:rgba(255,255,255,.05); --active:rgba(255,255,255,.08);
+    --border:rgba(255,255,255,.09); --border-strong:rgba(255,255,255,.14);
+    --t1:#FAFAFA; --t2:#A1A1AA; --t3:#71717A;
+    --accent-bg:#FAFAFA; --accent-fg:#0A0A0B;     /* ação primária = mono */
+    --focus:#0A84FF;                               /* azul Apple, NÃO roxo */
+    --ok:#22C55E; --warn:#F59E0B; --err:#EF4444; --pending:#71717A;
+    /* escala de tipo canônica proposta */
+    --shadow-soft:0 2px 8px -1px rgba(0,0,0,.5), 0 1px 4px -1px rgba(0,0,0,.4);
+    --shadow-xl:0 24px 60px -12px rgba(0,0,0,.6);
+    --r-sm:8px; --r-md:12px; --r-lg:18px; --r-xl:24px;
+    /* roxo SÓ pra ilustrar o "antes" */
+    --legacy-violet:#8B5CF6; --legacy-violet-2:#7C3AED;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--canvas);color:var(--t1);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;line-height:1.45;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1120px;margin:0 auto;padding:0 28px}
+
+  /* ─── Nav ───────────────────────────────────────────────────────────── */
+  nav{position:sticky;top:0;z-index:50;backdrop-filter:saturate(180%) blur(20px);
+    background:rgba(10,10,11,.72);border-bottom:1px solid var(--border)}
+  nav .wrap{display:flex;align-items:center;justify-content:space-between;height:58px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:15px}
+  .brand .dot{width:26px;height:26px;border-radius:8px;background:var(--accent-bg);
+    color:var(--accent-fg);display:grid;place-items:center;font-size:14px}
+  .navlinks{display:flex;gap:6px;flex-wrap:wrap}
+  .navlinks a{font-size:13px;font-weight:500;color:var(--t2);padding:7px 12px;border-radius:999px;transition:.15s}
+  .navlinks a:hover{color:var(--t1);background:var(--hover)}
+
+  /* ─── Tipografia ────────────────────────────────────────────────────── */
+  .eyebrow{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;color:var(--focus)}
+  h1{font-size:48px;font-weight:800;letter-spacing:-.03em;line-height:1.05}
+  h2{font-size:30px;font-weight:700;letter-spacing:-.02em}
+  h3{font-size:17px;font-weight:600;letter-spacing:-.01em}
+  .lead{font-size:18px;color:var(--t2);font-weight:400;max-width:60ch}
+  .muted{color:var(--t3)}
+  .small{font-size:13px}
+
+  section{padding:84px 0;border-bottom:1px solid var(--border)}
+  .sec-head{margin-bottom:40px;max-width:64ch}
+  .sec-head h2{margin:10px 0 12px}
+
+  /* ─── Hero ──────────────────────────────────────────────────────────── */
+  .hero{padding:96px 0 72px;text-align:center;border-bottom:1px solid var(--border);
+    background:radial-gradient(1200px 480px at 50% -10%, rgba(10,132,255,.10), transparent 60%)}
+  .hero h1{margin:18px auto 18px;max-width:18ch}
+  .hero .lead{margin:0 auto}
+  .metrics{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-top:44px}
+  .metric{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);
+    padding:22px 26px;min-width:180px;text-align:left;box-shadow:var(--shadow-soft)}
+  .metric .big{font-size:34px;font-weight:800;letter-spacing:-.02em}
+  .metric .big .to{color:var(--ok)}
+  .metric .lbl{font-size:12px;color:var(--t3);margin-top:4px}
+  .metric .was{color:var(--err);text-decoration:line-through;text-decoration-thickness:2px;opacity:.7}
+
+  /* ─── Cards / grid ──────────────────────────────────────────────────── */
+  .grid{display:grid;gap:18px}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g5{grid-template-columns:repeat(5,1fr)}
+  @media(max-width:900px){.g2,.g3,.g5{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-lg);padding:22px}
+  .card h3{margin-bottom:8px}
+  .card p{font-size:14px;color:var(--t2)}
+  .pcard{position:relative;overflow:hidden}
+  .pcard .n{position:absolute;top:16px;right:18px;font-size:40px;font-weight:800;color:var(--border-strong);line-height:1}
+  .tag{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+    padding:3px 9px;border-radius:999px;border:1px solid var(--border-strong);color:var(--t2)}
+  .tag.p1{color:#fff;border-color:rgba(10,132,255,.5);background:rgba(10,132,255,.14)}
+
+  /* ─── Before/After scaffold ─────────────────────────────────────────── */
+  .ba{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:stretch}
+  @media(max-width:900px){.ba{grid-template-columns:1fr}}
+  .pane{border-radius:var(--r-lg);border:1px solid var(--border);overflow:hidden;background:var(--surface)}
+  .pane>.ph{display:flex;align-items:center;gap:8px;padding:11px 16px;font-size:12px;font-weight:600;
+    border-bottom:1px solid var(--border);letter-spacing:.02em}
+  .pane.before>.ph{color:#fda4a4;background:rgba(239,68,68,.08)}
+  .pane.after>.ph{color:#86efac;background:rgba(34,197,94,.08)}
+  .pane .body{padding:18px}
+  .pin{width:7px;height:7px;border-radius:999px}
+  .pin.r{background:var(--err)} .pin.g{background:var(--ok)}
+  .notelist{list-style:none;margin-top:14px;display:flex;flex-direction:column;gap:7px}
+  .notelist li{font-size:12.5px;color:var(--t2);display:flex;gap:8px;align-items:flex-start;line-height:1.4}
+  .notelist li::before{content:"";margin-top:6px;width:6px;height:6px;border-radius:999px;background:var(--t3);flex:none}
+  .pane.after .notelist li::before{background:var(--ok)}
+  .pane.before .notelist li::before{background:var(--err)}
+
+  /* ─── Mini-mockup primitives ────────────────────────────────────────── */
+  .mk{background:var(--elevated);border:1px solid var(--border);border-radius:var(--r-md);padding:14px}
+  .mk.dense{background:var(--elevated)}
+  .btn{display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;
+    padding:9px 16px;border-radius:10px;border:1px solid transparent;cursor:default}
+  .btn.primary{background:var(--accent-bg);color:var(--accent-fg)}
+  .btn.secondary{background:transparent;color:var(--t1);border-color:var(--border-strong)}
+  .btn.ghost{background:transparent;color:var(--t2)}
+  .btn.violet{background:linear-gradient(180deg,var(--legacy-violet),var(--legacy-violet-2));color:#fff;
+    box-shadow:0 0 20px rgba(124,58,237,.4)}
+  .btn.sm{font-size:11.5px;padding:6px 11px;border-radius:8px}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px}
+  .badge.ok{color:#86efac;background:rgba(34,197,94,.12)}
+  .badge.warn{color:#fcd34d;background:rgba(245,158,11,.12)}
+  .badge.err{color:#fda4a4;background:rgba(239,68,68,.12)}
+  .badge.run{color:#7cc6ff;background:rgba(10,132,255,.14)}
+  .badge.idle{color:var(--t3);background:var(--hover)}
+  .swatch{height:62px;border-radius:10px;border:1px solid var(--border);position:relative;overflow:hidden}
+  .swatch .hex{position:absolute;bottom:6px;left:8px;font-size:10px;font-weight:600;
+    background:rgba(0,0,0,.45);padding:2px 6px;border-radius:6px;backdrop-filter:blur(4px)}
+  .ban{font-size:10px;font-weight:700;color:#fff;background:var(--err);padding:2px 7px;border-radius:999px;
+    position:absolute;top:6px;right:6px;transform:rotate(0)}
+
+  /* progress */
+  .track{height:8px;border-radius:999px;background:var(--hover);overflow:hidden}
+  .track>i{display:block;height:100%;border-radius:999px;background:var(--focus)}
+  .spinner{width:18px;height:18px;border-radius:999px;border:2px solid var(--border-strong);
+    border-top-color:var(--t2);animation:spin 1s linear infinite;display:inline-block;vertical-align:middle}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  /* light demo panel */
+  .light{--surface:#fff;--elevated:#F4F4F5;--canvas:#FAFAFA;--border:rgba(0,0,0,.09);
+    --border-strong:rgba(0,0,0,.14);--t1:#0A0A0B;--t2:#52525B;--t3:#71717A;
+    --accent-bg:#0A0A0B;--accent-fg:#FAFAFA;--hover:rgba(0,0,0,.05);
+    background:var(--canvas);color:var(--t1)}
+
+  .rail{display:flex;align-items:stretch;gap:0;background:var(--surface);border:1px solid var(--border);
+    border-radius:var(--r-md);overflow:hidden}
+  .rail .step{flex:1;padding:12px 14px;border-right:1px solid var(--border);position:relative}
+  .rail .step:last-child{border-right:none}
+  .rail .step .s-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+  .rail .step .s-name{font-size:12.5px;font-weight:600}
+  .rail .step.active{background:rgba(10,132,255,.07)}
+  .rail .step.active::after{content:"";position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--focus)}
+  .chips{display:flex;gap:5px;flex-wrap:wrap}
+  .chip{font-size:10px;font-weight:600;padding:3px 7px;border-radius:6px;background:var(--hover);color:var(--t2)}
+  .chip.ok{color:#86efac;background:rgba(34,197,94,.14)}
+  .chip.run{color:#7cc6ff;background:rgba(10,132,255,.16)}
+
+  .next{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-top:14px;
+    background:rgba(10,132,255,.08);border:1px solid rgba(10,132,255,.3);border-radius:12px;padding:13px 16px}
+  .next .lbl{font-size:11px;color:var(--t3);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+  .next .ttl{font-size:14px;font-weight:600;margin-top:2px}
+
+  .blockcard{border:1px solid var(--border);border-radius:12px;padding:13px;background:var(--surface)}
+  .blockcard textarea,.blockcard .txt{width:100%;font-size:13px;color:var(--t1);background:transparent;border:none}
+  .toolbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .preset{border:1px solid var(--border-strong);border-radius:12px;padding:14px;cursor:default;background:var(--surface);transition:.15s}
+  .preset.sel{border-color:var(--focus);background:rgba(10,132,255,.07)}
+  .preset .pt{font-size:13px;font-weight:600}
+  .preset .pd{font-size:11px;color:var(--t3);margin-top:3px}
+  .disclosure{margin-top:12px;font-size:12.5px;color:var(--t2);display:flex;align-items:center;gap:7px}
+
+  .typerow{display:flex;align-items:baseline;gap:18px;padding:11px 0;border-bottom:1px solid var(--border)}
+  .typerow .meta{font-size:11px;color:var(--t3);width:120px;flex:none}
+
+  .flowsteps{display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+  @media(max-width:900px){.flowsteps{grid-template-columns:repeat(2,1fr)}}
+  .fstep{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-md);padding:14px;text-align:center}
+  .fstep .fn{font-size:11px;color:var(--t3);font-weight:600}
+  .fstep .fname{font-size:13px;font-weight:600;margin:6px 0}
+  .fstep .fd{font-size:22px;font-weight:800}
+  .fstep .fd .was{font-size:13px;color:var(--err);text-decoration:line-through;opacity:.7;font-weight:600}
+  .fstep .fd .now{color:var(--ok)}
+  .legend{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--t2);margin-top:18px}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  footer{padding:48px 0;color:var(--t3);font-size:13px;text-align:center}
+  .kbd{font-size:11px;background:var(--elevated);border:1px solid var(--border);border-radius:6px;padding:2px 7px;color:var(--t2)}
+  .pillrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <div class="brand"><span class="dot">▶</span> Reels Studio · UX Audit</div>
+  <div class="navlinks">
+    <a href="#principios">Princípios</a>
+    <a href="#system">Design System</a>
+    <a href="#ecras">Ecrãs</a>
+    <a href="#fluxo">Fluxo</a>
+  </div>
+</div></nav>
+
+<!-- HERO -->
+<header class="hero"><div class="wrap">
+  <div class="eyebrow">Auditoria nível Apple · Mockup (nada mudou no app)</div>
+  <h1>Mesmo poder. Metade da carga mental.</h1>
+  <p class="lead">Uma releitura do Reels Studio com os princípios da Apple: clareza, um único próximo
+  passo, estado honesto, defaults inteligentes — e um visual calmo, sem roxo.</p>
+  <div class="metrics">
+    <div class="metric"><div class="big"><span class="was">29</span> → <span class="to">12</span></div><div class="lbl">decisões pra publicar 1 reel</div></div>
+    <div class="metric"><div class="big"><span class="was">11+</span> → <span class="to">3</span></div><div class="lbl">superfícies (modais → painéis)</div></div>
+    <div class="metric"><div class="big"><span class="was">125+</span> → <span class="to">0</span></div><div class="lbl">usos de roxo na marca</div></div>
+    <div class="metric"><div class="big">8 → <span class="to">4</span></div><div class="lbl">carga cognitiva (estimada /10)</div></div>
+  </div>
+</div></header>
+
+<!-- 1. PRINCÍPIOS -->
+<section id="principios"><div class="wrap">
+  <div class="sec-head">
+    <div class="eyebrow">01 — Princípios</div>
+    <h2>Cinco diretrizes que guiam tudo abaixo</h2>
+    <p class="lead">Cada recomendação responde a um destes. P1 = maior impacto, menor risco.</p>
+  </div>
+  <div class="grid g3">
+    <div class="card pcard"><span class="n">1</span><span class="tag p1">P1</span>
+      <h3 style="margin-top:12px">O pipeline é a espinha</h3>
+      <p>Áudio → Avatar → Motion → Export numa trilha viva que mostra o estado real e <b>um único próximo passo</b>. Foca no lugar, não enterra em modal.</p></div>
+    <div class="card pcard"><span class="n">2</span><span class="tag p1">P1</span>
+      <h3 style="margin-top:12px">Menos decisões</h3>
+      <p>Presets que agrupam boas combinações + "Mais opções" pro avançado. Defaults inteligentes em vez de 15 controles soltos.</p></div>
+    <div class="card pcard"><span class="n">3</span><span class="tag p1">P1</span>
+      <h3 style="margin-top:12px">Estado honesto</h3>
+      <p>Progresso real com ETA, status por bloco visível, erros à mostra. Nunca um spinner que mente nem ajuste escondido.</p></div>
+    <div class="card pcard"><span class="n">4</span><span class="tag p1">P1</span>
+      <h3 style="margin-top:12px">Visual calmo, sem roxo</h3>
+      <p>Ação primária monocromática, um azul sóbrio só pra foco. Escala de tipo única. Zero roxo na marca.</p></div>
+    <div class="card pcard"><span class="n">5</span><span class="tag">P2</span>
+      <h3 style="margin-top:12px">Manipulação direta</h3>
+      <p>Toda edição reflete no preview na hora. "Editar bloco atual" num clique. Cards calmos: texto + 1 ação.</p></div>
+    <div class="card" style="display:flex;flex-direction:column;justify-content:center;background:linear-gradient(180deg,rgba(10,132,255,.10),transparent)">
+      <h3>A régua</h3>
+      <p>Se uma tela não tem um próximo passo óbvio, um estado verdadeiro e no máximo uma decisão real — ela ainda não está pronta.</p></div>
+  </div>
+</div></section>
+
+<!-- 2. DESIGN SYSTEM -->
+<section id="system"><div class="wrap">
+  <div class="sec-head">
+    <div class="eyebrow">02 — Design System</div>
+    <h2>Calmo, consistente, sem roxo</h2>
+    <p class="lead">Os tokens do app (theme.ts) já são ótimos. O problema é o roxo espalhado em 125+
+    lugares e a falta de uma escala de tipo. Aqui está a versão limpa.</p>
+  </div>
+
+  <!-- Paleta -->
+  <h3 style="margin-bottom:14px">Paleta — antes vs depois</h3>
+  <div class="ba" style="margin-bottom:30px">
+    <div class="pane before"><div class="ph"><span class="pin r"></span>ANTES · roxo na marca</div>
+      <div class="body">
+        <div class="grid g3" style="gap:10px">
+          <div class="swatch" style="background:linear-gradient(180deg,#8B5CF6,#7C3AED)"><span class="ban">remover</span><span class="hex">#8B5CF6 CTA</span></div>
+          <div class="swatch" style="background:#7C3AED"><span class="ban">remover</span><span class="hex">#7C3AED foco</span></div>
+          <div class="swatch" style="background:radial-gradient(circle at 50% 40%,rgba(124,58,237,.5),#1C1C1F)"><span class="ban">glow</span><span class="hex">violet glow ×62</span></div>
+        </div>
+        <ul class="notelist">
+          <li>CTAs, chips de voz e glows usam <b>violet-500/600</b> hardcoded.</li>
+          <li>Camada de "devioletização" no index.html briga com as classes (specificity).</li>
+          <li><b>ui/Button.tsx</b> primary ainda é <b>bg-violet-600</b>.</li>
+        </ul>
+      </div></div>
+    <div class="pane after"><div class="ph"><span class="pin g"></span>DEPOIS · mono + 1 azul de foco</div>
+      <div class="body">
+        <div class="grid g3" style="gap:10px">
+          <div class="swatch" style="background:#FAFAFA"><span class="hex" style="color:#000;background:rgba(255,255,255,.6)">#FAFAFA primária</span></div>
+          <div class="swatch" style="background:#0A84FF"><span class="hex">#0A84FF foco</span></div>
+          <div class="swatch" style="background:var(--surface)"><span class="hex">#141416 surface</span></div>
+        </div>
+        <ul class="notelist">
+          <li>Ação primária <b>monocromática</b> (branco no dark / preto no light) — já é o token accent.</li>
+          <li>Um único acento <b>azul Apple #0A84FF</b> só pra foco, link e estado ativo.</li>
+          <li>Button.tsx passa a usar tokens — fim do roxo herdado.</li>
+        </ul>
+      </div></div>
+  </div>
+
+  <!-- Status + Tipografia -->
+  <div class="grid g2" style="margin-bottom:30px">
+    <div class="card">
+      <h3 style="margin-bottom:14px">Cores de estado (mantidas)</h3>
+      <div class="pillrow">
+        <span class="badge ok">● Pronto</span>
+        <span class="badge run">● Gerando 62%</span>
+        <span class="badge warn">● Atenção</span>
+        <span class="badge err">● Erro</span>
+        <span class="badge idle">● Em espera</span>
+      </div>
+      <p class="small muted" style="margin-top:14px">emerald #22C55E · amber #F59E0B · red #EF4444 · azul #0A84FF pra "em andamento". Semântica clara, sem roxo.</p>
+    </div>
+    <div class="card">
+      <h3 style="margin-bottom:6px">Escala de tipo canônica</h3>
+      <p class="small muted" style="margin-bottom:6px">Hoje: tamanhos ad-hoc de 8 a 32px sem sistema. Proposta:</p>
+      <div class="typerow"><span class="meta">Display · 28/800</span><span style="font-size:28px;font-weight:800;letter-spacing:-.02em">Reel pronto</span></div>
+      <div class="typerow"><span class="meta">Title · 17/600</span><span style="font-size:17px;font-weight:600">Gerar avatares</span></div>
+      <div class="typerow"><span class="meta">Body · 13/500</span><span style="font-size:13px;font-weight:500">Texto do bloco e controles</span></div>
+      <div class="typerow" style="border:none"><span class="meta">Caption · 11/600</span><span style="font-size:11px;font-weight:600;color:var(--t3)">metadados · custo · duração</span></div>
+    </div>
+  </div>
+
+  <!-- Componentes dark + light -->
+  <h3 style="margin-bottom:14px">Componentes — dark e light, mesmo sistema</h3>
+  <div class="grid g2">
+    <div class="card">
+      <div class="small muted" style="margin-bottom:14px">DARK</div>
+      <div class="pillrow" style="margin-bottom:14px">
+        <span class="btn primary">Gerar áudio</span>
+        <span class="btn secondary">Avançado</span>
+        <span class="btn ghost">Cancelar</span>
+      </div>
+      <div class="blockcard">
+        <div class="toolbar" style="justify-content:space-between;margin-bottom:8px">
+          <span class="badge idle">👤 Avatar</span><span class="badge ok">Motion ✓</span>
+        </div>
+        <div class="txt">"O segredo que ninguém te conta sobre foco…"</div>
+        <div class="toolbar" style="justify-content:space-between;margin-top:10px"><span class="small muted">0:00 → 0:04 · 18 palavras</span><span class="btn primary sm">Gerar motion</span></div>
+      </div>
+    </div>
+    <div class="card light">
+      <div class="small muted" style="margin-bottom:14px">LIGHT</div>
+      <div class="pillrow" style="margin-bottom:14px">
+        <span class="btn primary">Gerar áudio</span>
+        <span class="btn secondary">Avançado</span>
+        <span class="btn ghost">Cancelar</span>
+      </div>
+      <div class="blockcard">
+        <div class="toolbar" style="justify-content:space-between;margin-bottom:8px">
+          <span class="badge idle">👤 Avatar</span><span class="badge ok">Motion ✓</span>
+        </div>
+        <div class="txt">"O segredo que ninguém te conta sobre foco…"</div>
+        <div class="toolbar" style="justify-content:space-between;margin-top:10px"><span class="small muted">0:00 → 0:04 · 18 palavras</span><span class="btn primary sm">Gerar motion</span></div>
+      </div>
+    </div>
+  </div>
+</div></section>
+
+<!-- 3. ECRÃS -->
+<section id="ecras"><div class="wrap">
+  <div class="sec-head">
+    <div class="eyebrow">03 — Redesign dos ecrãs</div>
+    <h2>Antes / Depois</h2>
+    <p class="lead">Recriado fiel ao app atual à esquerda; a proposta à direita. Mesmo app,
+    evoluído — não um app diferente.</p>
+  </div>
+
+  <!-- (a) Editor + trilha -->
+  <h3 style="margin:6px 0 14px">a) Editor — a trilha de produção vira a espinha</h3>
+  <div class="ba" style="margin-bottom:40px">
+    <div class="pane before"><div class="ph"><span class="pin r"></span>ANTES · MontarBar + modais espalhados</div>
+      <div class="body">
+        <div class="rail" style="margin-bottom:12px">
+          <div class="step"><div class="s-top"><span class="s-name">🎙 Áudio</span><span class="badge ok">✓</span></div><div class="track"><i style="width:100%"></i></div></div>
+          <div class="step" style="opacity:.5"><div class="s-top"><span class="s-name">🧑 Avatares</span><span class="badge idle">bloqueado</span></div><div class="track"><i style="width:0"></i></div></div>
+          <div class="step" style="opacity:.5"><div class="s-top"><span class="s-name">✨ Motions</span><span class="badge idle">bloqueado</span></div><div class="track"><i style="width:0"></i></div></div>
+        </div>
+        <div class="mk dense" style="margin-bottom:8px"><div class="toolbar" style="justify-content:space-between"><span class="small">Cada fase abre um <b>modal</b> diferente</span><span class="btn violet sm">Avatares ↗</span></div></div>
+        <div class="mk dense"><div class="toolbar" style="justify-content:space-between"><span class="small">…e motion também vive nos botões por bloco</span><span class="btn violet sm">Gerar motion ↗</span></div></div>
+        <ul class="notelist">
+          <li>Linear no conceito, espalhado na execução (modais + por-bloco + 6 abas).</li>
+          <li>Dá pra gerar motion antes do avatar → modelo mental quebra.</li>
+          <li>"E agora?" não tem resposta única na tela.</li>
+        </ul>
+      </div></div>
+    <div class="pane after"><div class="ph"><span class="pin g"></span>DEPOIS · trilha viva + 1 próximo passo</div>
+      <div class="body">
+        <div class="rail" style="margin-bottom:0">
+          <div class="step"><div class="s-top"><span class="s-name">🎙 Áudio</span><span class="badge ok">✓</span></div><div class="chips"><span class="chip ok">12,4s</span></div></div>
+          <div class="step active"><div class="s-top"><span class="s-name">🧑 Avatar</span><span class="badge run">2/3</span></div><div class="chips"><span class="chip ok">B1</span><span class="chip ok">B2</span><span class="chip run">B3</span></div></div>
+          <div class="step"><div class="s-top"><span class="s-name">✨ Motion</span><span class="badge idle">0/3</span></div><div class="chips"><span class="chip">B1</span><span class="chip">B2</span><span class="chip">B4</span></div></div>
+          <div class="step"><div class="s-top"><span class="s-name">⬇ Export</span><span class="badge idle">—</span></div><div class="chips"><span class="chip">MP4</span></div></div>
+        </div>
+        <div class="next">
+          <div><div class="lbl">Próximo passo</div><div class="ttl">Gerar avatar do bloco 3</div></div>
+          <span class="btn primary">Continuar</span>
+        </div>
+        <ul class="notelist">
+          <li>A trilha <b>é</b> a fonte da verdade: estado real e prontidão por bloco (B1, B2…).</li>
+          <li>Um único CTA "Próximo passo" — sem decidir onde clicar.</li>
+          <li>Etapas focam in-place; modais viram painéis contextuais.</li>
+        </ul>
+      </div></div>
+  </div>
+
+  <!-- (b) BlockCard -->
+  <h3 style="margin:6px 0 14px">b) BlockCard — do denso ao calmo</h3>
+  <div class="ba" style="margin-bottom:40px">
+    <div class="pane before"><div class="ph"><span class="pin r"></span>ANTES · 6 elementos disputando atenção</div>
+      <div class="body">
+        <div class="blockcard" style="border-color:var(--border-strong)">
+          <div class="toolbar" style="justify-content:space-between;margin-bottom:8px">
+            <div class="toolbar"><span class="btn secondary sm">👤 Avatar</span><span class="btn ghost sm">⇄ B-roll</span><span class="badge warn">Cover</span></div>
+            <span class="btn ghost sm">⋯</span>
+          </div>
+          <div class="txt" style="color:var(--t2)">"Digite o texto desse bloco…"</div>
+          <div class="toolbar" style="gap:8px;margin-top:10px">
+            <span class="btn violet sm">✨ Gerar motion</span>
+            <span class="btn secondary sm">📎 Anexar asset primeiro</span>
+          </div>
+          <div class="toolbar" style="justify-content:space-between;margin-top:10px">
+            <span class="small muted">0:00 → 0:04 · 4.0s · 18 palavras · $0.17</span>
+          </div>
+        </div>
+        <ul class="notelist">
+          <li>Kind toggle + ⋯ + motion + asset gate + custo + duração + contagem — tudo de uma vez.</li>
+          <li>"Anexar asset primeiro" sem dizer por quê (gate invisível).</li>
+          <li>Erro de motion só aparece no hover.</li>
+        </ul>
+      </div></div>
+    <div class="pane after"><div class="ph"><span class="pin g"></span>DEPOIS · texto + 1 ação, resto em hover</div>
+      <div class="body">
+        <div class="blockcard">
+          <div class="toolbar" style="justify-content:space-between;margin-bottom:9px">
+            <span class="badge idle">👤 Avatar · Cover</span>
+            <span class="badge ok">Motion ✓</span>
+          </div>
+          <div class="txt">"O segredo que ninguém te conta sobre foco profundo."</div>
+          <div class="toolbar" style="justify-content:space-between;margin-top:12px">
+            <span class="small muted">0:00 → 0:04</span>
+            <span class="btn secondary sm">Editar ⌄</span>
+          </div>
+        </div>
+        <ul class="notelist">
+          <li>Hierarquia: o <b>texto</b> é o herói; uma ação primária por estado.</li>
+          <li>Kind, layout, custo e asset vão pro "Editar" (disclosure) — aparecem quando precisa.</li>
+          <li>Status real no card (✓ / gerando / erro), não escondido em tooltip.</li>
+        </ul>
+      </div></div>
+  </div>
+
+  <!-- (c) MotionPicker -->
+  <h3 style="margin:6px 0 14px">c) Motion — de 15+ controles a 3 presets</h3>
+  <div class="ba" style="margin-bottom:40px">
+    <div class="pane before"><div class="ph"><span class="pin r"></span>ANTES · tudo exposto de uma vez</div>
+      <div class="body">
+        <div class="mk dense">
+          <div class="small" style="margin-bottom:8px;font-weight:600">Modo de cor · Estilo · Camada · Duração · Polish</div>
+          <div class="grid g3" style="gap:6px;margin-bottom:8px">
+            <span class="chip">dark</span><span class="chip">light</span><span class="chip">auto</span>
+            <span class="chip">glass</span><span class="chip">minimal</span><span class="chip">bold</span>
+            <span class="chip">overlay</span><span class="chip">split-top</span><span class="chip">replace</span>
+          </div>
+          <div class="grid g3" style="gap:6px">
+            <span class="chip">2s</span><span class="chip">4s</span><span class="chip">6s</span>
+            <span class="chip">grain</span><span class="chip">vignette</span><span class="chip">shimmer</span>
+          </div>
+          <div class="toolbar" style="margin-top:10px"><span class="btn violet sm">✨ Gerar com IA</span><span class="btn secondary sm">↻ Regenerar</span></div>
+        </div>
+        <ul class="notelist">
+          <li>15+ opções simultâneas → paralisia de análise.</li>
+          <li>"A IA escolhe a ideia" — razão só aparece <b>depois</b> de gerar.</li>
+          <li>Mudou a cor mas pode clicar "Aplicar" e sair errado.</li>
+        </ul>
+      </div></div>
+    <div class="pane after"><div class="ph"><span class="pin g"></span>DEPOIS · 3 presets + "Mais opções"</div>
+      <div class="body">
+        <div class="grid g3" style="gap:10px;margin-bottom:6px">
+          <div class="preset sel"><div class="pt">Dark Clean</div><div class="pd">fundo escuro, tipografia sóbria</div></div>
+          <div class="preset"><div class="pt">Light Bold</div><div class="pd">claro, alto contraste</div></div>
+          <div class="preset"><div class="pt">Vídeo</div><div class="pd">sobre o seu B-roll</div></div>
+        </div>
+        <div class="disclosure">⌄ Mais opções <span class="muted">(duração, camada, grão — escondidas)</span></div>
+        <div class="toolbar" style="margin-top:12px;justify-content:space-between">
+          <span class="small muted">Vai gerar: <b>Dark Clean</b>, 4s, overlay</span>
+          <span class="btn primary sm">Gerar</span>
+        </div>
+        <ul class="notelist">
+          <li>Presets agrupam combinações boas; avançado atrás de disclosure.</li>
+          <li>Mostra a escolha <b>antes</b> de gerar (sem surpresa).</li>
+          <li>Um botão "Gerar" que entende o estado (novo vs regenerar).</li>
+        </ul>
+      </div></div>
+  </div>
+
+  <!-- (d) Export -->
+  <h3 style="margin:6px 0 14px">d) Export — progresso honesto</h3>
+  <div class="ba">
+    <div class="pane before"><div class="ph"><span class="pin r"></span>ANTES · spinner sem ETA, ajuste escondido</div>
+      <div class="body">
+        <div class="mk dense" style="text-align:center;padding:26px">
+          <div class="spinner"></div>
+          <div class="small" style="margin-top:12px;font-weight:600">Renderizando seu reel…</div>
+          <div class="small muted" style="margin-top:4px">(sem % nem tempo · pode estar travado?)</div>
+        </div>
+        <ul class="notelist">
+          <li>progress.percent pode ser null → barra vazia.</li>
+          <li>Reescala blocos pra bater com o áudio <b>sem avisar</b> (duração final muda).</li>
+          <li>Sem preview do resultado antes de gastar 2–5 min.</li>
+        </ul>
+      </div></div>
+    <div class="pane after"><div class="ph"><span class="pin g"></span>DEPOIS · % real, ETA e transparência</div>
+      <div class="body">
+        <div class="mk dense" style="padding:18px">
+          <div class="toolbar" style="justify-content:space-between;margin-bottom:8px"><span class="small" style="font-weight:600">Renderizando · 1080p</span><span class="small muted">62% · ~40s restantes</span></div>
+          <div class="track"><i style="width:62%"></i></div>
+          <div class="toolbar" style="justify-content:space-between;margin-top:12px">
+            <span class="badge warn">Áudio 12,4s → ajustei 2 blocos (+0,3s)</span>
+            <span class="btn secondary sm">Cancelar</span>
+          </div>
+        </div>
+        <ul class="notelist">
+          <li>% verdadeira + ETA calculado; botão cancelar sempre acessível.</li>
+          <li>O ajuste de duração aparece como aviso claro, não escondido no log.</li>
+          <li>Preview de 20s antes do render completo (próxima wave).</li>
+        </ul>
+      </div></div>
+  </div>
+</div></section>
+
+<!-- 4. FLUXO -->
+<section id="fluxo"><div class="wrap">
+  <div class="sec-head">
+    <div class="eyebrow">04 — Fluxo de criação</div>
+    <h2>Do onboarding ao export, com menos atrito</h2>
+    <p class="lead">Mesmas etapas, menos decisões — defaults inteligentes e disclosure progressivo
+    cortam de ~29 escolhas pra ~12. Os números mostram decisões por etapa (antes → depois).</p>
+  </div>
+  <div class="flowsteps">
+    <div class="fstep"><div class="fn">01</div><div class="fname">Roteiro</div><div class="fd"><span class="was">4</span> <span class="now">2</span></div></div>
+    <div class="fstep"><div class="fn">02</div><div class="fname">Áudio + Voz</div><div class="fd"><span class="was">3</span> <span class="now">1</span></div></div>
+    <div class="fstep"><div class="fn">03</div><div class="fname">Corte silêncio</div><div class="fd"><span class="was">1</span> <span class="now">0</span></div></div>
+    <div class="fstep"><div class="fn">04</div><div class="fname">Avatar</div><div class="fd"><span class="was">2</span> <span class="now">1</span></div></div>
+    <div class="fstep"><div class="fn">05</div><div class="fname">Motion ×blocos</div><div class="fd"><span class="was">17</span> <span class="now">6</span></div></div>
+    <div class="fstep"><div class="fn">06</div><div class="fname">Export</div><div class="fd"><span class="was">2</span> <span class="now">2</span></div></div>
+  </div>
+  <div class="legend">
+    <span><span class="badge idle">defaults</span> corte de silêncio aplicado automático no preset seguro</span>
+    <span><span class="badge idle">presets</span> motion em lote com 1 estilo por padrão</span>
+    <span><span class="badge ok">preservado</span> voz: tom, idioma, reescrita e simplicidade <b>continuam 100%</b></span>
+  </div>
+
+  <div class="card" style="margin-top:18px;border-color:rgba(34,197,94,.35);background:linear-gradient(180deg,rgba(34,197,94,.07),transparent)">
+    <div class="toolbar" style="justify-content:space-between;align-items:flex-start">
+      <div>
+        <h3 style="margin-bottom:6px">🔒 Tom &amp; idioma da voz — intocáveis</h3>
+        <p style="font-size:14px;color:var(--t2)">Os 4 controles atuais (idioma · nível de reescrita · simplicidade · instruções) <b>permanecem como estão</b>. Nenhum vira preset obrigatório. Se houver atalho de tom, é <b>opcional</b> e só pré-preenche — os controles completos seguem sempre disponíveis e editáveis.</p>
+      </div>
+      <span class="badge ok">não muda</span>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:32px;background:linear-gradient(180deg,rgba(34,197,94,.08),transparent)">
+    <h3>O caminho feliz, em 1 frase</h3>
+    <p style="font-size:15px;color:var(--t1);margin-top:6px">Cola o conteúdo → revisa o roteiro → <b>Continuar</b> (áudio + corte automáticos) → <b>Continuar</b> (avatares) → <b>Continuar</b> (motion em lote) → <b>Exportar</b>. A trilha sempre diz o próximo passo; o avançado fica a um clique, nunca no caminho.</p>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Mockup de auditoria · Reels Studio · nada no app foi alterado nesta wave.<br>
+  Próximas ondas (após sua aprovação): de-purple + tipografia · progresso honesto · presets · trilha de produção · cards calmos.
+</div></footer>
+
+</body>
+</html>

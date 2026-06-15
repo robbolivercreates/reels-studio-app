@@ -4,6 +4,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   STYLE_PRESETS,
   NATIVE_PRESET_IDS,
+  TEMPLATE_PRESET_IDS,
   findStylePreset,
   type StylePresetId,
 } from './motionStylePresets';
@@ -14,7 +15,7 @@ import {
   newMotionId,
 } from './motionLibrary';
 import { generateMotionHtml, buildFullHtmlDoc, getActiveMotionModel, getMotionModelLabel } from '../../services/motionService';
-import type { ScriptBlock, MotionColorMode, AppTheme } from './types';
+import type { ScriptBlock, MotionColorMode, AppTheme, ScreenTake } from './types';
 import { useTheme } from './useTheme';
 import { loadUserIdentity } from './userIdentity';
 
@@ -35,6 +36,9 @@ interface Props {
   motionEnergy?: 'minimal' | 'energetic';
   /** App UI theme — modal chrome respects this. */
   appTheme: AppTheme;
+  /** Active B-roll/take — shown as background in the preview so the user can
+   * see how the motion composites on top of their uploaded video. */
+  activeTake?: ScreenTake | null;
   onClose: () => void;
   onSave: (motion: MotionConfig | undefined) => void;
 }
@@ -54,7 +58,7 @@ const deriveDefaultText = (blockText: string): string => {
   return sentence.slice(0, 60).split(' ').slice(0, -1).join(' ') + '…';
 };
 
-export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandIdentity, onBrandLearned, motionColorMode, onSetMotionColorMode, motionEnergy, appTheme, onClose, onSave }) => {
+export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandIdentity, onBrandLearned, motionColorMode, onSetMotionColorMode, motionEnergy, appTheme, activeTake, onClose, onSave }) => {
   const tokens = useTheme(appTheme);
   // Existing motion or fresh draft.
   const initial: MotionConfig = useMemo(() => {
@@ -229,8 +233,9 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
 
   const handleGenerate = async () => {
     const isNative = NATIVE_PRESET_IDS.includes(motion.presetId);
+    const isTemplate = TEMPLATE_PRESET_IDS.includes(motion.presetId as never);
     setError(null);
-    setBusy(isNative ? 'Gerando motion nativo…' : 'Gemini lendo o bloco e criando o motion…');
+    setBusy(isNative ? 'Gerando motion nativo…' : isTemplate ? 'Preenchendo template + buscando logos…' : 'Gemini lendo o bloco e criando o motion…');
     try {
       const result = await generateMotionHtml({
         presetId: motion.presetId,
@@ -453,7 +458,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
               <button
                 onClick={applyFollowPreset}
                 disabled={!!busy}
-                className="px-3 py-1 rounded-md text-[11px] font-semibold bg-violet-500 hover:bg-violet-400 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
+                className="px-3 py-1 rounded-md text-[11px] font-semibold bg-blue-500 hover:bg-blue-400 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
               >
                 {busy ? 'Aplicando…' : 'Aplicar e gerar'}
               </button>
@@ -541,50 +546,16 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
               )}
             </div>
 
-            {/* Style preset — always visible, single source of truth */}
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.18em] mb-2" style={{ color: tokens.text.tertiary }}>
-                Estilo base
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {STYLE_PRESETS.filter(p => !isHidden(p.id)).map(p => {
-                  const isSelected = motion.presetId === p.id;
-                  const willInvert = motionColorMode === 'light' && p.bgType === 'dark';
-                  const isWarm = p.bgType === 'warm';
-                  return (
-                    <button
-                      key={p.id}
-                      onClick={() => patch('presetId', p.id as StylePresetId)}
-                      className="text-left px-3 py-2.5 rounded-lg transition-colors relative"
-                      style={{
-                        backgroundColor: isSelected ? tokens.bg.active : tokens.bg.hover,
-                        border: `1px solid ${isSelected ? tokens.accent.focus : tokens.border.subtle}`,
-                      }}
-                      title={p.bestFor}
-                    >
-                      <div className="text-xs font-medium flex items-center gap-1.5" style={{ color: tokens.text.primary }}>
-                        <span>{p.emoji}</span>
-                        <span>{p.label}</span>
-                      </div>
-                      <div className="text-[10px] mt-0.5 leading-snug line-clamp-2" style={{ color: tokens.text.secondary }}>
-                        {p.description}
-                      </div>
-                      {(willInvert || isWarm) && (
-                        <div
-                          className="absolute top-1.5 right-1.5 text-[9px] px-1.5 py-0.5 rounded"
-                          style={{
-                            backgroundColor: tokens.bg.elevated,
-                            color: tokens.text.tertiary,
-                            border: `1px solid ${tokens.border.subtle}`,
-                          }}
-                        >
-                          {willInvert ? '☀ invertido' : '⊙ quente'}
-                        </div>
-                      )}
-                    </button>
-                  );
-                })}
-              </div>
+            {/* Visual/colocação agora vivem SÓ no Motion Dock — este modal é a
+                edição avançada (texto, ideia, polish, preview, render). O preset
+                atual aparece como referência somente-leitura. */}
+            <div
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-[11px]"
+              style={{ backgroundColor: tokens.bg.hover, border: `1px solid ${tokens.border.subtle}`, color: tokens.text.secondary }}
+            >
+              <span>{preset.emoji}</span>
+              <span className="font-medium" style={{ color: tokens.text.primary }}>{preset.label}</span>
+              <span className="ml-auto text-[9.5px]" style={{ color: tokens.text.tertiary }}>visual escolhido no painel Motion</span>
             </div>
 
             {/* Editar texto e ideia — collapsed disclosure */}
@@ -617,6 +588,8 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
                   </label>
                   <textarea
                     value={motion.intent}
+                    spellCheck={false}
+                    autoCorrect="off"
                     onChange={e => patch('intent', e.target.value)}
                     rows={3}
                     placeholder='Ex: "engrenagem girando + raio cruzando"'
@@ -676,8 +649,8 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
               </div>
             )}
 
-            {/* Duration + layer */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Duration — placement/camada agora vive no Motion Dock */}
+            <div>
               <div>
                 <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
                   Duração
@@ -685,43 +658,19 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
                 <select
                   value={motion.durationSec}
                   onChange={e => patch('durationSec', parseInt(e.target.value, 10))}
-                  className="w-full px-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-violet-400/50"
+                  className="w-full px-2 py-1.5 rounded-md bg-black/40 border border-white/10 text-xs text-zinc-100 outline-none focus:border-blue-400/50"
                 >
                   {[2, 3, 4, 5, 6, 8].map(s => (
                     <option key={s} value={s}>{s}s</option>
                   ))}
                 </select>
               </div>
-              <div>
-                <label className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 block mb-1.5">
-                  Camada
-                </label>
-                <div className="flex flex-col gap-1">
-                  {([
-                    { value: 'overlay',      label: 'Sobre o vídeo',     desc: 'screen blend — mistura com o avatar', icon: '🔀' },
-                    { value: 'replace',      label: 'Frame inteiro',      desc: 'substitui tudo — sem avatar', icon: '🖼️' },
-                    { value: 'split-bottom', label: 'Avatar cima / Motion baixo', desc: 'split 50/50 vertical', icon: '⬆️' },
-                    { value: 'split-top',    label: 'Motion cima / Avatar baixo', desc: 'split 50/50 vertical', icon: '⬇️' },
-                  ] as { value: MotionLayer; label: string; desc: string; icon: string }[]).map(opt => (
-                    <button
-                      key={opt.value}
-                      onClick={() => patch('layer', opt.value)}
-                      className={`text-left px-2.5 py-2 rounded-md border transition-colors flex items-center gap-2 ${
-                        motion.layer === opt.value
-                          ? 'bg-fuchsia-500/15 border-fuchsia-500/40 text-zinc-100'
-                          : 'bg-black/20 border-white/10 hover:border-white/20 text-zinc-400'
-                      }`}
-                    >
-                      <span className="text-base">{opt.icon}</span>
-                      <div>
-                        <div className="text-[11px] font-medium leading-tight">{opt.label}</div>
-                        <div className="text-[9px] text-zinc-500 leading-tight">{opt.desc}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
             </div>
+
+
+
+
+
 
             {/* Premium polish — film grain, vignette, shimmer toggles. Universal overlays. */}
             {!NATIVE_PRESET_IDS.includes(motion.presetId) && (
@@ -740,7 +689,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
                         onClick={() => patch('overlays', { ...motion.overlays, [opt.key]: !on })}
                         className={`text-left px-2.5 py-1.5 rounded-md border transition-colors text-[10px] ${
                           on
-                            ? 'bg-fuchsia-500/15 border-fuchsia-500/40 text-zinc-100'
+                            ? 'bg-blue-500/15 border-blue-500/40 text-zinc-100'
                             : 'bg-black/20 border-white/10 hover:border-white/20 text-zinc-400'
                         }`}
                         title={opt.desc}
@@ -783,17 +732,19 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
               <button
                 onClick={handleGenerate}
                 disabled={!!busy}
-                className="w-full py-2.5 rounded-lg bg-gradient-to-b from-violet-500 to-violet-600 hover:from-violet-400 hover:to-violet-500 text-xs font-semibold text-white shadow-[0_0_15px_rgba(124,58,237,0.4)] disabled:opacity-40 transition-all"
+                className="w-full py-2.5 rounded-lg bg-gradient-to-b from-blue-500 to-blue-600 hover:from-blue-400 hover:to-blue-500 text-xs font-semibold text-white shadow-[0_0_15px_rgba(10,132,255,0.4)] disabled:opacity-40 transition-all"
               >
                 {NATIVE_PRESET_IDS.includes(motion.presetId)
                   ? (motion.html ? '↻ Regenerar (nativo)' : '⚡ Gerar (nativo)')
-                  : (motion.html ? '↻ Regenerar com IA' : '✨ Gerar com IA')}
+                  : TEMPLATE_PRESET_IDS.includes(motion.presetId as never)
+                    ? (motion.html ? '↻ Regenerar (template)' : '⚡ Gerar com template')
+                    : (motion.html ? '↻ Regenerar com IA' : '✨ Gerar com IA')}
               </button>
               {motion.html && (
                 <button
                   onClick={handleRender}
                   disabled={!!busy}
-                  className="w-full py-2.5 rounded-lg bg-fuchsia-500 hover:bg-fuchsia-400 text-xs font-semibold text-white shadow-[0_0_15px_rgba(217,70,239,0.4)] disabled:opacity-40 transition-all"
+                  className="w-full py-2.5 rounded-lg bg-blue-500 hover:bg-blue-400 text-xs font-semibold text-white shadow-[0_0_15px_rgba(10,132,255,0.4)] disabled:opacity-40 transition-all"
                 >
                   🎨 Renderizar pra MP4
                 </button>
@@ -802,7 +753,7 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
 
             {/* Status / progress */}
             {busy && (
-              <div className="text-[11px] text-violet-300 bg-violet-500/10 border border-violet-500/30 rounded-lg p-2.5">
+              <div className="text-[11px] text-blue-300 bg-blue-500/10 border border-blue-500/30 rounded-lg p-2.5">
                 {busy}
               </div>
             )}
@@ -834,14 +785,14 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
               <button
                 onClick={() => setPreviewMode('live')}
                 disabled={!motion.html}
-                className={`px-2 py-1 rounded ${previewMode === 'live' ? 'bg-violet-500/20 text-violet-100 border border-violet-400/40' : 'text-zinc-400 hover:text-zinc-200 border border-transparent'} disabled:opacity-30`}
+                className={`px-2 py-1 rounded ${previewMode === 'live' ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40' : 'text-zinc-400 hover:text-zinc-200 border border-transparent'} disabled:opacity-30`}
               >
                 ✨ Ao vivo
               </button>
               <button
                 onClick={() => setPreviewMode('mp4')}
                 disabled={!motion.videoPath}
-                className={`px-2 py-1 rounded ${previewMode === 'mp4' ? 'bg-fuchsia-500/20 text-fuchsia-100 border border-fuchsia-400/40' : 'text-zinc-400 hover:text-zinc-200 border border-transparent'} disabled:opacity-30`}
+                className={`px-2 py-1 rounded ${previewMode === 'mp4' ? 'bg-blue-500/20 text-blue-100 border border-blue-400/40' : 'text-zinc-400 hover:text-zinc-200 border border-transparent'} disabled:opacity-30`}
               >
                 🎥 MP4 renderizado
               </button>
@@ -854,13 +805,35 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
                 const previewH = is45 ? 400 : 640;
                 const canvasH = is45 ? 1350 : 1920;
                 const scale = previewW / 1080;
+                // Show take as background when available. For overlay mode, screen-blend
+                // the iframe so the motion's black bg becomes transparent (matching export).
+                // For split modes, the take fills the opposite half.
+                const hasTake = !!activeTake && motion.layer !== 'replace';
                 return (
-                  <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: previewW, height: previewH }}>
+                  <div className="rounded-lg overflow-hidden border border-white/10 bg-black relative" style={{ width: previewW, height: previewH }}>
+                    {hasTake && (() => {
+                      let takeStyle: React.CSSProperties = { position: 'absolute', objectFit: 'cover' };
+                      if (motion.layer === 'overlay') {
+                        takeStyle = { ...takeStyle, inset: 0, width: '100%', height: '100%' };
+                      } else if (motion.layer === 'split-bottom') {
+                        takeStyle = { ...takeStyle, left: 0, top: 0, width: '100%', height: '50%' };
+                      } else if (motion.layer === 'split-top') {
+                        takeStyle = { ...takeStyle, left: 0, top: '50%', width: '100%', height: '50%' };
+                      }
+                      return <video key={activeTake!.id} src={activeTake!.url} loop muted autoPlay playsInline style={takeStyle} />;
+                    })()}
                     <iframe
                       ref={iframeRef}
                       title="motion preview"
                       sandbox="allow-scripts allow-same-origin"
-                      style={{ width: 1080, height: canvasH, border: 'none', transform: `scale(${scale})`, transformOrigin: 'top left' }}
+                      style={{
+                        width: 1080, height: canvasH, border: 'none',
+                        transform: `scale(${scale})`, transformOrigin: 'top left',
+                        position: 'relative', zIndex: 1,
+                        // Screen blend makes the motion's dark background transparent
+                        // over the take video, matching the actual export compositing.
+                        mixBlendMode: (hasTake && motion.layer === 'overlay') ? 'screen' : 'normal',
+                      }}
                     />
                   </div>
                 );
@@ -869,15 +842,35 @@ export const MotionPickerModal: React.FC<Props> = ({ block, isLastBlock, brandId
                 const is45 = motion.canvasAspect === '4:5';
                 const previewW = is45 ? 320 : 360;
                 const previewH = is45 ? 400 : 640;
+                const hasTake = !!activeTake && motion.layer !== 'replace';
                 return (
-                  <div className="rounded-lg overflow-hidden border border-white/10 bg-black" style={{ width: previewW, height: previewH }}>
-                    <video src={mp4Url} controls autoPlay loop muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  <div className="rounded-lg overflow-hidden border border-white/10 bg-black relative" style={{ width: previewW, height: previewH }}>
+                    {hasTake && (() => {
+                      let takeStyle: React.CSSProperties = { position: 'absolute', objectFit: 'cover' };
+                      if (motion.layer === 'overlay') {
+                        takeStyle = { ...takeStyle, inset: 0, width: '100%', height: '100%' };
+                      } else if (motion.layer === 'split-bottom') {
+                        takeStyle = { ...takeStyle, left: 0, top: 0, width: '100%', height: '50%' };
+                      } else if (motion.layer === 'split-top') {
+                        takeStyle = { ...takeStyle, left: 0, top: '50%', width: '100%', height: '50%' };
+                      }
+                      return <video key={activeTake!.id} src={activeTake!.url} loop muted autoPlay playsInline style={takeStyle} />;
+                    })()}
+                    <video
+                      src={mp4Url}
+                      controls autoPlay loop muted
+                      style={{
+                        width: '100%', height: '100%', objectFit: 'cover',
+                        position: 'relative', zIndex: 1,
+                        mixBlendMode: (hasTake && motion.layer === 'overlay') ? 'screen' : 'normal',
+                      }}
+                    />
                   </div>
                 );
               })()}
               {!motion.html && (
                 <div className="text-zinc-500 text-sm text-center max-w-xs leading-relaxed">
-                  Preencha a ideia + texto à esquerda e clique <span className="text-violet-300">✨ Gerar com IA</span> pra criar o motion.
+                  Preencha a ideia + texto à esquerda e clique <span className="text-blue-300">✨ Gerar com IA</span> pra criar o motion.
                 </div>
               )}
               {motion.html && previewMode === 'mp4' && !mp4Url && (
