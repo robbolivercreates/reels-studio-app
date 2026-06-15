@@ -310,6 +310,21 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
   // state change so they always close over the latest snapshot.
   useEffect(() => {
     if (!hydratedRef.current) return;
+    // Don't persist an UNTOUCHED draft (no project id yet AND zero content):
+    // a fresh INITIAL_STATE carries one empty block, so without this guard the
+    // cold-start AND the "deleted my last project" reset would silently
+    // auto-create a phantom "Reel · …" entry — the user deletes a project and
+    // a blank one immediately reappears in the list ("não some / não deleta").
+    // The moment real content exists (typed text, audio, takes, overlays,
+    // clips) it saves and adopts an id exactly as before.
+    const isUntouchedDraft =
+      state.activeProjectId === null &&
+      state.audio.status !== 'ready' && !state.audio.url &&
+      state.takes.length === 0 &&
+      (state.overlayElements?.length ?? 0) === 0 &&
+      Object.keys(state.avatarClips ?? {}).length === 0 &&
+      state.blocks.every(b => !b.text.trim());
+    if (isUntouchedDraft) { setSaving(false); return; }
     setSaving(true);
     const handle = setTimeout(async () => {
       try {

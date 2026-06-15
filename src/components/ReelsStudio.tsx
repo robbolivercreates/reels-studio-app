@@ -1153,10 +1153,17 @@ export const ReelsStudio: React.FC = () => {
         const list = (await listNamedProjects()).filter(p => p.id !== id);
         if (list.length > 0) {
           console.log('[projects/delete] projeto ativo — trocando para', list[0].id, 'antes de apagar');
-          await handleLoadNamedProject(list[0].id);
+          await handleLoadNamedProject(list[0].id); // closes the modal + appView 'editor'
         } else {
-          console.log('[projects/delete] projeto ativo e único — criando novo antes de apagar');
+          // Last project deleted: reset to a clean draft and land on the HUB
+          // (Abrir/Novo/Editar vídeo) instead of a blank 1-empty-block editor
+          // (the "tela em branco"). The untouched draft is NOT auto-saved
+          // (persistence guard), so nothing reappears in the list.
+          console.log('[projects/delete] projeto ativo e único — voltando pra tela inicial');
           await handleNewProject();
+          setProjectsOpen(false);
+          setLandingDismissible(false);
+          setAppView('landing');
         }
       }
       await deleteNamedProject(id);
