@@ -10,6 +10,7 @@ import {
   saveNamedProject,
   loadNamedProject,
   listNamedProjects,
+  deleteNamedProject,
   type PersistedProject,
 } from './persistence';
 import { computePeaks } from './audioEngine';
@@ -437,7 +438,20 @@ export const useReelsPersistence = ({ state, dispatch, onHydrated }: Options) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.audio.url, state.audio.status, state.audio.cutsApplied]);
 
-  const clearProject = async (): Promise<void> => {
+  const clearProject = async (opts?: { deleteActiveNamed?: boolean }): Promise<void> => {
+    // "Limpar projeto atual" must actually REMOVE the current project. The
+    // legacy clearAllProjectData only wipes the old 'current' slot + global
+    // blobs — it never touched the named_projects store (where projects live
+    // today), so the project reloaded on the next boot ("limpei e não sumiu").
+    // Drop the named record AND the active-id pointer so the post-reload boot
+    // lands on the hub (appView reads activeProjectId from localStorage), not a
+    // blank editor pointing at a project whose media we just deleted.
+    if (opts?.deleteActiveNamed) {
+      if (state.activeProjectId) {
+        try { await deleteNamedProject(state.activeProjectId); } catch { /* non-fatal */ }
+      }
+      try { window.localStorage.removeItem(ACTIVE_PROJECT_KEY); } catch { /* ignore */ }
+    }
     await clearAllProjectData();
     setSavedAt(null);
   };

@@ -6871,7 +6871,11 @@ export const ReelsStudio: React.FC = () => {
                 onClick={async () => {
                   setClearing(true);
                   try {
-                    await clearProject();
+                    // 'clear' = "Limpar projeto atual" → actually delete the
+                    // active named project (and drop the active-id) so it
+                    // doesn't resurrect on reload. 'new' keeps the current
+                    // project saved (only fences off to start a fresh one).
+                    await clearProject({ deleteActiveNamed: confirmClearMode === 'clear' });
                     // For "new project", stamp a unique name so the new
                     // project gets its OWN assets dir
                     // (`~/Reels Studio/Projects/<unique>/Assets/`).
