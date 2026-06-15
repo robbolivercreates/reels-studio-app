@@ -30,6 +30,13 @@ export interface DirectorBlockInput {
   durationSec: number;
   /** Block-LOCAL word timestamps (seconds from block start), downsampled. */
   words?: { word: string; start: number; end: number }[];
+  /**
+   * Resolved placement area for this block's motion. Full-frame templates may
+   * ONLY land on full-frame scenes — a template over a float/split would
+   * plaster a 1080×1920 layout over the speaker's face. Float/half blocks get
+   * freeform art authored inside the safe zone.
+   */
+  placementArea?: 'float' | 'top-half' | 'bottom-half' | 'full';
 }
 
 export interface DirectorPlanItem {
@@ -40,6 +47,15 @@ export interface DirectorPlanItem {
   styleHint?: string;
   /** Template variable fill (only when templateId is set). */
   variables?: Record<string, string>;
+  /**
+   * Concrete description of WHAT appears on screen — the object / UI / number /
+   * metaphor that ILLUSTRATES the spoken idea (never the sentence itself).
+   * Forwarded to the per-block generator as authoritative direction so each
+   * motion follows the whole-reel plan instead of re-deriving in isolation.
+   */
+  visualConcept?: string;
+  /** Distilled on-screen headline: 1-3 words, or empty when the visual stands alone. */
+  heroText?: string;
   /** Block-local second where the motion appears (keyword-anchored). */
   startOffsetSec: number;
   /** Visible window, 3–8s clamped to the block. */
@@ -88,11 +104,12 @@ export const planMotionsForScript = async (input: {
   const ai = new GoogleGenAI({ apiKey: getApiKey() });
 
   // Templates are full-frame DESIGNS — only blocks whose motion owns the
-  // whole frame (kind 'broll' / full placement) may use them. Avatar/float
-  // blocks always get freeform art authored inside the face-safe zone
-  // (a template routed into a float plasters a 1080×1920 layout over the
-  // speaker's face).
-  const hasFullFrameBlocks = input.blocks.some(b => b.kind === 'broll') && !input.overlayContext;
+  // whole frame may use them. A block is full-frame when it's kind 'broll' OR
+  // its resolved placement is 'full'. Avatar/float/half blocks always get
+  // freeform art authored inside the face-safe zone (a template routed into a
+  // float plasters a 1080×1920 layout over the speaker's face).
+  const isFullFrameBlock = (b: DirectorBlockInput) => b.kind === 'broll' || b.placementArea === 'full';
+  const hasFullFrameBlocks = input.blocks.some(isFullFrameBlock) && !input.overlayContext;
   const availableTemplates = hasFullFrameBlocks ? TEMPLATE_SELECTION_CATALOG : [];
   const validTemplateIds = availableTemplates.map(t => t.id);
 
@@ -110,7 +127,8 @@ export const planMotionsForScript = async (input: {
     const words = b.words && b.words.length > 0
       ? `\n  palavras: ${sampleWords(b.words).map(w => `"${w.word}"@${w.start.toFixed(1)}s`).join(' ')}`
       : '';
-    return `[${b.id}] (${b.kind}, ${b.startSec.toFixed(1)}s→${(b.startSec + b.durationSec).toFixed(1)}s, dura ${b.durationSec.toFixed(1)}s): "${b.text}"${words}`;
+    const tela = b.placementArea ?? (b.kind === 'broll' ? 'full' : 'float');
+    return `[${b.id}] (${b.kind}, tela=${tela}, ${b.startSec.toFixed(1)}s→${(b.startSec + b.durationSec).toFixed(1)}s, dura ${b.durationSec.toFixed(1)}s): "${b.text}"${words}`;
   }).join('\n');
 
   const prompt = [
@@ -126,13 +144,21 @@ export const planMotionsForScript = async (input: {
     input.continuousCoverage
       ? ''
       : '• ANCORE cada motion na palavra-chave: startOffsetSec = tempo (local do bloco) onde a palavra-chave é falada. O motion entra QUANDO a ideia é dita, nunca antes.',
-    '• Blocos B-ROLL: o motion É o conteúdo (tela cheia) — startOffsetSec=0 e durationSec = duração total do bloco.',
-    '• Blocos AVATAR: o motion flutua sobre o apresentador — janela curta ancorada na palavra. templateId SEMPRE null nesses blocos (templates são designs de tela cheia e cobririam o rosto): escolha um styleHint.',
-    '• Varie o visual entre blocos consecutivos (nunca o mesmo template 2× seguidas).',
-    '• Seja conservador com templates (só em blocos B-ROLL): escolha um apenas quando o conteúdo pede EXATAMENTE aquele visual; senão templateId=null e um styleHint.',
+    '• Cenas TELA CHEIA (tela=full): o motion É o conteúdo — startOffsetSec=0 e durationSec = duração total do bloco. SÓ essas cenas podem usar templateId.',
+    '• Cenas FLUTUANTE/METADE (tela=float/top-half/bottom-half): o motion fica sobre o apresentador — templateId SEMPRE null (templates são designs de tela cheia e cobririam o rosto): escolha um styleHint e descreva um visualConcept compacto.',
+    '• Varie o ELEMENTO de destaque entre cenas vizinhas (nunca o mesmo template/herói 2× seguidas) — mas mantenha a MESMA família visual (cores, tipografia).',
+    '• Seja conservador com templates: escolha um só quando o conteúdo pede EXATAMENTE aquele visual; senão templateId=null + styleHint.',
     input.overlayContext
       ? '• CONTEXTO OVERLAY: tudo flutua sobre vídeo real de talking-head via screen-blend — elementos compactos, nunca cobrindo o rosto.'
       : '',
+    '',
+    'COERÊNCIA NARRATIVA (o reel é UMA história, não cenas soltas — isso é o mais importante):',
+    '• Trate o reel como um arco: gancho → desenvolvimento → fecho/CTA. Cada cena puxa a próxima; a sequência de visuais deve fazer sentido junta.',
+    '• Quando o tema permitir, repita um MOTIVO VISUAL ao longo do reel (ex.: tema "limpar o PC" → metáfora de limpeza/lixeira/disco esvaziando recorrente). Os visuais conversam entre si, não são ilhas.',
+    '',
+    'PARA CADA CENA, além de template/estilo e tempo, defina:',
+    '• visualConcept: O QUE APARECE NA TELA, concreto — o objeto / UI / número / metáfora ANIMADA que ILUSTRA a ideia falada. Descreva a IMAGEM, nunca repita a frase. Ex.: fala "recuperei 21GB no PC" → visualConcept "barra de disco esvaziando enquanto um contador sobe de 0 a 21GB".',
+    '• heroText: 1-3 palavras de impacto destiladas da fala (ou VAZIO se o visual fala sozinho). NUNCA a frase inteira — o espectador já ouve o áudio. Ex.: "21GB LIVRES".',
     '',
     `ROTEIRO COMPLETO:\n${input.scriptText}`,
     '',
@@ -144,7 +170,7 @@ export const planMotionsForScript = async (input: {
     'Para templates: preencha TODAS as variáveis com base no conteúdo do bloco (mesma língua do roteiro' + (input.outputLanguage ? ` — ${input.outputLanguage}` : '') + ', fiel aos fatos, não invente números).',
     '',
     'Responda SOMENTE com JSON válido:',
-    '{"plan":[{"blockId":"...","templateId":"<id ou null>","styleHint":"<id ou null>","variables":{...},"startOffsetSec":0.0,"durationSec":0.0,"rationale":"<1 frase>"}]}',
+    '{"plan":[{"blockId":"...","templateId":"<id ou null>","styleHint":"<id ou null>","variables":{...},"visualConcept":"<o que aparece na tela — concreto, ILUSTRA a ideia, NÃO a frase>","heroText":"<1-3 palavras ou vazio>","startOffsetSec":0.0,"durationSec":0.0,"rationale":"<1 frase>"}]}',
   ].filter(Boolean).join('\n');
 
   for (const model of getModelCandidates(input.preferredModel)) {
@@ -162,6 +188,8 @@ export const planMotionsForScript = async (input: {
           templateId?: string | null;
           styleHint?: string | null;
           variables?: Record<string, string>;
+          visualConcept?: string;
+          heroText?: string;
           startOffsetSec?: number;
           durationSec?: number;
           rationale?: string;
@@ -176,8 +204,8 @@ export const planMotionsForScript = async (input: {
         if (!block) continue;
         const blockDur = block.durationSec;
         // Hard gate regardless of what the model answered: templates only on
-        // full-frame ('broll') blocks.
-        const templateId = block.kind === 'broll' && item.templateId && validTemplateIds.includes(item.templateId)
+        // full-frame scenes (kind 'broll' OR resolved placement 'full').
+        const templateId = isFullFrameBlock(block) && item.templateId && validTemplateIds.includes(item.templateId)
           ? item.templateId
           : null;
         const styleHint = !templateId && item.styleHint && (STYLE_PRESET_IDS as readonly string[]).includes(item.styleHint)
@@ -195,11 +223,20 @@ export const planMotionsForScript = async (input: {
           const maxDur = blockDur - startOffsetSec;
           durationSec = clamp(item.durationSec ?? maxDur, Math.min(3, maxDur), Math.min(8, maxDur));
         }
+        // Distil hero text defensively even if the model over-wrote: keep at
+        // most the first 4 words so it can never become the full sentence.
+        const heroText = typeof item.heroText === 'string'
+          ? item.heroText.trim().split(/\s+/).filter(Boolean).slice(0, 4).join(' ')
+          : undefined;
         out.set(block.id, {
           blockId: block.id,
           templateId,
           styleHint,
           variables: templateId ? (item.variables ?? {}) : undefined,
+          visualConcept: typeof item.visualConcept === 'string' && item.visualConcept.trim()
+            ? item.visualConcept.trim()
+            : undefined,
+          heroText: heroText || undefined,
           startOffsetSec,
           durationSec,
           rationale: item.rationale ?? '',

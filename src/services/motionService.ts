@@ -163,7 +163,7 @@ const SYSTEM_PROMPT = `You are a senior motion designer at a top studio (Buck, O
 
 Your output is HyperFrames-compatible HTML — the BODY ONLY (everything inside the root container, plus the closing <script>). No <html>, <head>, <body>, no <div id="root"> wrapper.
 
-The piece is CANVAS_SIZE_PLACEHOLDER, 30fps, playing for the block's duration. A narrator is speaking; auto-captions are burned in later. Your motion ELEVATES the words — illustrates, punctuates, or sets atmosphere.
+The piece is CANVAS_SIZE_PLACEHOLDER, 30fps, playing for the block's duration. A narrator is speaking and the viewer HEARS every word — there are NO burned-in captions. So the motion must SHOW the idea (objects, UI, numbers, metaphors), never subtitle it: on-screen text is at most 1-3 distilled keywords, never the spoken sentence. Your motion ILLUSTRATES — it doesn't transcribe.
 
 ═══ PRINCIPLE 1 — DESIGN FROM THE IDEA, NOT A TEMPLATE ═══
 Read the block. Match the COMPOSITION to its emotional shape:
@@ -180,7 +180,7 @@ Text must MOVE and carry weight; static text on a card is a slide deck.
 - Each word is a clip (<span class="word">); reveals: clip-path wipe, word stagger from y:40, scale-punch on the keyword, mask reveal
 - ONE word may be highlighted (accent color / weight / self-drawing underline)
 
-HERO TEXT — DESTILE, NÃO TRANSCREVA. The narrator speaks the sentence; you extract 2-4 keywords with emotional weight. Ex: fala "esse dinheiro está indo embora se você não age" → hero "DINHEIRO INDO EMBORA" (highlight "INDO EMBORA"). NEVER write the spoken sentence verbatim. NEVER ship text-only centered on dark bg as the dominant pattern — pair with a structural element (UI mockup, card, badge, comparison, terminal) per PRINCIPLE 9. Pure typography is for hooks/pivots only.
+HERO TEXT — DESTILE, NÃO TRANSCREVA (1-3 palavras). The narrator speaks the full sentence and the viewer HEARS it; you put only the 2-3 keyword essence on screen. Ex: fala "esse dinheiro está indo embora se você não age" → hero "DINHEIRO INDO EMBORA" (highlight "INDO EMBORA"). NEVER write the spoken sentence verbatim — that is the #1 failure here. The VISUAL is the lead actor; text is a caption to the visual, not a replacement for it. NEVER ship text-only centered on dark bg as the dominant pattern — pair with a structural element (UI mockup, card, badge, comparison, terminal) per PRINCIPLE 9. Pure typography is for hooks/pivots only.
 
 ═══ PRINCIPLE 2.5 — LINGUAGEM E VISUAL DE 9 ANOS ═══
 Every visible word and metaphor must be instantly clear to a 9-year-old; the viewer has ~1s per scene.
@@ -279,7 +279,7 @@ DO NOT use placeholder rectangles labeled "App Screen". Unknown app → generic-
 ⛔ SAFE AREA: the ENTIRE mockup stays inside the slot's safe area — full-frame: y:220-1540, x:80-1000; split slots (960px): y:80-820, x:60-1020. overflow:hidden on the container; explicit max-height.
 
 ═══ ANTI-PATTERNS ═══
-× 3+ stacked text cards (slide deck) × emojis as content (use SVG icons) × default linear easing × >1.5s with nothing moving × single arc done by t=2s on a 7s block × repeat:-1 (forbidden — compute finite repeats) × text <60px × competing focal elements × transcribing the narration (captions cover that)
+× 3+ stacked text cards (slide deck) × emojis as content (use SVG icons) × default linear easing × >1.5s with nothing moving × single arc done by t=2s on a 7s block × repeat:-1 (forbidden — compute finite repeats) × text <60px × competing focal elements × transcribing the narration (the viewer hears it — SHOW the idea, don't subtitle it)
 
 ═══ TECHNICAL REQUIREMENTS ═══
 1. Each element: class="clip", data-start, data-duration, data-track-index (0=back, higher=front), id="kebab-case-name" (REQUIRED — lint fails without an id on every timeline element). Media tags (<video src=…>, <img src=…>) ALSO need data-start + data-duration on the tag itself, in addition to being inside a .clip shell — without that the lint reports 'media_missing_data_start' and the render aborts.
@@ -305,7 +305,7 @@ Return JSON:
 - "htmlBody": full HTML (elements + the closing script registering the timeline)
 - "rationale": 1-2 sentences pt-BR — the verb animated, the timing arc, why it fits
 
-If the user provided a manual intent or text override, use those values verbatim.`.trim();
+If a MOTION DIRECTION is provided (the brief's "BUILD THIS VISUAL" / "ON-SCREEN TEXT" sections), treat it as AUTHORITATIVE: build exactly that visual concept, and put exactly that (already-distilled) headline on screen — do not re-distill, expand, or replace it with the spoken sentence.`.trim();
 
 /**
  * Hyperframes catalog slug whitelist — single source of truth.
@@ -1902,8 +1902,8 @@ export const generateMotionHtml = async (input: GenerateMotionInput): Promise<Ge
     `--- THIS BLOCK (illustrate this) ---`,
     input.blockText.trim(),
     '',
-    input.intent?.trim() ? `--- USER INTENT OVERRIDE ---\n${input.intent.trim()}\n` : '',
-    input.text?.trim() ? `--- USER TEXT OVERRIDE ---\n${input.text.trim()}\n` : '',
+    input.intent?.trim() ? `--- MOTION DIRECTION — BUILD THIS VISUAL (authoritative) ---\n${input.intent.trim()}\nThis is WHAT to show; apply all the craft rules (animation, brand colors, safe area) to realise it. Do NOT just write it as text.\n` : '',
+    input.text?.trim() ? `--- ON-SCREEN TEXT — USE EXACTLY (already distilled, ≤3 words; do not expand into the sentence) ---\n${input.text.trim()}\n` : '',
     input.secondaryText ? `--- SECONDARY TEXT ---\n${input.secondaryText.trim()}\n` : '',
     input.number !== undefined ? `--- KEY NUMBER ---\n${input.number}\n` : '',
     `--- DURATION ---`,

@@ -35,7 +35,7 @@ import { MotionDock } from './reelsStudio/MotionDock';
 import { createMotionFromBlock, isMotionAssetsStale, placementOfElement, placementOfMotion, layerOfPlacement, defaultPlacementFor, resolveMotionPlacement, effectiveSplitElementAt, type MotionConfig, type MotionPlacement } from './reelsStudio/motionLibrary';
 import { requiresAssetAttachment } from './reelsStudio/motionGating';
 import { STYLE_PRESETS, type StylePresetId, findStylePreset } from './reelsStudio/motionStylePresets';
-import { isHidden } from './reelsStudio/presetCategory';
+import { isHidden, categoryOf } from './reelsStudio/presetCategory';
 import { generateMotionHtml, buildFullHtmlDoc, routeTemplateForBlock, getActiveMotionModel, getMotionModelLabel, MOTION_MODEL_OPTIONS } from '../services/motionService';
 import { planMotionsForScript, type DirectorPlanItem } from '../services/motionDirector';
 import { OVERLAY_SAFE_TEMPLATE_IDS } from '../services/motionTemplates';
@@ -596,6 +596,10 @@ export const ReelsStudio: React.FC = () => {
             text: t.text,
             startSec: t.start,
             durationSec: t.end - t.start,
+            // The fala's resolved placement (🖥️ B-roll → full; 🎥 Vídeo → the
+            // saved/Dock placement) so the director only routes templates to
+            // full-frame falas.
+            placementArea: placementForBlock(t).area,
             words: state.audio.words.length > 0
               ? state.audio.words
                   .filter(w => w.blockId === t.id)
@@ -678,10 +682,19 @@ export const ReelsStudio: React.FC = () => {
           mode: legacyMode, y: blockPlacement.y ?? 0.58, overlayH: blockPlacement.height ?? 0.22,
           placement: elPlacement,
         } });
+        const blockIdx = targets.indexOf(block);
+        // Native (claude-ui) / template presets consume input.text themselves —
+        // only freeform/style presets get the director's hero text.
+        const ovDirectionApplies = categoryOf(presetId) !== 'native' && categoryOf(presetId) !== 'template';
         const result = await generateMotionHtml({
           presetId,
           templateVars,
           blockText: block.text,
+          // Director's per-scene direction — concrete visual + distilled hero.
+          // Without this the edit-video overlay re-derived from its own sentence
+          // and just echoed the spoken text (the "repetindo escritas" bug).
+          intent: ovDirectionApplies ? (plan?.visualConcept || undefined) : undefined,
+          text: ovDirectionApplies ? (plan?.heroText || undefined) : undefined,
           durationSec: effectiveDur,
           compositionId: elId,
           motionLayer: layerOfPlacement(blockPlacement),
@@ -690,14 +703,26 @@ export const ReelsStudio: React.FC = () => {
           wordTimestamps: blockWords,
           existingBrand: state.brandIdentity as Parameters<typeof generateMotionHtml>[0]['existingBrand'],
           outputLanguage: state.audio.words.length > 0 ? 'pt-BR' : undefined,
+          // Whole-reel context was MISSING here entirely — edit-video overlays
+          // generated blind to the rest of the video. Feed the script + this
+          // fala's position so the visuals form one coherent story.
+          reelContext: {
+            projectName: state.projectName,
+            allBlocks: targets.map(t => t.text),
+            blockIndex: blockIdx,
+            prevBlockText: blockIdx > 0 ? targets[blockIdx - 1].text : undefined,
+            nextBlockText: blockIdx < targets.length - 1 ? targets[blockIdx + 1].text : undefined,
+            prevMotionIntent: blockIdx > 0 ? ovPlan.get(targets[blockIdx - 1].id)?.visualConcept : undefined,
+            prevPrevMotionIntent: blockIdx > 1 ? ovPlan.get(targets[blockIdx - 2].id)?.visualConcept : undefined,
+          },
         });
         const motion: MotionConfig = {
           id: elId,
           presetId,
           layer: layerOfPlacement(blockPlacement),
           placement: elPlacement,
-          intent: block.text.slice(0, 120),
-          text: result.text ?? block.text.slice(0, 60),
+          intent: (ovDirectionApplies ? plan?.visualConcept : undefined) || result.intent || block.text.slice(0, 120),
+          text: result.text || (ovDirectionApplies ? plan?.heroText : undefined) || '',
           durationSec: effectiveDur,
           html: (result as unknown as { htmlBody?: string }).htmlBody ?? '',
           status: 'rendering',
@@ -1861,10 +1886,21 @@ export const ReelsStudio: React.FC = () => {
         setBusy('Pensando…');
       }
 
+      // Native (claude-ui) and template presets CONSUME input.text for their own
+      // purpose (e.g. claude-ui types it as the on-screen command), so forwarding
+      // the director's hero text there produces nonsense. Only freeform/style
+      // presets get the director direction.
+      const directionApplies = categoryOf(routedPresetId) !== 'native' && categoryOf(routedPresetId) !== 'template';
       const result = await generateMotionHtml({
         presetId: routedPresetId,
         templateVars: routedTemplateVars,
         blockText: block.text,
+        // Director's per-scene direction (batch flow): the concrete visual to
+        // build + the distilled headline, planned with whole-reel context. Sent
+        // as authoritative direction so each motion follows the plan instead of
+        // re-deriving from its own sentence in isolation (= "não faz sentido").
+        intent: directionApplies ? (plan?.visualConcept || undefined) : undefined,
+        text: directionApplies ? (plan?.heroText || undefined) : undefined,
         durationSec: seed.durationSec,
         compositionId: seed.id,
         // Float = screen-blend over avatar/footage → the HTML must be authored
@@ -1969,9 +2005,16 @@ export const ReelsStudio: React.FC = () => {
             // One self-correction attempt: re-generate with the lint errors as context.
             setBusy('Corrigindo HTML (lint falhou)…');
             const colorMode = state.motionColorMode ?? (state.appTheme === 'light' ? 'light' : 'dark');
+            // This retry re-sends seed.presetId — guard on THAT preset's category
+            // (claude-ui/template consume input.text), not the main call's routed one.
+            const retryDirectionApplies = categoryOf(seed.presetId) !== 'native' && categoryOf(seed.presetId) !== 'template';
             const correctedResult = await generateMotionHtml({
               presetId: seed.presetId,
               blockText: block.text,
+              // Keep the director's direction on the lint-correction retry too,
+              // otherwise the corrected motion drifts off-concept.
+              intent: retryDirectionApplies ? (plan?.visualConcept || undefined) : undefined,
+              text: retryDirectionApplies ? (plan?.heroText || undefined) : undefined,
               durationSec: seed.durationSec,
               compositionId: seed.id,
               preferredModel: block.motionModelOverride,
@@ -2130,12 +2173,18 @@ export const ReelsStudio: React.FC = () => {
               const slot = b ? slotById.get(b.id) : undefined;
               if (!b) return [];
               const projectStart = slot?.projectStart ?? b.start;
+              // Resolved placement (same logic handleAutoMotion uses) so the
+              // director only routes full-frame templates to full-frame scenes.
+              const placementArea = ((b.kind === 'broll' && state.projectMode !== 'edit')
+                ? defaultPlacementFor('broll', state.projectMode, b.end - b.start)
+                : b.motion?.placement ?? defaultPlacementFor(b.kind, state.projectMode, b.end - b.start)).area;
               return [{
                 id: b.id,
                 kind: b.kind,
                 text: b.text,
                 startSec: projectStart,
                 durationSec: b.end - b.start,
+                placementArea,
                 words: state.audio.words.length > 0
                   ? state.audio.words
                       .filter(w => w.blockId === b.id)
